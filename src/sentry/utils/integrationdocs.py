@@ -14,7 +14,8 @@ from urllib.request import urlopen
 
 import sentry
 
-BASE_URL = "https://docs.sentry.io/_platforms/{}"
+# BASE_URL = "https://docs.sentry.io/_platforms/{}"
+BASE_URL = "https://sentry-docs-git-performance-onboarding.sentry.dev/_platforms/{}"
 
 # Also see INTEGRATION_DOC_FOLDER in setup.py
 DOC_FOLDER = os.environ.get("INTEGRATION_DOC_FOLDER") or os.path.abspath(

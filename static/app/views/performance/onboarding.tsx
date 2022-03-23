@@ -21,7 +21,9 @@ import FeatureTourModal, {
   TourText,
 } from 'sentry/components/modals/featureTourModal';
 import OnboardingPanel from 'sentry/components/onboardingPanel';
+import {SidebarPanelKey} from 'sentry/components/sidebar/types';
 import {t} from 'sentry/locale';
+import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
 import {Organization, Project} from 'sentry/types';
 import trackAdvancedAnalyticsEvent from 'sentry/utils/analytics/trackAdvancedAnalyticsEvent';
 import useApi from 'sentry/utils/useApi';
@@ -120,8 +122,10 @@ function Onboarding({organization, project}: Props) {
       <ButtonList gap={1}>
         <Button
           priority="primary"
-          target="_blank"
-          href="https://docs.sentry.io/performance-monitoring/getting-started/"
+          onClick={event => {
+            event.preventDefault();
+            SidebarPanelStore.togglePanel(SidebarPanelKey.PerformanceOnboarding);
+          }}
         >
           {t('Start Setup')}
         </Button>

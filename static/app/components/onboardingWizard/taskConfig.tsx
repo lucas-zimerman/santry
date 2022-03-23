@@ -1,10 +1,13 @@
 import styled from '@emotion/styled';
 
 import {openInviteMembersModal} from 'sentry/actionCreators/modal';
+import {navigateTo} from 'sentry/actionCreators/navigation';
 import {Client} from 'sentry/api';
 import {taskIsDone} from 'sentry/components/onboardingWizard/utils';
+import {SidebarPanelKey} from 'sentry/components/sidebar/types';
 import {sourceMaps} from 'sentry/data/platformCategories';
 import {t} from 'sentry/locale';
+import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
 import pulsingIndicatorStyles from 'sentry/styles/pulsingIndicator';
 import space from 'sentry/styles/space';
 import {
@@ -124,8 +127,15 @@ export function getOnboardingTasks({
       ),
       skippable: true,
       requisites: [OnboardingTaskKey.FIRST_PROJECT],
-      actionType: 'external',
-      location: 'https://docs.sentry.io/product/performance/getting-started/',
+      actionType: 'action',
+      action: ({router}) => {
+        // TODO: add analytics here for this specific action.
+        navigateTo(
+          `/organizations/${organization.slug}/performance/?project=:project#performance-sidequest`,
+          router
+        );
+        SidebarPanelStore.togglePanel(SidebarPanelKey.PerformanceOnboarding);
+      },
       display: true,
       SupplementComponent: withApi(({api, task, onCompleteTask}: FirstEventWaiterProps) =>
         !!projects?.length && task.requisiteTasks.length === 0 && !task.completionSeen ? (

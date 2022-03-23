@@ -13,6 +13,7 @@ import {
   doesPathHaveNewFilters,
   extractSelectionParameters,
 } from 'sentry/components/organizations/pageFilters/utils';
+import PerformanceOnboardingSidebar from 'sentry/components/performanceOnboarding/sidebar';
 import {
   IconChevron,
   IconDashboard,
@@ -107,6 +108,8 @@ function Sidebar({location, organization}: Props) {
   useEffect(() => {
     if (location?.hash === '#welcome') {
       togglePanel(SidebarPanelKey.OnboardingWizard);
+    } else if (location?.hash === '#performance-sidequest') {
+      togglePanel(SidebarPanelKey.PerformanceOnboarding);
     }
   }, [location?.hash]);
 
@@ -421,6 +424,12 @@ function Sidebar({location, organization}: Props) {
 
       {hasOrganization && (
         <SidebarSectionGroup>
+          <PerformanceOnboardingSidebar
+            currentPanel={activePanel}
+            onShowPanel={() => togglePanel(SidebarPanelKey.PerformanceOnboarding)}
+            hidePanel={hidePanel}
+            {...sidebarItemProps}
+          />
           <SidebarSection noMargin noPadding>
             <OnboardingStatus
               org={organization}

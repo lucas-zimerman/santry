@@ -1,4 +1,6 @@
-import type {AvatarUser} from './user';
+import {WithRouterProps} from 'react-router';
+
+import {AvatarUser} from './user';
 
 export enum OnboardingTaskKey {
   FIRST_PROJECT = 'create_project',
@@ -46,7 +48,7 @@ export type OnboardingTaskDescriptor = {
       location: string;
     }
   | {
-      action: () => void;
+      action: (props: WithRouterProps) => void;
       actionType: 'action';
     }
 );

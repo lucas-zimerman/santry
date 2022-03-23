@@ -52,7 +52,10 @@ type Props = WithRouterProps & {
   task: OnboardingTask;
 };
 
-function Task({router, task, onSkip, onMarkComplete, forwardedRef, organization}: Props) {
+function Task(props: Props) {
+  const {task, onSkip, onMarkComplete, forwardedRef, organization, ...routerProps} =
+    props;
+  const {router} = routerProps;
   const handleSkip = () => {
     recordAnalytics(task, organization, 'skipped');
     onSkip(task.task);
@@ -67,7 +70,7 @@ function Task({router, task, onSkip, onMarkComplete, forwardedRef, organization}
     }
 
     if (task.actionType === 'action') {
-      task.action();
+      task.action(routerProps);
     }
 
     if (task.actionType === 'app') {

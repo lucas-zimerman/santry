@@ -4,6 +4,7 @@ export enum SidebarPanelKey {
   Broadcasts = 'broadcasts',
   OnboardingWizard = 'todos',
   StatusUpdate = 'statusupdate',
+  PerformanceOnboarding = 'performance_onboarding',
 }
 
 export type CommonSidebarProps = {
