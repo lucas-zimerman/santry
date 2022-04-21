@@ -22,6 +22,7 @@ import FeatureTourModal, {
 } from 'sentry/components/modals/featureTourModal';
 import OnboardingPanel from 'sentry/components/onboardingPanel';
 import {SidebarPanelKey} from 'sentry/components/sidebar/types';
+import {withPerformanceOnboarding} from 'sentry/data/platformCategories';
 import {t} from 'sentry/locale';
 import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
 import {Organization, Project} from 'sentry/types';
@@ -111,6 +112,35 @@ function Onboarding({organization, project}: Props) {
     });
   }
 
+  const currentPlatform = project.platform;
+  const hasPerformanceOnboarding = currentPlatform
+    ? withPerformanceOnboarding.has(currentPlatform)
+    : false;
+
+  let setupButton = (
+    <Button
+      priority="primary"
+      target="_blank"
+      href="https://docs.sentry.io/performance-monitoring/getting-started/"
+    >
+      {t('Start Setup')}
+    </Button>
+  );
+
+  if (hasPerformanceOnboarding) {
+    setupButton = (
+      <Button
+        priority="primary"
+        onClick={event => {
+          event.preventDefault();
+          SidebarPanelStore.togglePanel(SidebarPanelKey.PerformanceOnboarding);
+        }}
+      >
+        {t('Start Checklist')}
+      </Button>
+    );
+  }
+
   return (
     <OnboardingPanel image={<PerfImage src={emptyStateImg} />}>
       <h3>{t('Pinpoint problems')}</h3>
@@ -120,15 +150,7 @@ function Onboarding({organization, project}: Props) {
         )}
       </p>
       <ButtonList gap={1}>
-        <Button
-          priority="primary"
-          onClick={event => {
-            event.preventDefault();
-            SidebarPanelStore.togglePanel(SidebarPanelKey.PerformanceOnboarding);
-          }}
-        >
-          {t('Start Setup')}
-        </Button>
+        {setupButton}
         <Button
           data-test-id="create-sample-transaction-btn"
           onClick={async () => {
