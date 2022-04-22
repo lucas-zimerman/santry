@@ -40,13 +40,14 @@ function PerformanceOnboardingSidebar(props: CommonSidebarProps) {
   const hasProjectAccess = access.has('project:read');
 
   const {projects, initiallyLoaded: projectsLoaded} = useProjects();
+  const previousIsActive = usePrevious(isActive);
 
   const [currentProject, setCurrentProject] = useState<Project | undefined>(undefined);
 
   const {selection, isReady} = useLegacyStore(PageFiltersStore);
 
   useEffect(() => {
-    if (projects.length === 0 || !isReady || !isActive || currentProject !== undefined) {
+    if (projects.length === 0 || !isReady || previousIsActive || !isActive) {
       return;
     }
 
@@ -96,7 +97,7 @@ function PerformanceOnboardingSidebar(props: CommonSidebarProps) {
     }
 
     setCurrentProject(projects[0]);
-  }, [selection.projects, projects, isActive, isReady, currentProject]);
+  }, [selection.projects, projects, isActive, isReady, previousIsActive]);
 
   if (
     !isActive ||
