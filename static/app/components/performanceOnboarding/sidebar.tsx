@@ -10,7 +10,10 @@ import IdBadge from 'sentry/components/idBadge';
 import LoadingIndicator from 'sentry/components/loadingIndicator';
 import SidebarPanel from 'sentry/components/sidebar/sidebarPanel';
 import {CommonSidebarProps, SidebarPanelKey} from 'sentry/components/sidebar/types';
-import {withoutPerformanceSupport} from 'sentry/data/platformCategories';
+import {
+  withoutPerformanceSupport,
+  withPerformanceOnboarding,
+} from 'sentry/data/platformCategories';
 import platforms from 'sentry/data/platforms';
 import {t, tct} from 'sentry/locale';
 import PageFiltersStore from 'sentry/stores/pageFiltersStore';
@@ -43,27 +46,57 @@ function PerformanceOnboardingSidebar(props: CommonSidebarProps) {
   const {selection, isReady} = useLegacyStore(PageFiltersStore);
 
   useEffect(() => {
-    if (projects.length === 0 || !isReady || !isActive) {
+    if (projects.length === 0 || !isReady || !isActive || currentProject !== undefined) {
       return;
     }
 
-    const selectedProjects = new Set(selection.projects.map(id => String(id)));
+    const projectMap: Record<string, Project> = projects.reduce((acc, project) => {
+      acc[project.id] = project;
+      return acc;
+    }, {});
 
     if (selection.projects.length) {
-      if (currentProject && selectedProjects.has(currentProject.id)) {
+      // Among the project selection, find a project that has performance onboarding docs support, and has not sent
+      // a first transaction event.
+      const maybeProjectId = selection.projects.find(projectId => {
+        const project = projectMap[String(projectId)];
+        return (
+          !project.firstTransactionEvent &&
+          project.platform &&
+          withPerformanceOnboarding.has(project.platform)
+        );
+      });
+
+      if (typeof maybeProjectId === 'number') {
+        const project = projectMap[String(maybeProjectId)];
+        setCurrentProject(project);
         return;
       }
-      const needle = projects.find(
-        project => project.id === String(selection.projects[0])
-      );
+
+      const needle = projectMap[String(selection.projects[0])];
       if (needle) {
         setCurrentProject(needle);
         return;
       }
     }
 
+    // Among the projects, find a project that has performance onboarding docs support, and has not sent
+    // a first transaction event.
+    const maybeProject = projects.find(project => {
+      return (
+        !project.firstTransactionEvent &&
+        project.platform &&
+        withPerformanceOnboarding.has(project.platform)
+      );
+    });
+
+    if (maybeProject) {
+      setCurrentProject(maybeProject);
+      return;
+    }
+
     setCurrentProject(projects[0]);
-  }, [selection.projects, projects, isActive]);
+  }, [selection.projects, projects, isActive, isReady, currentProject]);
 
   if (
     !isActive ||
@@ -137,7 +170,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
     if (previousProject.id !== currentProject.id) {
       setReceived(false);
     }
-  }, [currentProject]);
+  }, [previousProject.id, currentProject.id]);
 
   const {docContents, isLoading, hasOnboardingContents} =
     usePerformanceOnboardingDocs(currentProject);
