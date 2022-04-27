@@ -54,6 +54,13 @@ function usePerformanceOnboardingDocs(project: Project) {
 
   const docKeys = generateOnboardingDocKeys(currentPlatform.id);
   docKeys.forEach(docKey => {
+    if (docKey in loadingDocs) {
+      // If a documentation content is loading, we should not attempt to fetch it again.
+      // otherwise, if it's not loading, we should only fetch at most once.
+      // Any errors that occurred will be captured via Sentry.
+      return;
+    }
+
     const setLoadingDoc = (loadingState: boolean) =>
       setLoadingDocs(prevState => {
         return {
