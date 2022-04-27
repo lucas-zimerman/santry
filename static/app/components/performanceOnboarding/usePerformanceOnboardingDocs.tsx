@@ -41,8 +41,66 @@ function usePerformanceOnboardingDocs(project: Project) {
     if (!currentPlatform || !hasPerformanceOnboarding || doesNotSupportPerformance) {
       setLoadingDocs({});
       setDocContents({});
+      return;
     }
-  }, [currentPlatform, hasPerformanceOnboarding, doesNotSupportPerformance]);
+
+    const docKeys = generateOnboardingDocKeys(currentPlatform.id);
+
+    docKeys.forEach(docKey => {
+      if (docKey in loadingDocs) {
+        // If a documentation content is loading, we should not attempt to fetch it again.
+        // otherwise, if it's not loading, we should only fetch at most once.
+        // Any errors that occurred will be captured via Sentry.
+        return;
+      }
+
+      console.log('docKey', docKey);
+
+      const setLoadingDoc = (loadingState: boolean) =>
+        setLoadingDocs(prevState => {
+          return {
+            ...prevState,
+            [docKey]: loadingState,
+          };
+        });
+
+      const setDocContent = (docContent: string | undefined) =>
+        setDocContents(prevState => {
+          if (docContent === undefined) {
+            const newState = {
+              ...prevState,
+            };
+            delete newState[docKey];
+            return newState;
+          }
+          return {
+            ...prevState,
+            [docKey]: docContent,
+          };
+        });
+
+      setLoadingDoc(true);
+
+      loadDocs(api, organization.slug, project.slug, docKey as any)
+        .then(({html}) => {
+          setDocContent(html as string);
+          setLoadingDoc(false);
+        })
+        .catch(error => {
+          Sentry.captureException(error);
+          setDocContent(undefined);
+          setLoadingDoc(false);
+        });
+    });
+  }, [
+    currentPlatform,
+    hasPerformanceOnboarding,
+    doesNotSupportPerformance,
+    api,
+    loadingDocs,
+    organization.slug,
+    project.slug,
+  ]);
 
   if (!currentPlatform || !hasPerformanceOnboarding || doesNotSupportPerformance) {
     return {
@@ -53,48 +111,6 @@ function usePerformanceOnboardingDocs(project: Project) {
   }
 
   const docKeys = generateOnboardingDocKeys(currentPlatform.id);
-  docKeys.forEach(docKey => {
-    if (docKey in loadingDocs) {
-      // If a documentation content is loading, we should not attempt to fetch it again.
-      // otherwise, if it's not loading, we should only fetch at most once.
-      // Any errors that occurred will be captured via Sentry.
-      return;
-    }
-
-    const setLoadingDoc = (loadingState: boolean) =>
-      setLoadingDocs(prevState => {
-        return {
-          ...prevState,
-          [docKey]: loadingState,
-        };
-      });
-
-    const setDocContent = (docContent: string | undefined) =>
-      setDocContents(prevState => {
-        if (docContent === undefined) {
-          const newState = {
-            ...prevState,
-          };
-          delete newState[docKey];
-          return newState;
-        }
-        return {
-          ...prevState,
-          [docKey]: docContent,
-        };
-      });
-
-    loadDocs(api, organization.slug, project.slug, docKey as any)
-      .then(({html}) => {
-        setDocContent(html as string);
-        setLoadingDoc(false);
-      })
-      .catch(error => {
-        Sentry.captureException(error);
-        setDocContent(undefined);
-        setLoadingDoc(false);
-      });
-  });
 
   const isLoading = docKeys.some(key => {
     if (key in loadingDocs) {
