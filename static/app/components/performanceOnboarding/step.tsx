@@ -1,3 +1,5 @@
+import 'prism-sentry/index.css';
+
 import {useState} from 'react';
 import styled from '@emotion/styled';
 
@@ -68,13 +70,37 @@ const TaskCheckBox = styled('div')`
 `;
 
 const DocumentationWrapper = styled('div')`
-  p {
-    line-height: 1.5;
+  line-height: 1.5;
+
+  .gatsby-highlight {
+    margin-bottom: ${space(3)};
+
+    &:last-child {
+      margin-bottom: 0;
+    }
   }
+
+  .alert {
+    margin-bottom: ${space(3)};
+    border-radius: ${p => p.theme.borderRadius};
+  }
+
   pre {
     word-break: break-all;
     white-space: pre-wrap;
   }
+
+  blockquote {
+    padding: ${space(1)};
+    margin-left: 0;
+    background: ${p => p.theme.alert.info.backgroundLight};
+    border-left: 2px solid ${p => p.theme.alert.info.border};
+  }
+  blockquote > *:last-child {
+    margin-bottom: 0;
+  }
+
+  /* Ensures documentation content is placed behind the checkbox */
   z-index: 1;
   position: relative;
 `;
