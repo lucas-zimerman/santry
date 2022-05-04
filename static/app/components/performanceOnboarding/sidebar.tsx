@@ -283,6 +283,7 @@ const TopRightBackgroundImage = styled('img')`
 const TaskList = styled('div')`
   display: grid;
   grid-auto-flow: row;
+  grid-template-columns: 100%;
   gap: ${space(1)};
   margin: 50px ${space(4)} ${space(4)} ${space(4)};
 `;
