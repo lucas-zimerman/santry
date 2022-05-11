@@ -103,7 +103,8 @@ class StaticMediaTest(TestCase):
         assert "Content-Encoding" not in response
 
         try:
-            open("src/sentry/static/sentry/js/ads.js.gz", "a").close()
+            with open("src/sentry/static/sentry/js/ads.js.gz", "a"):
+                pass
 
             # Not a gzip Accept-Encoding, so shouldn't serve gzipped file
             response = self.client.get(url, HTTP_ACCEPT_ENCODING="lol")
