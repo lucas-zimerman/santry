@@ -181,16 +181,23 @@ export function trendsTargetRoute({
 
   const modifiedConditions = initialConditions ?? new MutableSearch([]);
 
+  let isUserModified = false;
+
   if (conditions.hasFilter('tpm()')) {
     modifiedConditions.setFilterValues('tpm()', conditions.getFilterValues('tpm()'));
+    isUserModified = true;
   } else {
     modifiedConditions.setFilterValues('tpm()', ['>0.01']);
   }
   if (conditions.hasFilter('transaction.duration')) {
-    modifiedConditions.setFilterValues(
-      'transaction.duration',
-      conditions.getFilterValues('transaction.duration')
-    );
+    const filterValue = conditions.getFilterValues('transaction.duration');
+    modifiedConditions.setFilterValues('transaction.duration', filterValue);
+
+    // TODO use DEFAULT_NAX_DURATION once min and m are combined
+    // check if this was a default transaction duration <15m filter
+    if (filterValue.length > 1 && filterValue[0] !== '<15m') {
+      isUserModified = true;
+    }
   } else {
     modifiedConditions.setFilterValues('transaction.duration', [
       '>0',
@@ -199,7 +206,10 @@ export function trendsTargetRoute({
   }
   newQuery.query = modifiedConditions.formatString();
 
-  return {pathname: getPerformanceTrendsUrl(organization), query: {...newQuery}};
+  return {
+    pathname: getPerformanceTrendsUrl(organization),
+    query: {...newQuery, isUserModified},
+  };
 }
 
 export function removeTracingKeysFromSearch(

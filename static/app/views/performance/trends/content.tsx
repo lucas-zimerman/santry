@@ -74,6 +74,7 @@ class TrendsContent extends Component<Props, State> {
         ...location.query,
         ...cursors,
         query: String(searchQuery).trim() || undefined,
+        isUserModified: true,
       },
     });
   };
@@ -164,10 +165,13 @@ class TrendsContent extends Component<Props, State> {
     conditions.removeFilter('tpm()');
     conditions.removeFilter('confidence()');
     conditions.removeFilter('transaction.duration');
+
     newQuery.query = conditions.formatString();
+    const isQueryEmpty = !newQuery.query;
+
     return {
       pathname: getPerformanceLandingUrl(this.props.organization),
-      query: newQuery,
+      query: {...newQuery, isUserModified: !isQueryEmpty},
     };
   }
 
