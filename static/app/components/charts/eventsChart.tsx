@@ -18,12 +18,12 @@ import type {BarChartProps} from 'sentry/components/charts/barChart';
 import {BarChart} from 'sentry/components/charts/barChart';
 import type {ZoomRenderProps} from 'sentry/components/charts/chartZoom';
 import ChartZoom from 'sentry/components/charts/chartZoom';
-import ErrorPanel from 'sentry/components/charts/errorPanel';
+import {ErrorPanel} from 'sentry/components/charts/errorPanel';
 import type {LineChartProps} from 'sentry/components/charts/lineChart';
 import {LineChart} from 'sentry/components/charts/lineChart';
 import ReleaseSeries from 'sentry/components/charts/releaseSeries';
-import TransitionChart from 'sentry/components/charts/transitionChart';
-import TransparentLoadingMask from 'sentry/components/charts/transparentLoadingMask';
+import {TransitionChart} from 'sentry/components/charts/transitionChart';
+import {TransparentLoadingMask} from 'sentry/components/charts/transparentLoadingMask';
 import {getInterval, RELEASE_LINES_THRESHOLD} from 'sentry/components/charts/utils';
 import {IconWarning} from 'sentry/icons';
 import {t} from 'sentry/locale';
@@ -48,7 +48,7 @@ import type {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {decodeList, decodeScalar} from 'sentry/utils/queryString';
 import {ellipsize} from 'sentry/utils/string/ellipsize';
 
-import EventsRequest from './eventsRequest';
+import {EventsRequest} from './eventsRequest';
 
 type ChartComponent =
   | React.ComponentType<BarChartProps>
@@ -165,7 +165,7 @@ class Chart extends Component<ChartProps, State> {
   handleLegendSelectChanged = (legendChange: any) => {
     const {disableableSeries = []} = this.props;
     const {selected} = legendChange;
-    const seriesSelection = Object.keys(selected).reduce(
+    const seriesSelection = Object.keys(selected).reduce<Record<string, boolean>>(
       (state, key) => {
         // we only want them to be able to disable the Releases&Other series,
         // and not any of the other possible series here
@@ -174,7 +174,7 @@ class Chart extends Component<ChartProps, State> {
         state[key] = disableable ? selected[key] : true;
         return state;
       },
-      {} as Record<string, boolean>
+      {}
     );
 
     // we have to force an update here otherwise ECharts will
@@ -279,7 +279,7 @@ class Chart extends Component<ChartProps, State> {
           .slice())
       : undefined;
     if (chartColors?.length && hasOther) {
-      chartColors.push(theme.chartOther);
+      chartColors.push(theme.tokens.content.secondary);
     }
     const chartOptions = {
       colors: chartColors,
@@ -317,7 +317,7 @@ class Chart extends Component<ChartProps, State> {
         : undefined,
       yAxis: {
         axisLabel: {
-          color: theme.chartLabel,
+          color: theme.tokens.content.secondary,
           formatter: (value: number) => {
             if (timeseriesResultsTypes) {
               // Check to see if all series output types are the same. If not, then default to number.
@@ -459,10 +459,6 @@ export type EventsChartProps = {
    * Should datetimes be formatted in UTC?
    */
   utc?: boolean | null;
-  /**
-   * Whether or not to zerofill results
-   */
-  withoutZerofill?: boolean;
 } & Pick<
   ChartProps,
   | 'seriesTransformer'
@@ -492,7 +488,7 @@ type ChartDataProps = {
   topEvents?: number;
 };
 
-class EventsChart extends Component<EventsChartProps> {
+export class EventsChart extends Component<EventsChartProps> {
   isStacked() {
     const {topEvents, yAxis} = this.props;
     return (
@@ -539,7 +535,6 @@ class EventsChart extends Component<EventsChartProps> {
       chartComponent,
       usePageZoom,
       height,
-      withoutZerofill,
       fromDiscover,
       additionalSeries,
       loadingAdditionalSeries,
@@ -581,7 +576,7 @@ class EventsChart extends Component<EventsChartProps> {
       if (errored) {
         return (
           <ErrorPanel>
-            <IconWarning color="gray300" size="lg" />
+            <IconWarning variant="muted" size="lg" />
           </ErrorPanel>
         );
       }
@@ -681,8 +676,6 @@ class EventsChart extends Component<EventsChartProps> {
               topEvents={topEvents}
               confirmedQuery={confirmedQuery}
               partial
-              // Cannot do interpolation when stacking series
-              withoutZerofill={withoutZerofill && !this.isStacked()}
               dataset={dataset}
             >
               {eventData => {
@@ -698,5 +691,3 @@ class EventsChart extends Component<EventsChartProps> {
     );
   }
 }
-
-export default EventsChart;

@@ -38,6 +38,7 @@ from sentry.profiles.utils import get_from_profiling_service
 from sentry.search.events.fields import resolve_datetime64
 from sentry.search.events.types import SnubaParams
 from sentry.seer.breakpoints import BreakpointData
+from sentry.seer.signed_seer_api import SeerViewerContext
 from sentry.sentry_metrics import indexer
 from sentry.sentry_metrics.use_case_id_registry import UseCaseID
 from sentry.snuba import functions
@@ -58,7 +59,6 @@ from sentry.statistical_detectors.issue_platform_adapter import (
 from sentry.statistical_detectors.redis import RedisDetectorStore
 from sentry.statistical_detectors.store import DetectorStore
 from sentry.tasks.base import instrumented_task
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import performance_tasks, profiling_tasks
 from sentry.utils import json, metrics
 from sentry.utils.iterators import chunked
@@ -110,12 +110,8 @@ def all_projects_with_flags() -> Generator[tuple[int, int]]:
 
 @instrumented_task(
     name="sentry.tasks.statistical_detectors.run_detection",
-    queue="performance.statistical_detector",
-    max_retries=0,
-    taskworker_config=TaskworkerConfig(
-        namespace=performance_tasks,
-        processing_deadline_duration=30,
-    ),
+    namespace=performance_tasks,
+    processing_deadline_duration=30,
 )
 def run_detection() -> None:
     if not options.get("statistical_detectors.enable"):
@@ -327,12 +323,8 @@ class FunctionRegressionDetector(RegressionDetector):
 
 @instrumented_task(
     name="sentry.tasks.statistical_detectors.detect_transaction_trends",
-    queue="performance.statistical_detector",
-    max_retries=0,
-    taskworker_config=TaskworkerConfig(
-        namespace=performance_tasks,
-        processing_deadline_duration=30,
-    ),
+    namespace=performance_tasks,
+    processing_deadline_duration=30,
 )
 def detect_transaction_trends(
     _org_ids: list[int], project_ids: list[int], start: str, *args, **kwargs
@@ -373,11 +365,7 @@ def detect_transaction_trends(
 
 @instrumented_task(
     name="sentry.tasks.statistical_detectors.detect_transaction_change_points",
-    queue="performance.statistical_detector",
-    max_retries=0,
-    taskworker_config=TaskworkerConfig(
-        namespace=performance_tasks,
-    ),
+    namespace=performance_tasks,
 )
 def detect_transaction_change_points(
     transactions: list[tuple[int, str | int]], start: str, *args, **kwargs
@@ -406,8 +394,17 @@ def _detect_transaction_change_points(
         (projects_by_id[item[0]], item[1]) for item in transactions if item[0] in projects_by_id
     ]
 
+    viewer_context = None
+    if transaction_pairs:
+        project = transaction_pairs[0][0]
+        viewer_context = SeerViewerContext(organization_id=project.organization_id)
+
     regressions = EndpointRegressionDetector.detect_regressions(
-        transaction_pairs, start, "p95(transaction.duration)", TIMESERIES_PER_BATCH
+        transaction_pairs,
+        start,
+        "p95(transaction.duration)",
+        TIMESERIES_PER_BATCH,
+        viewer_context=viewer_context,
     )
     regressions = EndpointRegressionDetector.save_regressions_with_versions(regressions)
 
@@ -427,12 +424,8 @@ def _detect_transaction_change_points(
 
 @instrumented_task(
     name="sentry.tasks.statistical_detectors.detect_function_trends",
-    queue="profiling.statistical_detector",
-    max_retries=0,
-    taskworker_config=TaskworkerConfig(
-        namespace=profiling_tasks,
-        processing_deadline_duration=30,
-    ),
+    namespace=profiling_tasks,
+    processing_deadline_duration=30,
 )
 def detect_function_trends(project_ids: list[int], start: str, *args, **kwargs) -> None:
     if not options.get("statistical_detectors.enable"):
@@ -471,11 +464,7 @@ def detect_function_trends(project_ids: list[int], start: str, *args, **kwargs) 
 
 @instrumented_task(
     name="sentry.tasks.statistical_detectors.detect_function_change_points",
-    queue="profiling.statistical_detector",
-    max_retries=0,
-    taskworker_config=TaskworkerConfig(
-        namespace=profiling_tasks,
-    ),
+    namespace=profiling_tasks,
 )
 def detect_function_change_points(
     functions_list: list[tuple[int, int]], start: str, *args, **kwargs
@@ -504,8 +493,13 @@ def _detect_function_change_points(
         (projects_by_id[item[0]], item[1]) for item in functions_list if item[0] in projects_by_id
     ]
 
+    viewer_context = None
+    if function_pairs:
+        project = function_pairs[0][0]
+        viewer_context = SeerViewerContext(organization_id=project.organization_id)
+
     regressions = FunctionRegressionDetector.detect_regressions(
-        function_pairs, start, "p95()", TIMESERIES_PER_BATCH
+        function_pairs, start, "p95()", TIMESERIES_PER_BATCH, viewer_context=viewer_context
     )
     regressions = FunctionRegressionDetector.save_regressions_with_versions(regressions)
 

@@ -1,24 +1,24 @@
-import {useCallback} from 'react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 
+import {Button, LinkButton} from '@sentry/scraps/button';
+
 import {addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {closeModal} from 'sentry/actionCreators/modal';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
 import {t} from 'sentry/locale';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
-import {space} from 'sentry/styles/space';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import type {Organization} from 'sentry/types/organization';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 
 import {sendReplayOnboardRequest} from 'getsentry/actionCreators/upsell';
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
 import type {Plan, PreviewData, Subscription} from 'getsentry/types';
 import {PlanTier} from 'getsentry/types';
 import type {AM2UpdateSurfaces} from 'getsentry/utils/trackGetsentryAnalytics';
-import trackGetsentryAnalytics from 'getsentry/utils/trackGetsentryAnalytics';
+import {trackGetsentryAnalytics} from 'getsentry/utils/trackGetsentryAnalytics';
 
 import type {Reservations} from './types';
 import {redirectToManage} from './utils';
@@ -34,7 +34,7 @@ type Props = {
   onComplete?: () => void;
 };
 
-function ActionButtons({
+export function ActionButtons({
   isActionDisabled,
   onComplete,
   organization,
@@ -46,7 +46,7 @@ function ActionButtons({
 }: Props) {
   const api = useApi();
 
-  const onUpdatePlan = useCallback(async () => {
+  const onUpdatePlan = async () => {
     try {
       await api.requestPromise(`/customers/${organization.slug}/subscription/`, {
         method: 'PUT',
@@ -65,7 +65,7 @@ function ActionButtons({
         addSuccessMessage(t('Subscription Updated!'));
 
         window.location.hash = 'replay-sidequest';
-        SidebarPanelStore.activatePanel(SidebarPanelKey.REPLAYS_ONBOARDING);
+        OnboardingDrawerStore.open(OnboardingDrawerKey.REPLAYS_ONBOARDING);
 
         trackGetsentryAnalytics('upgrade_now.modal.update_now', {
           organization,
@@ -81,18 +81,9 @@ function ActionButtons({
       Sentry.captureException(err);
       redirectToManage(organization);
     }
-  }, [
-    api,
-    onComplete,
-    organization,
-    plan,
-    previewData.billedAmount,
-    reservations,
-    subscription,
-    surface,
-  ]);
+  };
 
-  const onEmailOwner = useCallback(async () => {
+  const onEmailOwner = async () => {
     const currentPlanName =
       subscription.planTier === PlanTier.AM2 ? 'am2-non-beta' : 'am1-non-beta';
 
@@ -116,9 +107,9 @@ function ActionButtons({
         redirectToManage(organization);
       },
     });
-  }, [api, organization, subscription, surface, onComplete]);
+  };
 
-  const onClickManageSubscription = useCallback(() => {
+  const onClickManageSubscription = () => {
     trackGetsentryAnalytics('upgrade_now.modal.manage_sub', {
       organization,
       surface,
@@ -127,7 +118,7 @@ function ActionButtons({
       channel: subscription.channel,
       has_billing_scope: organization.access?.includes('org:billing'),
     });
-  }, [organization, subscription, surface]);
+  };
 
   const hasBillingAccess = organization.access?.includes('org:billing');
 
@@ -141,7 +132,7 @@ function ActionButtons({
         {t('Update Now')}
       </Button>
       <LinkButton
-        to={`/settings/${organization.slug}/billing/checkout/?referrer=replay_onboard_modal-owner-modal`}
+        to={`/checkout/${organization.slug}/?referrer=replay_onboard_modal-owner-modal`}
         onClick={onClickManageSubscription}
       >
         {t('Manage Subscription')}
@@ -151,7 +142,11 @@ function ActionButtons({
     <ButtonRow>
       <Button
         priority="primary"
-        title={t('Notify an owner by email to update to the latest version of your plan')}
+        tooltipProps={{
+          title: t(
+            'Notify an owner by email to update to the latest version of your plan'
+          ),
+        }}
         onClick={onEmailOwner}
         disabled={isActionDisabled === true}
       >
@@ -159,9 +154,11 @@ function ActionButtons({
       </Button>
       <Button
         disabled
-        title={t(
-          'Only members with the role “Owner” or “Billing” can manage subscriptions'
-        )}
+        tooltipProps={{
+          title: t(
+            'Only members with the role "Owner" or "Billing" can manage subscriptions'
+          ),
+        }}
       >
         {t('Manage Subscription')}
       </Button>
@@ -171,9 +168,7 @@ function ActionButtons({
 
 const ButtonRow = styled('p')`
   display: flex;
-  gap: ${space(1.5)};
-  margin-top: ${space(3)};
-  margin-bottom: ${space(2)};
+  gap: ${p => p.theme.space.lg};
+  margin-top: ${p => p.theme.space['2xl']};
+  margin-bottom: ${p => p.theme.space.xl};
 `;
-
-export default ActionButtons;

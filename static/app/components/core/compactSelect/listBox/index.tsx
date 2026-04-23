@@ -1,25 +1,33 @@
-import {Fragment, useMemo, useRef} from 'react';
+import {Fragment, useMemo, useRef, useState} from 'react';
 import type {AriaListBoxOptions} from '@react-aria/listbox';
 import {useListBox} from '@react-aria/listbox';
 import {mergeProps, mergeRefs} from '@react-aria/utils';
 import type {ListState} from '@react-stately/list';
-import type {CollectionChildren} from '@react-types/shared';
+import type {CollectionChildren, Node} from '@react-types/shared';
+import {useVirtualizer} from '@tanstack/react-virtual';
 
 import {
   ListLabel,
   ListSeparator,
   ListWrap,
   SizeLimitMessage,
-} from 'sentry/components/core/compactSelect/styles';
-import type {SelectKey, SelectSection} from 'sentry/components/core/compactSelect/types';
+} from '@sentry/scraps/compactSelect';
+import type {SelectKey, SelectSection} from '@sentry/scraps/compactSelect';
+import {Container} from '@sentry/scraps/layout';
+
 import {t} from 'sentry/locale';
 import type {FormSize} from 'sentry/utils/theme';
 
 import {ListBoxOption} from './option';
 import {ListBoxSection} from './section';
 
-interface ListBoxProps
-  extends Omit<
+// explicitly using object here because Record<PropertyKey, unknown> requires an index signature
+// eslint-disable-next-line @typescript-eslint/no-restricted-types
+type ObjectLike = object;
+
+interface ListBoxProps<T extends ObjectLike>
+  extends
+    Omit<
       React.HTMLAttributes<HTMLUListElement>,
       'onBlur' | 'onFocus' | 'autoFocus' | 'children'
     >,
@@ -32,20 +40,14 @@ interface ListBoxProps
       | 'defaultSelectedKeys'
       | 'onSelectionChange'
       | 'autoFocus'
+      | 'isVirtualized'
     > {
-  /**
-   * Keyboard event handler, to be attached to the list (`ul`) element, to seamlessly
-   * move focus from one composite list to another when an arrow key is pressed. Returns
-   * a boolean indicating whether the keyboard event was intercepted. If yes, then no
-   * further callback function should be run.
-   */
-  keyDownHandler: (e: React.KeyboardEvent<HTMLUListElement>) => boolean;
   /**
    * Object containing the selection state and focus position, needed for
    * `useListBox()`.
    */
-  listState: ListState<any>;
-  children?: CollectionChildren<any>;
+  listState: ListState<T>;
+  children?: CollectionChildren<T>;
   /**
    * Whether the list is filtered by search query or not.
    * Used to determine whether to show the size limit message or not.
@@ -55,6 +57,13 @@ interface ListBoxProps
    * Set of keys that are hidden from the user (e.g. because not matching search query)
    */
   hiddenOptions?: Set<SelectKey>;
+  /**
+   * Keyboard event handler, to be attached to the list (`ul`) element, to seamlessly
+   * move focus from one composite list to another when an arrow key is pressed. Returns
+   * a boolean indicating whether the keyboard event was intercepted. If yes, then no
+   * further callback function should be run.
+   */
+  keyDownHandler?: (e: React.KeyboardEvent<HTMLUListElement>) => boolean;
   /**
    * Text label to be rendered as heading on top of grid list.
    */
@@ -74,6 +83,15 @@ interface ListBoxProps
   overlayIsOpen?: boolean;
   ref?: React.Ref<HTMLUListElement>;
   /**
+   * Ref forwarded to the inner scroll container div (the element the virtualizer
+   * uses as its scroll element). Useful for callers that need to reset scrollTop.
+   */
+  scrollContainerRef?: React.Ref<HTMLDivElement>;
+  /**
+   * Whether the select has a search input field.
+   */
+  searchable?: boolean;
+  /**
    * When false, hides option details.
    */
   showDetails?: boolean;
@@ -89,9 +107,15 @@ interface ListBoxProps
    * Message to be displayed when some options are hidden due to `sizeLimit`.
    */
   sizeLimitMessage?: string;
+
+  /**
+   * If true, virtualization will be enabled for the list
+   */
+  virtualized?: boolean;
 }
 
 const EMPTY_SET = new Set<never>();
+const DEFAULT_KEY_DOWN_HANDLER = () => true;
 
 /**
  * A list box with accessibile behaviors & attributes.
@@ -103,7 +127,7 @@ const EMPTY_SET = new Set<never>();
  * If interactive children are necessary, consider using grid lists instead (by setting
  * the `grid` prop on CompactSelect to true).
  */
-export function ListBox({
+export function ListBox<T extends ObjectLike>({
   ref,
   listState,
   size = 'md',
@@ -111,16 +135,22 @@ export function ListBox({
   shouldFocusOnHover = true,
   onSectionToggle,
   sizeLimitMessage,
-  keyDownHandler,
+  keyDownHandler = DEFAULT_KEY_DOWN_HANDLER,
   label,
   hiddenOptions = EMPTY_SET,
-  hasSearch,
+  searchable,
   overlayIsOpen,
   showSectionHeaders = true,
   showDetails = true,
+  onAction,
+  virtualized,
+  scrollContainerRef,
+  className,
   ...props
-}: ListBoxProps) {
+}: ListBoxProps<T>) {
   const listElementRef = useRef<HTMLUListElement>(null);
+  const [hasEverOverflowed, setHasEverOverflowed] = useState(false);
+
   const {listBoxProps, labelProps} = useListBox(
     {
       ...props,
@@ -128,6 +158,7 @@ export function ListBox({
       shouldFocusWrap,
       shouldFocusOnHover,
       shouldSelectOnPressUp: true,
+      onAction,
     },
     listState,
     listElementRef
@@ -153,49 +184,163 @@ export function ListBox({
     [listState.collection, hiddenOptions]
   );
 
+  const mergedProps = mergeProps(listBoxProps, props);
+
+  const onMouseLeave = (e: React.MouseEvent<HTMLUListElement>) => {
+    mergedProps.onMouseLeave?.(e);
+    listState.selectionManager.setFocusedKey(null);
+  };
+
+  const virtualizer = useVirtualizedItems({listItems, virtualized, size});
+
+  const refs = useMemo(() => {
+    const overflowTracker = (scrollContainer: HTMLDivElement | null) => {
+      if (hasEverOverflowed || listItems.length === 0 || !scrollContainer) {
+        return;
+      }
+
+      setHasEverOverflowed(scrollContainer.scrollHeight > scrollContainer.clientHeight);
+    };
+    return mergeRefs(overflowTracker, virtualizer.scrollElementRef, scrollContainerRef);
+  }, [hasEverOverflowed, virtualizer.scrollElementRef, listItems, scrollContainerRef]);
+
   return (
     <Fragment>
       {listItems.length !== 0 && <ListSeparator role="separator" />}
       {listItems.length !== 0 && label && <ListLabel {...labelProps}>{label}</ListLabel>}
-      <ListWrap
-        {...mergeProps(listBoxProps, props)}
-        onKeyDown={onKeyDown}
-        ref={mergeRefs(listElementRef, ref)}
+      <Container
+        ref={refs}
+        height="100%"
+        overflowY="auto"
+        className={className}
+        style={hasEverOverflowed ? {scrollbarGutter: 'stable'} : undefined}
       >
-        {overlayIsOpen &&
-          listItems.map(item => {
-            if (item.type === 'section') {
-              return (
-                <ListBoxSection
-                  key={item.key}
-                  item={item}
-                  listState={listState}
-                  hiddenOptions={hiddenOptions}
-                  onToggle={onSectionToggle}
-                  size={size}
-                  showSectionHeaders={showSectionHeaders}
-                  showDetails={showDetails}
-                />
-              );
-            }
+        <Container {...virtualizer.wrapperProps}>
+          <ListWrap
+            {...mergedProps}
+            style={{
+              ...mergedProps.style,
+              ...virtualizer.listWrapStyle,
+            }}
+            onKeyDown={onKeyDown}
+            onMouseLeave={onMouseLeave}
+            ref={mergeRefs(listElementRef, ref)}
+          >
+            {overlayIsOpen &&
+              virtualizer.items.map(row => {
+                const item = listItems[row.index]!;
+                if (item.type === 'section') {
+                  return (
+                    <ListBoxSection
+                      {...virtualizer.itemProps(row.index)}
+                      key={item.key}
+                      item={item}
+                      listState={listState}
+                      hiddenOptions={hiddenOptions}
+                      onToggle={onSectionToggle}
+                      size={size}
+                      showSectionHeaders={showSectionHeaders}
+                      showDetails={showDetails}
+                    />
+                  );
+                }
 
-            return (
-              <ListBoxOption
-                key={item.key}
-                item={item}
-                listState={listState}
-                size={size}
-                showDetails={showDetails}
-              />
-            );
-          })}
+                return (
+                  <ListBoxOption
+                    key={item.key}
+                    {...virtualizer.itemProps(row.index)}
+                    item={item}
+                    listState={listState}
+                    size={size}
+                    showDetails={showDetails}
+                  />
+                );
+              })}
 
-        {!hasSearch && hiddenOptions.size > 0 && (
-          <SizeLimitMessage>
-            {sizeLimitMessage ?? t('Use search to find more options…')}
-          </SizeLimitMessage>
-        )}
-      </ListWrap>
+            {!searchable && hiddenOptions.size > 0 && (
+              <SizeLimitMessage>
+                {sizeLimitMessage ?? t('Use search to find more options…')}
+              </SizeLimitMessage>
+            )}
+          </ListWrap>
+        </Container>
+      </Container>
     </Fragment>
   );
+}
+
+const heightEstimations = {
+  sm: {regular: 32, large: 49},
+  md: {regular: 36, large: 53},
+  xs: {regular: 25, large: 42},
+} as const satisfies Record<FormSize, {large: number; regular: number}>;
+
+/**
+ * Matches `theme.space.xs` used as vertical padding on ListWrap (ul).
+ * Passed to the virtualizer's wrapper to account for the padding,
+ * preventing a tiny scrollbar when few items remain after filtering.
+ */
+const listPaddingVertical = 4;
+
+function useVirtualizedItems<T extends ObjectLike>({
+  listItems,
+  virtualized = false,
+  size,
+}: {
+  listItems: Array<Node<T>>;
+  size: FormSize;
+  virtualized: boolean | undefined;
+}) {
+  const scrollElementRef = useRef<HTMLDivElement>(null);
+  const heightEstimation = heightEstimations[size];
+
+  const virtualizer = useVirtualizer({
+    count: listItems.length,
+    getScrollElement: () => scrollElementRef?.current,
+    estimateSize: index => {
+      const item = listItems[index];
+      if (item?.value && 'details' in item.value) {
+        return heightEstimation.large;
+      }
+      return heightEstimation.regular;
+    },
+    enabled: virtualized,
+  });
+
+  if (virtualized) {
+    const virtualizedItems = virtualizer.getVirtualItems();
+    return {
+      items: virtualizedItems,
+      scrollElementRef,
+      itemProps: (index: number) => ({
+        ref: virtualizer.measureElement,
+        'data-index': index,
+      }),
+      wrapperProps: {
+        'data-is-virtualized': true,
+        style: {
+          height: virtualizer.getTotalSize() + listPaddingVertical * 2,
+          width: '100%',
+          position: 'relative',
+        },
+      },
+      listWrapStyle: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        transform: `translateY(${virtualizedItems[0]?.start ?? 0}px)`,
+      },
+    } as const;
+  }
+
+  return {
+    items: listItems.map((_, index) => ({index, start: 0})),
+    scrollElementRef: undefined,
+    itemProps: () => undefined,
+    wrapperProps: {
+      'data-is-virtualized': false,
+    },
+    listWrapStyle: {},
+  } as const;
 }

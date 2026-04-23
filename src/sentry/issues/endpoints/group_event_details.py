@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 from django.contrib.auth.models import AnonymousUser
 from drf_spectacular.utils import extend_schema
@@ -12,7 +13,8 @@ from snuba_sdk import Column, Condition, Op, Or
 from snuba_sdk.legacy import is_condition, parse_condition
 
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
+from sentry.api.helpers.deprecation import deprecated
 from sentry.api.helpers.environments import get_environments
 from sentry.api.helpers.group_index import parse_and_convert_issue_search_query
 from sentry.api.helpers.group_index.validators import ValidationError
@@ -27,6 +29,7 @@ from sentry.apidocs.constants import (
 from sentry.apidocs.examples.event_examples import EventExamples
 from sentry.apidocs.parameters import EventParams, GlobalParams, IssueParams
 from sentry.apidocs.utils import inline_sentry_response_serializer
+from sentry.constants import CELL_API_DEPRECATION_DATE
 from sentry.exceptions import InvalidParams, InvalidSearchQuery
 from sentry.issues.endpoints.bases.group import GroupEndpoint
 from sentry.issues.endpoints.project_event_details import (
@@ -36,6 +39,7 @@ from sentry.issues.endpoints.project_event_details import (
 from sentry.issues.grouptype import GroupCategory
 from sentry.models.environment import Environment
 from sentry.models.group import Group
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.search.events.filter import (
     FilterConvertParams,
     convert_search_filter_to_snuba_query,
@@ -51,7 +55,7 @@ from sentry.utils import metrics
 
 def issue_search_query_to_conditions(
     query: str, group: Group, user: User | AnonymousUser, environments: Sequence[Environment]
-) -> list[Condition]:
+) -> tuple[list[Condition], list[Any]]:
     from sentry.utils.snuba import resolve_column, resolve_conditions
 
     dataset = (
@@ -64,7 +68,7 @@ def issue_search_query_to_conditions(
     )
 
     # transform search filters -> the legacy condition format
-    legacy_conditions = []
+    legacy_conditions: list[Any] = []
     if search_filters:
         for search_filter in search_filters:
             from sentry.api.serializers import GroupSerializerSnuba
@@ -94,11 +98,13 @@ def issue_search_query_to_conditions(
 
     # the transformed conditions is generic and isn't 'dataset aware', we need to map the generic columns
     # being queried to the appropriate dataset column
-    resolved_legacy_conditions = resolve_conditions(legacy_conditions, resolve_column(dataset))
+    resolved_legacy_conditions = (
+        resolve_conditions(legacy_conditions, resolve_column(dataset)) or []
+    )
 
     # convert the legacy condition format into the SnQL condition format
-    snql_conditions = []
-    for cond in resolved_legacy_conditions or ():
+    snql_conditions: list[Condition] = []
+    for cond in resolved_legacy_conditions:
         if not is_condition(cond):
             # this shouldn't be possible since issue search only allows ands
             or_conditions = []
@@ -112,23 +118,25 @@ def issue_search_query_to_conditions(
         else:
             snql_conditions.append(parse_condition(cond))
 
-    return snql_conditions
+    return snql_conditions, resolved_legacy_conditions
 
 
 @extend_schema(tags=["Events"])
-@region_silo_endpoint
+@cell_silo_endpoint
 class GroupEventDetailsEndpoint(GroupEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PUBLIC,
     }
     enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=15, window=1),
-            RateLimitCategory.USER: RateLimit(limit=15, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=15, window=1),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=15, window=1),
+                RateLimitCategory.USER: RateLimit(limit=15, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=15, window=1),
+            }
         }
-    }
+    )
 
     @extend_schema(
         operation_id="Retrieve an Issue Event",
@@ -150,6 +158,7 @@ class GroupEventDetailsEndpoint(GroupEndpoint):
         },
         examples=EventExamples.GROUP_EVENT_DETAILS,
     )
+    @deprecated(CELL_API_DEPRECATION_DATE, url_names=["sentry-api-0-group-event-details"])
     def get(self, request: Request, group: Group, event_id: str) -> Response:
         """
         Retrieves the details of an issue event.
@@ -164,23 +173,24 @@ class GroupEventDetailsEndpoint(GroupEndpoint):
             raise ParseError(detail="Invalid date range")
 
         query = request.GET.get("query")
-        try:
-            conditions: list[Condition] = (
-                issue_search_query_to_conditions(query, group, request.user, environments)
-                if query
-                else []
-            )
-        except ValidationError:
-            raise ParseError(detail="Invalid event query")
-        except InvalidSearchQuery as error:
-            message = str(error)
-            raise ParseError(detail=message)
-        except Exception:
-            logging.exception(
-                "group_event_details.parse_query",
-                extra={"query": query, "group": group.id, "organization": organization.id},
-            )
-            raise ParseError(detail="Unable to parse query")
+        conditions: list[Condition] = []
+        legacy_conditions: list[Any] = []
+        if query:
+            try:
+                conditions, legacy_conditions = issue_search_query_to_conditions(
+                    query, group, request.user, environments
+                )
+            except ValidationError:
+                raise ParseError(detail="Invalid event query")
+            except InvalidSearchQuery as error:
+                message = str(error)
+                raise ParseError(detail=message)
+            except Exception:
+                logging.exception(
+                    "group_event_details.parse_query",
+                    extra={"query": query, "group": group.id, "organization": organization.id},
+                )
+                raise ParseError(detail="Unable to parse query")
 
         if environments:
             conditions.append(Condition(Column("environment"), Op.IN, environment_names))
@@ -237,7 +247,10 @@ class GroupEventDetailsEndpoint(GroupEndpoint):
             environments=environment_names,
             include_full_release_data="fullRelease" not in collapse,
             conditions=conditions,
+            legacy_conditions=legacy_conditions,
             start=start,
             end=end,
         )
+        if data is None:
+            return Response({"detail": "Failed to load event"}, status=500)
         return Response(data)

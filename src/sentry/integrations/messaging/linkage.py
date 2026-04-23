@@ -13,7 +13,7 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.cache import never_cache
 from rest_framework.request import Request
 
-from sentry import analytics, features
+from sentry import analytics
 from sentry.api.helpers.teams import is_team_admin
 from sentry.constants import ObjectStatus
 from sentry.identity.services.identity import identity_service
@@ -42,7 +42,7 @@ from sentry.users.services.user.serial import serialize_generic_user
 from sentry.utils import metrics
 from sentry.utils.signing import unsign
 from sentry.web.client_config import get_client_config
-from sentry.web.frontend.base import BaseView, control_silo_view, region_silo_view
+from sentry.web.frontend.base import BaseView, cell_silo_view, control_silo_view
 from sentry.web.helpers import render_to_response
 
 logger = logging.getLogger("sentry.integrations.messaging.linkage")
@@ -154,7 +154,7 @@ class IdentityLinkageView(LinkageView, ABC):
                     self.provider, request.user, integration_id=integration_id
                 )
         except Http404:
-            logger.exception("get_identity_error", extra={"integration_id": integration_id})
+            logger.warning("get_identity_error", extra={"integration_id": integration_id})
             self.capture_metric("failure.get_identity")
             return self.render_error_page(
                 request,
@@ -196,7 +196,7 @@ class IdentityLinkageView(LinkageView, ABC):
             external_id: str = params_dict[self.external_id_parameter]
         except KeyError as e:
             event = self.capture_metric("failure.post.missing_params", tags={"error": str(e)})
-            logger.exception(event)
+            logger.warning(event)
             return self.render_error_page(
                 request,
                 status=400,
@@ -284,7 +284,7 @@ class LinkIdentityView(IdentityLinkageView, ABC):
             Identity.objects.link_identity(user=request.user, idp=idp, external_id=external_id)
         except IntegrityError:
             event = self.capture_metric("failure.integrity_error")
-            logger.exception(event)
+            logger.warning(event)
             raise Http404
 
 
@@ -323,12 +323,12 @@ class UnlinkIdentityView(IdentityLinkageView, ABC):
             identities.delete()
         except IntegrityError:
             tag = f"{self.provider_slug}.unlink.integrity-error"
-            logger.exception(tag)
+            logger.warning(tag)
             raise Http404
         return None
 
 
-@region_silo_view
+@cell_silo_view
 class TeamLinkageView(LinkageView, ABC):
     _ALLOWED_ROLES = frozenset(["admin", "manager", "owner"])
 
@@ -392,7 +392,7 @@ class LinkTeamView(TeamLinkageView, ABC):
     def execute(
         self, request: HttpRequest, integration: RpcIntegration, params: Mapping[str, Any]
     ) -> HttpResponseBase:
-        from sentry.integrations.slack.analytics import IntegrationIdentityLinked
+        from sentry.integrations.slack.analytics import SlackIntegrationIdentityLinked
         from sentry.integrations.slack.views.link_team import (
             SUCCESS_LINKED_MESSAGE,
             SUCCESS_LINKED_TITLE,
@@ -492,7 +492,7 @@ class LinkTeamView(TeamLinkageView, ABC):
 
         try:
             analytics.record(
-                IntegrationIdentityLinked(
+                SlackIntegrationIdentityLinked(
                     provider=self.provider_slug,
                     actor_id=team.id,
                     actor_type="team",
@@ -505,21 +505,15 @@ class LinkTeamView(TeamLinkageView, ABC):
             self.capture_metric("failure.team_already_linked")
             return self.notify_team_already_linked(request, channel_id, integration, team)
 
-        has_team_workflow = features.has(
-            "organizations:team-workflow-notifications", team.organization
+        notifications_service.enable_all_settings_for_provider(
+            external_provider=self.external_provider_enum,
+            team_id=team.id,
+            types=[NotificationSettingEnum.ISSUE_ALERTS],
         )
-        # Turn on notifications for all of a team's projects.
-        # TODO(jangjodi): Remove this once the flag is removed
-        if not has_team_workflow:
-            notifications_service.enable_all_settings_for_provider(
-                external_provider=self.external_provider_enum,
-                team_id=team.id,
-                types=[NotificationSettingEnum.ISSUE_ALERTS],
-            )
 
         message = SUCCESS_LINKED_MESSAGE.format(
             slug=team.slug,
-            workflow_addon=" and workflow" if has_team_workflow else "",
+            workflow_addon="",
             channel_name=channel_name,
         )
         self.notify_on_success(channel_id, integration, message)

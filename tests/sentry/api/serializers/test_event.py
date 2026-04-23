@@ -8,12 +8,12 @@ from sentry.api.serializers.models.event import (
     SqlFormatEventSerializer,
 )
 from sentry.api.serializers.rest_framework import convert_dict_key_case, snake_to_camel_case
-from sentry.models.eventerror import EventError
+from sentry.models.eventerror import EventErrorType
 from sentry.models.release import Release
 from sentry.sdk_updates import SdkIndexState
 from sentry.testutils.cases import TestCase
 from sentry.testutils.helpers.datetime import before_now
-from sentry.testutils.performance_issues.event_generators import get_event
+from sentry.testutils.issue_detection.event_generators import get_event
 from sentry.testutils.skips import requires_snuba
 from sentry.utils.samples import load_data
 from tests.sentry.issues.test_utils import OccurrenceTestMixin
@@ -47,7 +47,7 @@ class EventSerializerTest(TestCase, OccurrenceTestMixin):
         result = serialize(event)
         assert len(result["errors"]) == 1
         assert "data" in result["errors"][0]
-        assert result["errors"][0]["type"] == EventError.INVALID_DATA
+        assert result["errors"][0]["type"] == EventErrorType.INVALID_DATA
         assert result["errors"][0]["data"] == {
             "name": "stacktrace",
             "reason": "expected rawstacktrace",
@@ -553,7 +553,7 @@ class SqlFormatEventSerializerTest(TestCase):
         assert result["release"]["lastCommit"]["id"] == "917ac271787e74ff2dbe52b67e77afcff9aaa305"
 
     def test_event_db_span_formatting(self) -> None:
-        event_data = get_event("n-plus-one-in-django-new-view")
+        event_data = get_event("n-plus-one-db/n-plus-one-in-django-new-view")
         event_data["contexts"] = {
             "trace": {
                 "trace_id": "530c14e044aa464db6ddb43660e6474f",
@@ -647,8 +647,8 @@ class SqlFormatEventSerializerTest(TestCase):
                 == 1
             ), "SQL_QUERY_OK should have been formatted a single time"
 
-            assert not any(
-                SQL_QUERY_TOO_LARGE in args[0] for args in mock_format.call_args_list
-            ), "SQL_QUERY_TOO_LARGE should not have been formatted"
+            assert not any(SQL_QUERY_TOO_LARGE in args[0] for args in mock_format.call_args_list), (
+                "SQL_QUERY_TOO_LARGE should not have been formatted"
+            )
 
             assert mock_format.call_count == 20, "Format should have been called 20 times"

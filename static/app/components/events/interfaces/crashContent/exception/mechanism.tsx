@@ -3,14 +3,14 @@ import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import forOwn from 'lodash/forOwn';
 
-import {ExternalLink} from 'sentry/components/core/link';
+import {ExternalLink} from '@sentry/scraps/link';
+
 import {AnnotatedText} from 'sentry/components/events/meta/annotatedText';
 import {Hovercard} from 'sentry/components/hovercard';
-import Pill from 'sentry/components/pill';
-import Pills from 'sentry/components/pills';
+import {Pill} from 'sentry/components/pill';
+import {Pills} from 'sentry/components/pills';
 import {IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {StackTraceMechanism} from 'sentry/types/stacktrace';
 import {isUrl} from 'sentry/utils/string/isUrl';
 
@@ -98,22 +98,14 @@ export function Mechanism({data: mechanism, meta: mechanismMeta}: Props) {
     }
   });
 
-  return (
-    <Wrapper>
-      <StyledPills>{pills}</StyledPills>
-    </Wrapper>
-  );
+  return <StyledPills>{pills}</StyledPills>;
 }
-
-const Wrapper = styled('div')`
-  margin: ${space(2)} 0 ${space(0.5)} 0;
-`;
 
 const iconStyle = (p: {theme: Theme}) => css`
   transition: 0.1s linear color;
-  color: ${p.theme.gray300};
+  color: ${p.theme.colors.gray400};
   :hover {
-    color: ${p.theme.gray500};
+    color: ${p.theme.colors.gray800};
   }
 `;
 
@@ -125,12 +117,12 @@ const StyledExternalLink = styled(ExternalLink)`
 const Name = styled('span')`
   display: grid;
   grid-template-columns: max-content max-content;
-  gap: ${space(0.5)};
+  gap: ${p => p.theme.space.xs};
   align-items: center;
 `;
 
 const Details = styled(Name)`
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
 `;
 
 const StyledPills = styled(Pills)`

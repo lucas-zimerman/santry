@@ -1,16 +1,18 @@
-import {Fragment, useCallback, useId, type CSSProperties} from 'react';
+import {type CSSProperties, Fragment, useId} from 'react';
 import styled from '@emotion/styled';
 
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Flex} from 'sentry/components/core/layout';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {LinkButton} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {AiPrivacyTooltip} from 'sentry/components/aiPrivacyTooltip';
 import {useOrganizationSeerSetup} from 'sentry/components/events/autofix/useOrganizationSeerSetup';
 import {IconMail} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import type {FeedbackIssue} from 'sentry/utils/feedback/types';
 import {selectText} from 'sentry/utils/selectText';
-import useCopyToClipboard from 'sentry/utils/useCopyToClipboard';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useCopyToClipboard} from 'sentry/utils/useCopyToClipboard';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 interface Props {
   feedbackIssue: FeedbackIssue;
@@ -18,44 +20,38 @@ interface Props {
   style?: CSSProperties;
 }
 
-export default function FeedbackItemUsername({className, feedbackIssue, style}: Props) {
+export function FeedbackItemUsername({className, feedbackIssue, style}: Props) {
   const name = feedbackIssue.metadata.name;
   const email = feedbackIssue.metadata.contact_email;
 
   const organization = useOrganization();
-  const {setupAcknowledgement, areAiFeaturesAllowed} = useOrganizationSeerSetup();
+  const {areAiFeaturesAllowed} = useOrganizationSeerSetup();
   const nameOrEmail = name || email;
   const isSameNameAndEmail = name === email;
 
   const user = name && email && !isSameNameAndEmail ? `${name} <${email}>` : nameOrEmail;
 
   const summary = feedbackIssue.metadata.summary;
-  const isAiSummaryEnabled =
-    areAiFeaturesAllowed &&
-    setupAcknowledgement.orgHasAcknowledged &&
-    organization.features.includes('user-feedback-ai-titles');
 
   const userNodeId = useId();
 
-  const handleSelectText = useCallback(() => {
+  const handleSelectText = () => {
     const node = document.getElementById(userNodeId);
     if (!node) {
       return;
     }
 
     selectText(node);
-  }, [userNodeId]);
+  };
 
-  const {onClick: handleCopyToClipboard} = useCopyToClipboard({
-    text: user ?? '',
-  });
+  const {copy} = useCopyToClipboard();
 
   if (!name && !email) {
     return <strong>{t('Anonymous User')}</strong>;
   }
 
   const emailSubject =
-    isAiSummaryEnabled && summary
+    areAiFeaturesAllowed && summary
       ? `Following up from ${organization.name}: ${summary}`
       : `Following up from ${organization.name}`;
 
@@ -69,9 +65,11 @@ export default function FeedbackItemUsername({className, feedbackIssue, style}: 
   return (
     <Flex align="center" gap="md" className={className} style={style}>
       <Flex align="center" wrap="wrap" gap="xs">
-        {isAiSummaryEnabled && summary && (
+        {areAiFeaturesAllowed && summary && (
           <Fragment>
-            <strong>{summary}</strong>
+            <AiPrivacyTooltip>
+              <strong>{summary}</strong>
+            </AiPrivacyTooltip>
             <Purple>•</Purple>
           </Fragment>
         )}
@@ -83,7 +81,7 @@ export default function FeedbackItemUsername({className, feedbackIssue, style}: 
             gap="xs"
             onClick={() => {
               handleSelectText();
-              handleCopyToClipboard();
+              copy(user ?? '');
             }}
           >
             {isSameNameAndEmail ? (
@@ -99,13 +97,13 @@ export default function FeedbackItemUsername({className, feedbackIssue, style}: 
         </Tooltip>
       </Flex>
       {email ? (
-        <Tooltip title={t(`Email %s`, user)} containerDisplayMode="flex">
+        <Tooltip title={t('Email %s', user)} containerDisplayMode="flex">
           <LinkButton
             href={mailToHref}
             external
-            icon={<IconMail color="gray300" />}
-            aria-label={t(`Email %s`, user)}
-            borderless
+            icon={<IconMail variant="muted" />}
+            aria-label={t('Email %s', user)}
+            priority="transparent"
             size="zero"
           />
         </Tooltip>
@@ -115,5 +113,5 @@ export default function FeedbackItemUsername({className, feedbackIssue, style}: 
 }
 
 const Purple = styled('span')`
-  color: ${p => p.theme.purple300};
+  color: ${p => p.theme.tokens.content.accent};
 `;

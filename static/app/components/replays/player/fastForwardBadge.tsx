@@ -1,21 +1,21 @@
 import styled from '@emotion/styled';
 
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {IconArrow} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 
 type Props = {
   speed: number;
   className?: string;
 };
 
-function FastForwardBadge({speed, className}: Props) {
+export function FastForwardBadge({speed, className}: Props) {
   return (
     <Badge className={className}>
       <FastForwardTooltip title={t('Fast forwarding at %sx', speed)}>
         {t('Fast forwarding through inactivity')}
-        <IconArrow size="sm" direction="right" />
+        <StyledIconArrow size="sm" direction="right" />
       </FastForwardTooltip>
     </Badge>
   );
@@ -31,16 +31,14 @@ const Badge = styled('div')`
 
 /* Badge layout and style */
 const FastForwardTooltip = styled(Tooltip)`
-  display: grid;
-  grid-template-columns: max-content max-content;
-  gap: ${space(0.5)};
-  align-items: center;
-
-  background: ${p => p.theme.gray300};
-  color: ${p => p.theme.white};
-  padding: ${space(1.5)} ${space(2)};
-  border-top-right-radius: ${p => p.theme.borderRadius};
+  background: ${p => p.theme.colors.gray400};
+  color: ${p => p.theme.colors.white};
+  padding: ${p => p.theme.space.lg} ${p => p.theme.space.xl};
+  border-top-right-radius: ${p => p.theme.radius.md};
   z-index: ${p => p.theme.zIndex.initial};
 `;
 
-export default FastForwardBadge;
+const StyledIconArrow = styled(IconArrow)`
+  margin-left: ${p => p.theme.space.sm};
+  vertical-align: text-top;
+`;

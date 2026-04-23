@@ -14,8 +14,8 @@ import {
   TWENTY_FOUR_HOURS,
   TWO_WEEKS,
 } from 'sentry/components/charts/utils';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
-import {URL_PARAM} from 'sentry/constants/pageFilters';
+import {URL_PARAM} from 'sentry/components/pageFilters/constants';
+import {normalizeDateTimeParams} from 'sentry/components/pageFilters/parse';
 import {t} from 'sentry/locale';
 import type {PageFilters} from 'sentry/types/core';
 import type {Organization, SessionApiResponse} from 'sentry/types/organization';
@@ -23,7 +23,7 @@ import {SessionFieldWithOperation} from 'sentry/types/organization';
 import {HealthStatsPeriodOption} from 'sentry/types/release';
 import {defined, percent} from 'sentry/utils';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import withApi from 'sentry/utils/withApi';
+import {withApi} from 'sentry/utils/withApi';
 import {getCrashFreePercent} from 'sentry/views/releases/utils';
 
 import {ReleasesDisplayOption} from './releasesDisplayOptions';
@@ -463,11 +463,11 @@ class ReleasesRequest extends Component<Props, State> {
 
     const projectData = statusCountByProjectInPeriod?.groups
       .filter(({by}) => by.project === project)
-      ?.reduce((acc, group) => reduceTimeSeriesGroups(acc, group, field), [] as number[]);
+      ?.reduce<number[]>((acc, group) => reduceTimeSeriesGroups(acc, group, field), []);
 
     const releaseData = statusCountByReleaseInPeriod?.groups
       .filter(({by}) => by.project === project && by.release === version)
-      ?.reduce((acc, group) => reduceTimeSeriesGroups(acc, group, field), [] as number[]);
+      ?.reduce<number[]>((acc, group) => reduceTimeSeriesGroups(acc, group, field), []);
 
     return [
       {

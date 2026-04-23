@@ -1,5 +1,5 @@
 from sentry.options import FLAG_AUTOMATOR_MODIFIABLE, register
-from sentry.utils.types import Bool, Int, Sequence
+from sentry.utils.types import Bool, Dict, Int, Sequence
 
 register(
     "outbox_replication.sentry_organizationmember.replication_version",
@@ -149,6 +149,13 @@ register(
 )
 
 register(
+    "outbox_replication.sentry_projectkey.replication_version",
+    type=Int,
+    default=0,
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
+
+register(
     "hybrid_cloud.authentication.disabled_organization_shards",
     type=Sequence,
     default=[],
@@ -162,9 +169,34 @@ register(
     flags=FLAG_AUTOMATOR_MODIFIABLE,
 )
 
-# Controls whether or not the pathway to target regions via integration request contents is enabled for the system.
+
+# API Gateway timeout and circuit breaker options
 register(
-    "hybrid_cloud.integration_region_targeting_rate",
-    default=1.0,
+    "apigateway.proxy.timeout",
+    type=Int,
+    default=None,
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
+register(
+    "apigateway.proxy.circuit-breaker.config",
+    type=Dict,
+    default={
+        "error_limit": 100,
+        "error_limit_window": 60,  # 1 min
+        "broken_state_duration": 30,  # 30 sec
+    },
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
+# Short term rollout flags for the circuit breaker in apigateway.
+register(
+    "apigateway.proxy.circuit-breaker.enabled",
+    type=Bool,
+    default=False,
+    flags=FLAG_AUTOMATOR_MODIFIABLE,
+)
+register(
+    "apigateway.proxy.circuit-breaker.enforce",
+    type=Bool,
+    default=False,
     flags=FLAG_AUTOMATOR_MODIFIABLE,
 )

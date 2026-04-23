@@ -1,9 +1,9 @@
 import logging
 
-from celery import Task
 from django.db.models import Subquery
 from django.utils import timezone
 from sentry_sdk import capture_exception
+from taskbroker_client.task import Task
 
 from sentry.models.files.utils import get_relocation_storage
 from sentry.relocation.models.relocationtransfer import (
@@ -15,23 +15,21 @@ from sentry.relocation.models.relocationtransfer import (
     RelocationTransferState,
 )
 from sentry.relocation.services.relocation_export.service import (
+    cell_relocation_export_service,
     control_relocation_export_service,
-    region_relocation_export_service,
 )
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import relocation_control_tasks, relocation_tasks
-from sentry.types.region import get_local_region
+from sentry.types.cell import get_local_cell
 
 logger = logging.getLogger("sentry.relocation")
 
 
 @instrumented_task(
     name="sentry.relocation.transfer.find_relocation_transfer_control",
-    queue="relocation.control",
+    namespace=relocation_control_tasks,
     silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(namespace=relocation_control_tasks),
 )
 def find_relocation_transfer_control() -> None:
     _find_relocation_transfer(ControlRelocationTransfer, process_relocation_transfer_control)
@@ -39,9 +37,8 @@ def find_relocation_transfer_control() -> None:
 
 @instrumented_task(
     name="sentry.relocation.transfer.find_relocation_transfer_region",
-    queue="relocation",
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(namespace=relocation_tasks),
+    namespace=relocation_tasks,
+    silo_mode=SiloMode.CELL,
 )
 def find_relocation_transfer_region() -> None:
     _find_relocation_transfer(RegionRelocationTransfer, process_relocation_transfer_region)
@@ -71,7 +68,7 @@ def _find_relocation_transfer(
         )
 
     # Garbage collect expired transfers. Because relocations are
-    # expected to complete in 1 hour we should purge transfers older than
+    # expected to complete in 80min we should purge transfers older than
     # that.
     now = timezone.now()
     expired = model_cls.objects.filter(date_added__lte=now - MAX_AGE)
@@ -81,8 +78,8 @@ def _find_relocation_transfer(
             extra={
                 "relocation_uuid": item.relocation_uuid,
                 "org_slug": item.org_slug,
-                "requesting_region": item.requesting_region,
-                "exporting_region": item.exporting_region,
+                "requesting_cell": item.requesting_cell,
+                "exporting_cell": item.exporting_cell,
             },
         )
         item.delete()
@@ -90,9 +87,9 @@ def _find_relocation_transfer(
 
 @instrumented_task(
     name="sentry.relocation.transfer.process_relocation_transfer_control",
-    queue="relocation.control",
+    namespace=relocation_control_tasks,
     silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(namespace=relocation_control_tasks),
+    processing_deadline_duration=60,
 )
 def process_relocation_transfer_control(transfer_id: int) -> None:
     log_context = {"id": transfer_id, "silo": "control"}
@@ -111,12 +108,12 @@ def process_relocation_transfer_control(transfer_id: int) -> None:
         if public_key:
             public_key = bytes(public_key)
 
-        # Forward the export request to the exporting region.
+        # Forward the export request to the exporting cell.
         try:
-            region_relocation_export_service.request_new_export(
+            cell_relocation_export_service.request_new_export(
                 relocation_uuid=str(transfer.relocation_uuid),
-                requesting_region_name=transfer.requesting_region,
-                replying_region_name=transfer.exporting_region,
+                requesting_region_name=transfer.requesting_cell,
+                replying_region_name=transfer.exporting_cell,
                 org_slug=transfer.org_slug,
                 encrypt_with_public_key=public_key,
             )
@@ -134,7 +131,7 @@ def process_relocation_transfer_control(transfer_id: int) -> None:
     elif transfer.state == RelocationTransferState.Reply:
         # We expect the `ProxyRelocationExportService::reply_with_export` implementation to have
         # written the export data to the control silo's local relocation-specific GCS bucket. Here,
-        # we just read it into memory and attempt the RPC back to the requesting region.
+        # we just read it into memory and attempt the RPC back to the requesting cell.
         uuid = transfer.relocation_uuid
         slug = transfer.org_slug
 
@@ -155,11 +152,11 @@ def process_relocation_transfer_control(transfer_id: int) -> None:
 
         try:
             with encrypted_bytes:
-                # Move encrypted bytes to the requesting region.
-                region_relocation_export_service.reply_with_export(
+                # Move encrypted bytes to the requesting cell.
+                cell_relocation_export_service.reply_with_export(
                     relocation_uuid=str(transfer.relocation_uuid),
-                    requesting_region_name=transfer.requesting_region,
-                    replying_region_name=transfer.exporting_region,
+                    requesting_region_name=transfer.requesting_cell,
+                    replying_region_name=transfer.exporting_cell,
                     org_slug=slug,
                     # TODO(mark): finish transfer from `encrypted_contents` -> `encrypted_bytes`.
                     encrypted_contents=None,
@@ -181,12 +178,12 @@ def process_relocation_transfer_control(transfer_id: int) -> None:
 
 @instrumented_task(
     name="sentry.relocation.transfer.process_relocation_transfer_region",
-    queue="relocation",
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(namespace=relocation_tasks),
+    namespace=relocation_tasks,
+    silo_mode=SiloMode.CELL,
+    processing_deadline_duration=60,
 )
 def process_relocation_transfer_region(transfer_id: int) -> None:
-    log_context = {"id": transfer_id, "silo": "region", "region": get_local_region().name}
+    log_context = {"id": transfer_id, "silo": "region", "region": get_local_cell().name}
 
     try:
         transfer = RegionRelocationTransfer.objects.get(id=transfer_id)
@@ -221,8 +218,8 @@ def process_relocation_transfer_region(transfer_id: int) -> None:
         with encrypted_bytes:
             control_relocation_export_service.reply_with_export(
                 relocation_uuid=uuid,
-                requesting_region_name=transfer.requesting_region,
-                replying_region_name=transfer.exporting_region,
+                requesting_region_name=transfer.requesting_cell,
+                replying_region_name=transfer.exporting_cell,
                 org_slug=slug,
                 # TODO(mark): finish transfer from `encrypted_contents` -> `encrypted_bytes`.
                 encrypted_contents=None,

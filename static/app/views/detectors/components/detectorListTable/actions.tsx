@@ -1,17 +1,18 @@
 import {Fragment, useCallback, useState} from 'react';
 import styled from '@emotion/styled';
 
+import {Alert} from '@sentry/scraps/alert';
+import {Button} from '@sentry/scraps/button';
+import {Checkbox} from '@sentry/scraps/checkbox';
+import {Flex} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {openConfirmModal} from 'sentry/components/confirm';
-import {Alert} from 'sentry/components/core/alert';
-import {Button} from 'sentry/components/core/button';
-import {Checkbox} from 'sentry/components/core/checkbox';
-import {Flex} from 'sentry/components/core/layout';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {SimpleTable} from 'sentry/components/tables/simpleTable';
 import {t, tct, tn} from 'sentry/locale';
 import {decodeScalar} from 'sentry/utils/queryString';
-import useLocationQuery from 'sentry/utils/url/useLocationQuery';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {useLocationQuery} from 'sentry/utils/url/useLocationQuery';
 import {useDeleteDetectorsMutation} from 'sentry/views/detectors/hooks/useDeleteDetectorsMutation';
 import {useUpdateDetectorsMutation} from 'sentry/views/detectors/hooks/useEditDetectorsMutation';
 
@@ -19,6 +20,7 @@ interface DetectorsTableActionsProps {
   allResultsVisible: boolean;
   canEdit: boolean;
   detectorLimitReached: boolean;
+  hasSystemCreatedDetectors: boolean;
   pageSelected: boolean;
   queryCount: string;
   selected: Set<string>;
@@ -36,10 +38,13 @@ export function DetectorsTableActions({
   showEnable,
   showDisable,
   canEdit,
+  hasSystemCreatedDetectors,
   detectorLimitReached,
 }: DetectorsTableActionsProps) {
   const [allInQuerySelected, setAllInQuerySelected] = useState(false);
   const anySelected = selected.size > 0;
+
+  const canDelete = canEdit && !hasSystemCreatedDetectors;
 
   const {selection} = usePageFilters();
   const {query} = useLocationQuery({
@@ -63,8 +68,8 @@ export function DetectorsTableActions({
       );
     }
     return tn(
-      `Are you sure you want to enable this %s monitor?`,
-      `Are you sure you want to enable these %s monitors?`,
+      'Are you sure you want to enable this %s monitor?',
+      'Are you sure you want to enable these %s monitors?',
       selected.size
     );
   }, [allInQuerySelected, queryCount, selected.size]);
@@ -79,39 +84,27 @@ export function DetectorsTableActions({
       );
     }
     return tn(
-      `Are you sure you want to disable this %s monitor?`,
-      `Are you sure you want to disable these %s monitors?`,
+      'Are you sure you want to disable this %s monitor?',
+      'Are you sure you want to disable these %s monitors?',
       selected.size
     );
   }, [allInQuerySelected, queryCount, selected.size]);
 
-  const handleUpdate = useCallback(
-    ({enabled}: {enabled: boolean}) => {
-      openConfirmModal({
-        message: enabled ? getEnableConfirmMessage() : getDisableConfirmMessage(),
-        confirmText: enabled ? t('Enable') : t('Disable'),
-        priority: 'danger',
-        onConfirm: async () => {
-          if (allInQuerySelected) {
-            await updateDetectors({enabled, query, projects: selection.projects});
-          } else {
-            await updateDetectors({enabled, ids: Array.from(selected)});
-          }
-          togglePageSelected(false);
-        },
-      });
-    },
-    [
-      selected,
-      allInQuerySelected,
-      updateDetectors,
-      getEnableConfirmMessage,
-      getDisableConfirmMessage,
-      togglePageSelected,
-      selection.projects,
-      query,
-    ]
-  );
+  const handleUpdate = ({enabled}: {enabled: boolean}) => {
+    openConfirmModal({
+      message: enabled ? getEnableConfirmMessage() : getDisableConfirmMessage(),
+      confirmText: enabled ? t('Enable') : t('Disable'),
+      priority: 'danger',
+      onConfirm: async () => {
+        if (allInQuerySelected) {
+          await updateDetectors({enabled, query, projects: selection.projects});
+        } else {
+          await updateDetectors({enabled, ids: Array.from(selected)});
+        }
+        togglePageSelected(false);
+      },
+    });
+  };
 
   const getDeleteConfirmMessage = useCallback(() => {
     if (allInQuerySelected) {
@@ -123,13 +116,13 @@ export function DetectorsTableActions({
       );
     }
     return tn(
-      `Are you sure you want to delete this %s monitor?`,
-      `Are you sure you want to delete these %s monitors?`,
+      'Are you sure you want to delete this %s monitor?',
+      'Are you sure you want to delete these %s monitors?',
       selected.size
     );
   }, [allInQuerySelected, queryCount, selected.size]);
 
-  const handleDelete = useCallback(() => {
+  const handleDelete = () => {
     openConfirmModal({
       message: getDeleteConfirmMessage(),
       confirmText: t('Delete'),
@@ -143,20 +136,12 @@ export function DetectorsTableActions({
         togglePageSelected(false);
       },
     });
-  }, [
-    selected,
-    allInQuerySelected,
-    deleteDetectors,
-    getDeleteConfirmMessage,
-    togglePageSelected,
-    selection.projects,
-    query,
-  ]);
+  };
 
   return (
     <Fragment>
       <SimpleTable.Header>
-        <ActionsBarWrapper>
+        <Flex align="center" padding="0 xl" gap="md" width="100%" column="1 / -1">
           <Checkbox
             checked={pageSelected || (anySelected ? 'indeterminate' : false)}
             onChange={s => {
@@ -186,7 +171,7 @@ export function DetectorsTableActions({
           )}
           {showDisable && (
             <Tooltip
-              title={'You do not have permission to modify the selected monitors.'}
+              title="You do not have permission to modify the selected monitors."
               disabled={canEdit}
             >
               <Button
@@ -199,22 +184,26 @@ export function DetectorsTableActions({
             </Tooltip>
           )}
           <Tooltip
-            title={t('You do not have permission to delete the selected monitors.')}
-            disabled={canEdit}
+            title={
+              hasSystemCreatedDetectors
+                ? t('Monitors managed by Sentry cannot be deleted.')
+                : t('You do not have permission to delete the selected monitors.')
+            }
+            disabled={canDelete}
           >
             <Button
               size="xs"
               priority="danger"
               onClick={handleDelete}
-              disabled={isDeleting || !canEdit}
+              disabled={isDeleting || !canDelete}
             >
               {t('Delete')}
             </Button>
           </Tooltip>
-        </ActionsBarWrapper>
+        </Flex>
       </SimpleTable.Header>
       {pageSelected && !allResultsVisible && (
-        <FullWidthAlert type="warning" showIcon={false}>
+        <FullWidthAlert variant="warning" system showIcon={false}>
           <Flex justify="center" wrap="wrap" gap="md">
             {allInQuerySelected ? (
               tct('Selected all [count] monitors that match this search query.', {
@@ -227,7 +216,7 @@ export function DetectorsTableActions({
                   '%s monitors on this page selected.',
                   selected.size
                 )}
-                <Button priority={'link'} onClick={() => setAllInQuerySelected(true)}>
+                <Button priority="link" onClick={() => setAllInQuerySelected(true)}>
                   {tct('Select all [count] monitors that match this search query.', {
                     count: queryCount,
                   })}
@@ -242,14 +231,5 @@ export function DetectorsTableActions({
 }
 
 const FullWidthAlert = styled(Alert)`
-  grid-column: 1 / -1;
-`;
-
-const ActionsBarWrapper = styled('div')`
-  display: flex;
-  align-items: center;
-  gap: ${p => p.theme.space.md};
-  padding: 0 ${p => p.theme.space.xl};
-  width: 100%;
   grid-column: 1 / -1;
 `;

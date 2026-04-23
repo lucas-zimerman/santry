@@ -1,10 +1,10 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
 import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
 import {useNavigate} from 'sentry/utils/useNavigate';
-import TypeSelector from 'sentry/views/dashboards/widgetBuilder/components/typeSelector';
+import {WidgetType} from 'sentry/views/dashboards/types';
+import {WidgetBuilderTypeSelector as TypeSelector} from 'sentry/views/dashboards/widgetBuilder/components/typeSelector';
 import {WidgetBuilderProvider} from 'sentry/views/dashboards/widgetBuilder/contexts/widgetBuilderContext';
 
 jest.mock('sentry/utils/useNavigate', () => ({
@@ -14,13 +14,6 @@ jest.mock('sentry/utils/useNavigate', () => ({
 const mockUseNavigate = jest.mocked(useNavigate);
 
 describe('TypeSelector', () => {
-  let router!: ReturnType<typeof RouterFixture>;
-  let organization!: ReturnType<typeof OrganizationFixture>;
-  beforeEach(() => {
-    router = RouterFixture();
-    organization = OrganizationFixture();
-  });
-
   it('changes the visualization type', async () => {
     const mockNavigate = jest.fn();
     mockUseNavigate.mockReturnValue(mockNavigate);
@@ -28,22 +21,16 @@ describe('TypeSelector', () => {
     render(
       <WidgetBuilderProvider>
         <TypeSelector />
-      </WidgetBuilderProvider>,
-      {
-        router,
-        organization,
-        deprecatedRouterMocks: true,
-      }
+      </WidgetBuilderProvider>
     );
 
     // click dropdown
     await userEvent.click(await screen.findByText('Table'));
     // select new option
-    await userEvent.click(await screen.findByText('Bar'));
+    await userEvent.click(await screen.findByText('Bar (Time Series)'));
 
     expect(mockNavigate).toHaveBeenCalledWith(
       expect.objectContaining({
-        ...router.location,
         query: expect.objectContaining({displayType: 'bar'}),
       }),
       expect.anything()
@@ -54,14 +41,136 @@ describe('TypeSelector', () => {
     render(
       <WidgetBuilderProvider>
         <TypeSelector error={{displayType: 'Please select a type'}} />
-      </WidgetBuilderProvider>,
-      {
-        router,
-        organization,
-        deprecatedRouterMocks: true,
-      }
+      </WidgetBuilderProvider>
     );
 
     expect(await screen.findByText('Please select a type')).toBeInTheDocument();
+  });
+
+  it('shows text widget option when dashboards-text-widgets feature is enabled', async () => {
+    mockUseNavigate.mockReturnValue(jest.fn());
+
+    render(
+      <WidgetBuilderProvider>
+        <TypeSelector />
+      </WidgetBuilderProvider>,
+      {
+        organization: OrganizationFixture({features: ['dashboards-text-widgets']}),
+      }
+    );
+
+    await userEvent.click(await screen.findByText('Table'));
+    expect(screen.getByText('Text (Markdown)')).toBeInTheDocument();
+  });
+
+  it('does not show text widget option without dashboards-text-widgets feature', async () => {
+    mockUseNavigate.mockReturnValue(jest.fn());
+
+    render(
+      <WidgetBuilderProvider>
+        <TypeSelector />
+      </WidgetBuilderProvider>,
+      {
+        organization: OrganizationFixture({features: []}),
+      }
+    );
+
+    await userEvent.click(await screen.findByText('Table'));
+    expect(screen.queryByText('Text (Markdown)')).not.toBeInTheDocument();
+  });
+
+  it('resets the widget builder state when the display type is changed on an issue widget', async () => {
+    const mockNavigate = jest.fn();
+    mockUseNavigate.mockReturnValue(mockNavigate);
+
+    render(
+      <WidgetBuilderProvider>
+        <TypeSelector />
+      </WidgetBuilderProvider>,
+      {
+        initialRouterConfig: {
+          location: {
+            pathname: '/organizations/org-slug/dashboard/1/',
+            query: {displayType: 'line', dataset: WidgetType.ISSUE},
+          },
+        },
+      }
+    );
+
+    await userEvent.click(await screen.findByText('Line'));
+    await userEvent.click(await screen.findByText('Table'));
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          displayType: 'table',
+        }),
+      }),
+      expect.anything()
+    );
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          dataset: WidgetType.ISSUE,
+        }),
+      }),
+      expect.anything()
+    );
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          field: ['issue', 'assignee', 'title'],
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it('resets the widget builder state to dataset defaults when display type is changed from text widget', async () => {
+    const mockNavigate = jest.fn();
+    mockUseNavigate.mockReturnValue(mockNavigate);
+
+    render(
+      <WidgetBuilderProvider>
+        <TypeSelector />
+      </WidgetBuilderProvider>,
+      {
+        initialRouterConfig: {
+          location: {
+            pathname: '/organizations/org-slug/dashboard/1/',
+            query: {displayType: 'text'},
+          },
+        },
+        organization: OrganizationFixture({features: ['dashboards-text-widgets']}),
+      }
+    );
+
+    await userEvent.click(await screen.findByText('Text (Markdown)'));
+    await userEvent.click(await screen.findByText('Table'));
+
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          displayType: 'table',
+        }),
+      }),
+      expect.anything()
+    );
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          dataset: WidgetType.ERRORS,
+        }),
+      }),
+      expect.anything()
+    );
+    expect(mockNavigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({
+          field: ['count_unique(user)'],
+        }),
+      }),
+      expect.anything()
+    );
   });
 });

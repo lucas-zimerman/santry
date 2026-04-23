@@ -1,21 +1,20 @@
 import {initializeOrg} from 'sentry-test/initializeOrg';
 import {render, screen, within} from 'sentry-test/reactTestingLibrary';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {LogsAnalyticsPageSource} from 'sentry/utils/analytics/logsAnalyticsEvent';
-import RequestError from 'sentry/utils/requestError/requestError';
+import {RequestError} from 'sentry/utils/requestError/requestError';
 import {
   LOGS_AGGREGATE_FN_KEY,
   LOGS_AGGREGATE_PARAM_KEY,
   LOGS_FIELDS_KEY,
   LOGS_GROUP_BY_KEY,
   LOGS_QUERY_KEY,
-  LogsPageParamsProvider,
 } from 'sentry/views/explore/contexts/logs/logsPageParams';
 import {LOGS_AGGREGATE_SORT_BYS_KEY} from 'sentry/views/explore/contexts/logs/sortBys';
 import {LogsQueryParamsProvider} from 'sentry/views/explore/logs/logsQueryParamsProvider';
-import {type useLogsAggregatesQuery} from 'sentry/views/explore/logs/useLogsQuery';
+import {type useLogsAggregatesTable} from 'sentry/views/explore/logs/useLogsAggregatesTable';
 
 import {LogsAggregateTable} from './logsAggregateTable';
 
@@ -28,15 +27,14 @@ describe('LogsAggregateTable', () => {
   function LogsAggregateTableWithParamsProvider({
     aggregatesTableResult,
   }: {
-    aggregatesTableResult: ReturnType<typeof useLogsAggregatesQuery>;
+    aggregatesTableResult: ReturnType<typeof useLogsAggregatesTable>;
   }) {
     return (
-      <LogsQueryParamsProvider source="location">
-        <LogsPageParamsProvider
-          analyticsPageSource={LogsAnalyticsPageSource.EXPLORE_LOGS}
-        >
-          <LogsAggregateTable aggregatesTableResult={aggregatesTableResult} />
-        </LogsPageParamsProvider>
+      <LogsQueryParamsProvider
+        analyticsPageSource={LogsAnalyticsPageSource.EXPLORE_LOGS}
+        source="location"
+      >
+        <LogsAggregateTable aggregatesTableResult={aggregatesTableResult} />
       </LogsQueryParamsProvider>
     );
   }
@@ -44,19 +42,16 @@ describe('LogsAggregateTable', () => {
   ProjectsStore.loadInitialData([project]);
 
   PageFiltersStore.init();
-  PageFiltersStore.onInitializeUrlState(
-    {
-      projects: [parseInt(project.id, 10)],
-      environments: [],
-      datetime: {
-        period: '14d',
-        start: null,
-        end: null,
-        utc: null,
-      },
+  PageFiltersStore.onInitializeUrlState({
+    projects: [parseInt(project.id, 10)],
+    environments: [],
+    datetime: {
+      period: '14d',
+      start: null,
+      end: null,
+      utc: null,
     },
-    new Set()
-  );
+  });
   const initialRouterConfig = {
     location: {
       pathname: `/organizations/${organization.slug}/explore/logs/`,

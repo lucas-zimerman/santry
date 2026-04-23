@@ -3,26 +3,27 @@ import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import pick from 'lodash/pick';
 
+import {Tag} from '@sentry/scraps/badge';
+import {Container, Flex} from '@sentry/scraps/layout';
+import {Link, type LinkProps} from '@sentry/scraps/link';
+import {Heading, Text} from '@sentry/scraps/text';
+
 import {CheckInPlaceholder} from 'sentry/components/checkInTimeline/checkInPlaceholder';
 import {CheckInTimeline} from 'sentry/components/checkInTimeline/checkInTimeline';
 import type {TimeWindowConfig} from 'sentry/components/checkInTimeline/types';
-import {Tag} from 'sentry/components/core/badge/tag';
-import {Container, Flex} from 'sentry/components/core/layout';
-import {Link, type LinkProps} from 'sentry/components/core/link';
-import {Heading, Text} from 'sentry/components/core/text';
-import ActorBadge from 'sentry/components/idBadge/actorBadge';
+import {ActorBadge} from 'sentry/components/idBadge/actorBadge';
 import ProjectBadge from 'sentry/components/idBadge/projectBadge';
-import Placeholder from 'sentry/components/placeholder';
+import {Placeholder} from 'sentry/components/placeholder';
 import {IconClock, IconStats, IconTimer, IconUser} from 'sentry/icons';
 import {IconDefaultsProvider} from 'sentry/icons/useIconDefaults';
 import {t, tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import getDuration from 'sentry/utils/duration/getDuration';
+import type {UptimeDetector} from 'sentry/types/workflowEngine/detectors';
+import {getDuration} from 'sentry/utils/duration/getDuration';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
-import useProjectFromSlug from 'sentry/utils/useProjectFromSlug';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjectFromId} from 'sentry/utils/useProjectFromId';
 import {makeAlertsPathname} from 'sentry/views/alerts/pathnames';
-import type {UptimeRule, UptimeSummary} from 'sentry/views/alerts/rules/uptime/types';
+import type {UptimeSummary} from 'sentry/views/alerts/rules/uptime/types';
 import {UptimeDuration} from 'sentry/views/insights/uptime/components/duration';
 import {UptimePercent} from 'sentry/views/insights/uptime/components/percent';
 import {
@@ -34,49 +35,52 @@ import {useUptimeMonitorStats} from 'sentry/views/insights/uptime/utils/useUptim
 
 interface Props {
   timeWindowConfig: TimeWindowConfig;
-  uptimeRule: UptimeRule;
+  uptimeDetector: UptimeDetector;
   /**
-   * Whether only one uptime rule is being rendered in a larger view with this
-   * component. turns off things like zebra striping, hover effect, and showing
-   * rule name.
+   * Whether only one uptime detector is being rendered in a larger view with
+   * this component. turns off things like zebra striping, hover effect, and
+   * showing detector name.
    */
-  singleRuleView?: boolean;
+  single?: boolean;
   summary?: UptimeSummary | null;
 }
 
-export function OverviewRow({
-  summary,
-  uptimeRule,
-  timeWindowConfig,
-  singleRuleView,
-}: Props) {
+export function OverviewRow({summary, uptimeDetector, timeWindowConfig, single}: Props) {
   const organization = useOrganization();
-  const project = useProjectFromSlug({
-    organization,
-    projectSlug: uptimeRule.projectSlug,
+  const project = useProjectFromId({
+    project_id: uptimeDetector.projectId,
   });
 
   const location = useLocation();
   const query = pick(location.query, ['start', 'end', 'statsPeriod', 'environment']);
 
   const {data: uptimeStats, isPending} = useUptimeMonitorStats({
-    detectorIds: [uptimeRule.id],
+    detectorIds: [uptimeDetector.id],
     timeWindowConfig,
   });
 
   const detailsPath = makeAlertsPathname({
-    path: `/rules/uptime/${uptimeRule.projectSlug}/${uptimeRule.id}/details/`,
+    path: `/rules/uptime/${project?.slug}/${uptimeDetector.id}/details/`,
     organization,
   });
 
-  const ruleDetails = singleRuleView ? null : (
+  // XXX(epurkhiser): This is a hack, we're seeing some uptime detectors with
+  // missing dataSources. That should never happen, but for now let's make sure
+  // we're not totally blowing up customers views
+  if (uptimeDetector.dataSources === null) {
+    return null;
+  }
+
+  const subscription = uptimeDetector.dataSources[0].queryObj;
+
+  const ruleDetails = single ? null : (
     <DetailsLink to={{pathname: detailsPath, query}}>
-      <Name>{uptimeRule.name}</Name>
+      <Name>{uptimeDetector.name}</Name>
       <Details>
         <DetailsLine>
           {project && <ProjectBadge project={project} avatarSize={12} disableLink />}
-          {uptimeRule.owner ? (
-            <ActorBadge actor={uptimeRule.owner} avatarSize={12} />
+          {uptimeDetector.owner ? (
+            <ActorBadge actor={uptimeDetector.owner} avatarSize={12} />
           ) : (
             <Flex gap="xs" align="center">
               <IconUser size="xs" />
@@ -87,9 +91,9 @@ export function OverviewRow({
         <DetailsLine>
           <Flex gap="xs" align="center">
             <IconTimer />
-            {t('Checked every %s', getDuration(uptimeRule.intervalSeconds))}
+            {t('Checked every %s', getDuration(subscription.intervalSeconds))}
           </Flex>
-          {summary === undefined ? null : summary === null ? (
+          {summary === null ? null : summary === undefined ? (
             <Fragment>
               <Placeholder width="60px" height="1lh" />
               <Placeholder width="40px" height="1lh" />
@@ -106,25 +110,23 @@ export function OverviewRow({
                   )}
                 />
               </Flex>
-              {summary.avgDurationUs !== null && (
-                <Flex gap="xs" align="center">
-                  <IconClock />
-                  <UptimeDuration size="xs" summary={summary} />
-                </Flex>
-              )}
+              <Flex gap="xs" align="center">
+                <IconClock />
+                <UptimeDuration size="xs" summary={summary} />
+              </Flex>
             </Fragment>
           )}
         </DetailsLine>
-        <div>{uptimeRule.status === 'disabled' && <Tag>{t('Disabled')}</Tag>}</div>
+        <div>{!uptimeDetector.enabled && <Tag variant="muted">{t('Disabled')}</Tag>}</div>
       </Details>
     </DetailsLink>
   );
 
   return (
     <TimelineRow
-      key={uptimeRule.id}
-      singleRuleView={singleRuleView}
-      as={singleRuleView ? 'div' : 'li'}
+      key={uptimeDetector.id}
+      singleRuleView={single}
+      as={single ? 'div' : 'li'}
     >
       {ruleDetails}
       <TimelineContainer>
@@ -132,7 +134,7 @@ export function OverviewRow({
           <CheckInPlaceholder />
         ) : (
           <CheckInTimeline
-            bucketedData={uptimeStats?.[uptimeRule.id] ?? []}
+            bucketedData={uptimeStats?.[uptimeDetector.id] ?? []}
             statusLabel={statusToText}
             statusStyle={tickStyle}
             statusPrecedent={checkStatusPrecedent}
@@ -156,7 +158,7 @@ function DetailsLink(props: LinkProps) {
 }
 
 function Name(props: {children: React.ReactNode}) {
-  return <Heading {...props} as="h3" size="lg" />;
+  return <Heading {...props} as="h3" size="lg" wordBreak="break-word" />;
 }
 
 function Details(props: {children: React.ReactNode}) {
@@ -176,7 +178,7 @@ function DetailsLine(props: {children: React.ReactNode}) {
 }
 
 const InnerDetailsLink = styled(Link)`
-  color: ${p => p.theme.textColor};
+  color: ${p => p.theme.tokens.content.primary};
 
   &:focus-visible {
     outline: none;
@@ -199,13 +201,13 @@ const TimelineRow = styled('li')<TimelineRowProps>`
       transition: background 50ms ease-in-out;
 
       &:nth-child(odd) {
-        background: ${p.theme.backgroundSecondary};
+        background: ${p.theme.tokens.background.secondary};
       }
       &:hover {
-        background: ${p.theme.backgroundTertiary};
+        background: ${p.theme.tokens.background.tertiary};
       }
       &:has(*:focus-visible) {
-        background: ${p.theme.backgroundTertiary};
+        background: ${p.theme.tokens.background.tertiary};
       }
     `}
 
@@ -213,15 +215,15 @@ const TimelineRow = styled('li')<TimelineRowProps>`
   --disabled-opacity: ${p => (p.isDisabled ? '0.6' : 'unset')};
 
   &:last-child {
-    border-bottom-left-radius: ${p => p.theme.borderRadius};
-    border-bottom-right-radius: ${p => p.theme.borderRadius};
+    border-bottom-left-radius: ${p => p.theme.radius.md};
+    border-bottom-right-radius: ${p => p.theme.radius.md};
   }
 `;
 
 const TimelineContainer = styled('div')`
   display: flex;
   align-items: center;
-  padding: ${space(3)} 0;
+  padding: ${p => p.theme.space['2xl']} 0;
   grid-column: 2/-1;
   opacity: var(--disabled-opacity);
 `;

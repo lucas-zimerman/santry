@@ -1,69 +1,56 @@
 import * as Sentry from '@sentry/react';
-import {type PaymentIntentResult, type Stripe} from '@stripe/stripe-js';
+import type {PaymentIntentResult, Stripe} from '@stripe/stripe-js';
+import {useMutation} from '@tanstack/react-query';
 import camelCase from 'lodash/camelCase';
 import moment from 'moment-timezone';
 
-import {
-  addErrorMessage,
-  addLoadingMessage,
-  addSuccessMessage,
-} from 'sentry/actionCreators/indicator';
 import {fetchOrganizationDetails} from 'sentry/actionCreators/organization';
 import {Client} from 'sentry/api';
 import {t} from 'sentry/locale';
-import {DataCategory} from 'sentry/types/core';
+import type {DataCategory} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
-import {browserHistory} from 'sentry/utils/browserHistory';
-import {useMutation} from 'sentry/utils/queryClient';
-import type RequestError from 'sentry/utils/requestError/requestError';
+import type {RequestError} from 'sentry/utils/requestError/requestError';
 import {toTitleCase} from 'sentry/utils/string/toTitleCase';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 
-import {
-  DEFAULT_TIER,
-  MONTHLY,
-  RESERVED_BUDGET_QUOTA,
-  SUPPORTED_TIERS,
-} from 'getsentry/constants';
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
-import {
+import type {Reservations} from 'getsentry/components/upgradeNowModal/types';
+import {MONTHLY, RESERVED_BUDGET_QUOTA} from 'getsentry/constants';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
+import {AddOnCategory, PlanTier, ReservedBudgetCategoryType} from 'getsentry/types';
+import type {
+  BillingDetails,
+  CheckoutAddOns,
+  EventBucket,
   InvoiceItemType,
-  PlanTier,
-  type EventBucket,
-  type InvoiceItem,
-  type OnDemandBudgets,
-  type Plan,
-  type PreviewData,
-  type PreviewInvoiceItem,
-  type ReservedBudgetCategoryType,
-  type Subscription,
+  OnDemandBudgets,
+  Plan,
+  PreviewData,
+  Subscription,
 } from 'getsentry/types';
 import {
   getAmPlanTier,
+  getReservedBudgetCategoryForAddOn,
   getSlot,
   hasPartnerMigrationFeature,
+  hasSomeBillingDetails,
   isBizPlanFamily,
   isTeamPlanFamily,
   isTrialPlan,
 } from 'getsentry/utils/billing';
-import {isByteCategory} from 'getsentry/utils/dataCategory';
-import trackGetsentryAnalytics from 'getsentry/utils/trackGetsentryAnalytics';
-import trackMarketingEvent from 'getsentry/utils/trackMarketingEvent';
+import {trackGetsentryAnalytics} from 'getsentry/utils/trackGetsentryAnalytics';
+import {trackMarketingEvent} from 'getsentry/utils/trackMarketingEvent';
 import type {State as CheckoutState} from 'getsentry/views/amCheckout/';
-import {
-  SelectableProduct,
-  type CheckoutAPIData,
-  type CheckoutFormData,
-  type PlanContent,
-  type SelectedProductData,
+import type {
+  CheckoutAPIData,
+  CheckoutFormData,
+  PlanContent,
 } from 'getsentry/views/amCheckout/types';
+import {bigNumFormatter} from 'getsentry/views/spendAllocations/utils';
 import {
   normalizeOnDemandBudget,
   parseOnDemandBudgetsFromSubscription,
   trackOnDemandBudgetAnalytics,
-} from 'getsentry/views/onDemandBudgets/utils';
-import {bigNumFormatter} from 'getsentry/views/spendAllocations/utils';
+} from 'getsentry/views/spendLimits/utils';
 
 const CURRENCY_LOCALE = 'en-US';
 
@@ -204,17 +191,17 @@ export function getBucket({
 type ReservedTotalProps = {
   plan: Plan;
   reserved: Partial<Record<DataCategory, number>>;
+  addOns?: CheckoutAddOns;
   amount?: number;
   creditCategory?: InvoiceItemType;
   discountType?: string;
   maxDiscount?: number;
-  selectedProducts?: Record<SelectableProduct, SelectedProductData>;
 };
 
 /**
  * Returns the price for a reserved budget category (ie. Seer) in cents.
  */
-export function getReservedPriceForReservedBudgetCategory({
+function getReservedPriceForReservedBudgetCategory({
   plan,
   reservedBudgetCategory,
 }: {
@@ -244,7 +231,7 @@ export function getReservedPriceCents({
   discountType,
   maxDiscount,
   creditCategory,
-  selectedProducts,
+  addOns,
 }: ReservedTotalProps): number {
   let reservedCents = plan.basePrice;
 
@@ -265,16 +252,12 @@ export function getReservedPriceCents({
       }).price)
   );
 
-  Object.entries(selectedProducts ?? {}).forEach(([apiName, selectedProductData]) => {
-    if (selectedProductData.enabled) {
-      const budgetTypeInfo =
-        plan.availableReservedBudgetTypes[apiName as ReservedBudgetCategoryType];
-      if (budgetTypeInfo) {
-        reservedCents += getReservedPriceForReservedBudgetCategory({
-          plan,
-          reservedBudgetCategory: apiName as ReservedBudgetCategoryType,
-        });
-      }
+  Object.entries(addOns ?? {}).forEach(([apiName, {enabled}]) => {
+    if (enabled) {
+      reservedCents += getPrepaidPriceForAddOn({
+        plan,
+        addOnCategory: apiName as AddOnCategory,
+      });
     }
   });
 
@@ -284,32 +267,6 @@ export function getReservedPriceCents({
   }
 
   return reservedCents;
-}
-
-/**
- * Gets the price in cents per reserved category, and returns the
- * reserved total in dollars.
- */
-export function getReservedTotal({
-  plan,
-  reserved,
-  amount,
-  discountType,
-  maxDiscount,
-  creditCategory,
-  selectedProducts,
-}: ReservedTotalProps): string {
-  return formatPrice({
-    cents: getReservedPriceCents({
-      plan,
-      reserved,
-      amount,
-      discountType,
-      maxDiscount,
-      creditCategory,
-      selectedProducts,
-    }),
-  });
 }
 
 type DiscountedPriceProps = {
@@ -329,10 +286,7 @@ export function getDiscountedPrice({
   creditCategory,
 }: DiscountedPriceProps): number {
   let price = basePrice;
-  if (
-    discountType === 'percentPoints' &&
-    creditCategory === InvoiceItemType.SUBSCRIPTION
-  ) {
+  if (discountType === 'percentPoints' && creditCategory === 'subscription') {
     const discount = (basePrice * amount) / 10000;
     price = basePrice - discount;
   } else if (discountType === 'amountCents') {
@@ -348,41 +302,6 @@ export function getShortInterval(billingInterval: string): string {
   return billingInterval === MONTHLY ? 'mo' : 'yr';
 }
 
-function getWithBytes(gigabytes: number): string {
-  if (gigabytes >= 1000) {
-    return `${(gigabytes / 1000).toLocaleString()} TB`;
-  }
-  return `${gigabytes.toLocaleString()} GB`;
-}
-
-/**
- * Used by RangeSlider. As such, a value of zero is not equivalent to unlimited.
- */
-export function getEventsWithUnit(
-  events: number,
-  dataType: string
-): string | number | null {
-  if (!events) {
-    return null;
-  }
-
-  if (isByteCategory(dataType)) {
-    return getWithBytes(events).replace(' ', '');
-  }
-
-  if (events >= 1_000_000_000) {
-    return `${events / 1_000_000_000}B`;
-  }
-  if (events >= 1_000_000) {
-    return `${events / 1_000_000}M`;
-  }
-  if (events >= 1_000) {
-    return `${events / 1_000}K`;
-  }
-
-  return events;
-}
-
 type CheckoutData = {
   plan: string;
 } & Partial<Record<DataCategory, number>>;
@@ -391,6 +310,21 @@ type PreviousData = {
   previous_plan: string;
 } & Partial<Record<`previous_${DataCategory}`, number>>;
 
+/**
+ * Nested structure for category reservations in checkout.upgrade event.
+ * This provides a cleaner structure for Amplitude analytics while maintaining
+ * backwards compatibility with flat fields.
+ */
+type CategoryReservations = Partial<
+  Record<
+    DataCategory,
+    {
+      previous_reserved: number | undefined;
+      reserved: number | undefined;
+    }
+  >
+>;
+
 function recordAnalytics(
   organization: Organization,
   subscription: Subscription,
@@ -398,57 +332,89 @@ function recordAnalytics(
   isMigratingPartnerAccount: boolean
 ) {
   trackMarketingEvent('Upgrade', {plan: data.plan});
-
   const currentData: CheckoutData = {
     plan: data.plan,
   };
 
-  Object.keys(data).forEach(key => {
-    if (key.startsWith('reserved')) {
-      const targetKey = key.charAt(8).toLowerCase() + key.slice(9);
-      (currentData as any)[targetKey] = data[key as keyof CheckoutAPIData];
-    }
-  });
+  const productSelectAnalyticsData: Partial<
+    Record<AddOnCategory, {enabled: boolean; previously_enabled: boolean}>
+  > = {};
 
   const previousData: PreviousData = {
     previous_plan: subscription.plan,
   };
 
+  // Build nested categories structure for better Amplitude analytics
+  const categories: CategoryReservations = {};
+
+  // Parse previous data and populate both flat and nested structures
   Object.entries(subscription.categories).forEach(([category, metricHistory]) => {
     if (
       subscription.planDetails.checkoutCategories.includes(category as DataCategory) &&
       metricHistory.reserved !== null &&
       metricHistory.reserved !== undefined
     ) {
+      const cat = category as DataCategory;
+
+      // Legacy flat structure (backwards compatibility)
       (previousData as any)[`previous_${category}`] = metricHistory.reserved;
+
+      // New nested structure
+      if (!categories[cat]) {
+        categories[cat] = {reserved: undefined, previous_reserved: undefined};
+      }
+      categories[cat].previous_reserved = metricHistory.reserved;
     }
   });
 
-  // TODO(reserved budgets): in future, we should just be able to pass data.selectedProducts
-  const selectableProductData = {
-    [SelectableProduct.SEER]: {
-      enabled: data.seer ?? false,
-      previously_enabled: isTrialPlan(previousData.previous_plan) // don't count trial budgets
-        ? false
-        : (subscription.reservedBudgets?.some(
-            budget =>
-              (budget.apiName as string as SelectableProduct) ===
-                SelectableProduct.SEER && budget.reservedBudget > 0
-          ) ?? false),
-    },
-  };
+  // Parse current data and populate both flat and nested structures
+  Object.keys(data).forEach(key => {
+    if (key.startsWith('reserved')) {
+      const targetKey = (key.charAt(8).toLowerCase() + key.slice(9)) as DataCategory;
+      const value = data[key as keyof CheckoutAPIData] as number | undefined;
+
+      // Legacy flat structure (backwards compatibility)
+      (currentData as any)[targetKey] = value;
+
+      // New nested structure - only add if value is defined
+      if (value !== undefined) {
+        if (!categories[targetKey]) {
+          categories[targetKey] = {reserved: undefined, previous_reserved: undefined};
+        }
+        categories[targetKey].reserved = value;
+      }
+    }
+    if (key.startsWith('addOn')) {
+      const targetKey = (key.charAt(5).toLowerCase() + key.slice(6)) as AddOnCategory;
+      const previouslyEnabled = subscription.addOns?.[targetKey]?.enabled ?? false;
+      productSelectAnalyticsData[targetKey] = {
+        enabled: data[key as keyof CheckoutAPIData] as boolean,
+        // don't count trial addons
+        previously_enabled: !isTrialPlan(previousData.previous_plan) && previouslyEnabled,
+      };
+    }
+  });
+
+  // Filter out categories where both values are undefined
+  const filteredCategories: CategoryReservations = {};
+  Object.entries(categories).forEach(([category, values]) => {
+    if (values.reserved !== undefined || values.previous_reserved !== undefined) {
+      filteredCategories[category as DataCategory] = values;
+    }
+  });
 
   trackGetsentryAnalytics('checkout.upgrade', {
     organization,
     subscription,
     ...previousData,
     ...currentData,
+    categories: filteredCategories, // Add new nested structure
   });
 
   trackGetsentryAnalytics('checkout.product_select', {
     organization,
     subscription,
-    ...selectableProductData,
+    ...productSelectAnalyticsData,
   });
 
   let {onDemandBudget} = data;
@@ -521,7 +487,6 @@ export function stripeHandleCardAction(
     });
 }
 
-/** @internal exported for tests only */
 export function getCheckoutAPIData({
   formData,
   onDemandBudget,
@@ -539,11 +504,20 @@ export function getCheckoutAPIData({
       })}`,
       formatReservedData(value),
     ])
-  ) satisfies Partial<Record<`reserved${Capitalize<DataCategory>}`, number>>;
+  ) satisfies Partial<Reservations>;
 
   const onDemandMaxSpend = shouldUpdateOnDemand
     ? (formData.onDemandMaxSpend ?? 0)
     : undefined;
+
+  const addOnData = Object.fromEntries(
+    Object.entries(formData.addOns ?? {}).map(([addOnName, {enabled}]) => [
+      `addOn${toTitleCase(addOnName, {
+        allowInnerUpperCase: true,
+      })}`,
+      enabled,
+    ])
+  ) satisfies Partial<Record<`addOn${Capitalize<AddOnCategory>}`, boolean>>;
 
   let data: CheckoutAPIData = {
     ...reservedData,
@@ -553,7 +527,7 @@ export function getCheckoutAPIData({
     referrer: referrer || 'billing',
     ...(previewToken && {previewToken}),
     ...(paymentIntent && {paymentIntent}),
-    seer: formData.selectedProducts?.seer?.enabled, // TODO: in future, we should just be able to pass selectedProducts
+    ...addOnData,
   };
 
   if (formData.applyNow) {
@@ -674,12 +648,9 @@ export function useSubmitCheckout({
       // seer automation alert
       const alreadyHasSeer =
         !isTrialPlan(subscription.plan) &&
-        subscription.reservedBudgets?.some(
-          budget =>
-            (budget.apiName as string as SelectableProduct) === SelectableProduct.SEER &&
-            budget.reservedBudget > 0
-        );
-      const justBoughtSeer = _variables.data.seer && !alreadyHasSeer;
+        (subscription.addOns?.seer?.enabled || subscription.addOns?.legacySeer?.enabled);
+      const justBoughtSeer =
+        (_variables.data.addOnLegacySeer || _variables.data.addOnSeer) && !alreadyHasSeer;
 
       // refresh org and subscription state
       // useApi cancels open requests on unmount by default, so we create a new Client to ensure this
@@ -732,149 +703,20 @@ export function useSubmitCheckout({
         }
         onSubmitting?.(false);
 
-        // Don't capture 402 errors as that status code is used for
-        // customer credit card failures.
-        if (error.status !== 402) {
-          Sentry.withScope(scope => {
-            scope.setExtras({data: _variables.data});
-            Sentry.captureException(error);
-          });
-        }
+        // TODO: add 402 ignoring once we've confirmed all valid error states
+        Sentry.withScope(scope => {
+          scope.setExtras({data: _variables.data});
+          Sentry.captureException(error);
+        });
       }
     },
   });
 }
 
-/**
- * @deprecated use useSubmitCheckout instead
- */
-export async function submitCheckout(
-  organization: Organization,
-  subscription: Subscription,
-  previewData: PreviewData,
-  formData: CheckoutFormData,
-  api: Client,
-  onFetchPreviewData: () => void,
-  onHandleCardAction: (intentDetails: IntentDetails) => void,
-  onSubmitting?: (b: boolean) => void,
-  intentId?: string,
-  referrer = 'billing',
-  shouldUpdateOnDemand = true
-) {
-  const endpoint = `/customers/${organization.slug}/subscription/`;
-
-  // this is necessary for recording partner billing migration-specific analytics after
-  // the migration is successful (during which the flag is flipped off)
-  const isMigratingPartnerAccount = hasPartnerMigrationFeature(organization);
-
-  const data = normalizeAndGetCheckoutAPIData({
-    formData,
-    previewToken: previewData?.previewToken,
-    paymentIntent: intentId,
-    referrer,
-    shouldUpdateOnDemand,
-  });
-
-  addLoadingMessage(t('Saving changes\u{2026}'));
-  try {
-    onSubmitting?.(true);
-
-    await api.requestPromise(endpoint, {
-      method: 'PUT',
-      data,
-    });
-
-    addSuccessMessage(t('Success'));
-    recordAnalytics(organization, subscription, data, isMigratingPartnerAccount);
-
-    const alreadyHasSeer =
-      !isTrialPlan(subscription.plan) &&
-      subscription.reservedBudgets?.some(
-        budget =>
-          (budget.apiName as string as SelectableProduct) === SelectableProduct.SEER &&
-          budget.reservedBudget > 0
-      );
-    const justBoughtSeer = data.seer && !alreadyHasSeer;
-
-    // refresh org and subscription state
-    // useApi cancels open requests on unmount by default, so we create a new Client to ensure this
-    // request doesn't get cancelled
-    fetchOrganizationDetails(new Client(), organization.slug);
-    SubscriptionStore.loadData(organization.slug);
-    browserHistory.push(
-      normalizeUrl(
-        `/settings/${organization.slug}/billing/overview/?referrer=${referrer}${
-          justBoughtSeer ? '&showSeerAutomationAlert=true' : ''
-        }`
-      )
-    );
-  } catch (error: any) {
-    const body = error.responseJSON;
-
-    if (body?.previewToken) {
-      onSubmitting?.(false);
-      addErrorMessage(t('Your preview expired, please review changes and submit again'));
-      onFetchPreviewData?.();
-    } else if (body?.paymentIntent && body?.paymentSecret && body?.detail) {
-      // When an error response contains payment intent information
-      // we can retry the payment using the client-side confirmation flow
-      // in stripe.
-      // We don't re-enable the button here as we don't want users clicking it
-      // while there are UI transitions happening.
-      addErrorMessage(body.detail);
-      const intent: IntentDetails = {
-        paymentIntent: body.paymentIntent,
-        paymentSecret: body.paymentSecret,
-      };
-      onHandleCardAction?.(intent);
-    } else {
-      const msg =
-        body?.detail || t('An unknown error occurred while saving your subscription');
-      addErrorMessage(msg);
-      onSubmitting?.(false);
-
-      // Don't capture 402 errors as that status code is used for
-      // customer credit card failures.
-      if (error.status !== 402) {
-        Sentry.withScope(scope => {
-          scope.setExtras({data});
-          Sentry.captureException(error);
-        });
-      }
-    }
-  }
-}
-
-export function getToggleTier(checkoutTier: PlanTier | undefined) {
-  // cannot toggle from or to AM3
-  if (checkoutTier === DEFAULT_TIER || !checkoutTier || SUPPORTED_TIERS.length === 0) {
-    return null;
-  }
-
-  if (SUPPORTED_TIERS.length === 1) {
-    return SUPPORTED_TIERS[0];
-  }
-
-  const tierIndex = SUPPORTED_TIERS.indexOf(checkoutTier);
-
-  // can toggle between AM1 and AM2 for AM1 customers
-  if (tierIndex === SUPPORTED_TIERS.length - 1) {
-    return SUPPORTED_TIERS[tierIndex - 1];
-  }
-
-  return SUPPORTED_TIERS[tierIndex + 1];
-}
-
-export function hasCheckoutV3(organization: Organization) {
-  return organization.features.includes('checkout-v3');
-}
-
 export function getContentForPlan(plan: Plan): PlanContent {
   if (isBizPlanFamily(plan)) {
     return {
-      description: t(
-        'Everything in the Team plan + deeper insight into your application health.'
-      ),
+      description: t('For teams that need more powerful debugging'),
       features: {
         discover: t('Advanced analytics with Discover'),
         enhanced_priority_alerts: t('Enhanced issue priority and alerting'),
@@ -891,7 +733,7 @@ export function getContentForPlan(plan: Plan): PlanContent {
 
   if (isTeamPlanFamily(plan)) {
     return {
-      description: t('Resolve errors and track application performance as a team.'),
+      description: t('Everything to monitor your application as it scales'),
       features: {
         unlimited_members: t('Unlimited members'),
         integrations: t('Third-party integrations'),
@@ -900,7 +742,7 @@ export function getContentForPlan(plan: Plan): PlanContent {
     };
   }
 
-  // TODO(checkout v3): update copy
+  // TODO(billing): update copy when Developer is available in checkout
   return {
     description: t('For solo devs working on small projects'),
     features: {
@@ -926,62 +768,55 @@ export function invoiceItemTypeToDataCategory(
   ) as DataCategory;
 }
 
-export function invoiceItemTypeToProduct(
+export function reservedInvoiceItemTypeToAddOn(
   type: InvoiceItemType
-): SelectableProduct | null {
-  // TODO(checkout v3): update this to support more products
-  if (type !== InvoiceItemType.RESERVED_SEER_BUDGET) {
-    return null;
+): AddOnCategory | null {
+  switch (type) {
+    case 'reserved_seer_budget':
+      return AddOnCategory.LEGACY_SEER;
+    case 'reserved_seer_users':
+      return AddOnCategory.SEER;
+    default:
+      return null;
   }
-  return camelCase(
-    type.replace('reserved_', '').replace('_budget', '')
-  ) as SelectableProduct;
-}
-
-export function getFees({
-  invoiceItems,
-}: {
-  invoiceItems: InvoiceItem[] | PreviewInvoiceItem[];
-}) {
-  return invoiceItems.filter(
-    item =>
-      [InvoiceItemType.CANCELLATION_FEE, InvoiceItemType.SALES_TAX].includes(item.type) ||
-      (item.type === InvoiceItemType.BALANCE_CHANGE && item.amount > 0)
-  );
-}
-
-export function getCredits({
-  invoiceItems,
-}: {
-  invoiceItems: InvoiceItem[] | PreviewInvoiceItem[];
-}) {
-  return invoiceItems.filter(
-    item =>
-      [
-        InvoiceItemType.SUBSCRIPTION_CREDIT,
-        InvoiceItemType.CREDIT_APPLIED, // TODO(isabella): This is deprecated and replaced by BALANCE_CHANGE
-        InvoiceItemType.DISCOUNT,
-        InvoiceItemType.RECURRING_DISCOUNT,
-      ].includes(item.type) ||
-      (item.type === InvoiceItemType.BALANCE_CHANGE && item.amount < 0)
-  );
 }
 
 /**
- * Returns the credit applied to an invoice or preview data.
- * If the invoice items contain a BALANCE_CHANGE item with a negative amount,
- * the invoice/preview data already accounts for the credit applied, so we return 0.
+ * Returns true if the subscription has either a payment source or some billing details set.
  */
-export function getCreditApplied({
-  creditApplied,
-  invoiceItems,
-}: {
-  creditApplied: number;
-  invoiceItems: InvoiceItem[] | PreviewInvoiceItem[];
-}) {
-  const credits = getCredits({invoiceItems});
-  if (credits.some(item => item.type === InvoiceItemType.BALANCE_CHANGE)) {
-    return 0;
+export function hasBillingInfo(
+  billingDetails: BillingDetails | undefined,
+  subscription: Subscription,
+  isComplete: boolean
+) {
+  if (subscription.isSelfServePartner) {
+    return true;
   }
-  return creditApplied;
+
+  if (isComplete) {
+    return !!subscription.paymentSource && hasSomeBillingDetails(billingDetails);
+  }
+  return !!subscription.paymentSource || hasSomeBillingDetails(billingDetails);
+}
+
+/**
+ * Get the prepaid price for an add-on
+ */
+export function getPrepaidPriceForAddOn({
+  addOnCategory,
+  plan,
+}: {
+  addOnCategory: AddOnCategory;
+  plan: Plan;
+}) {
+  const reservedBudgetCategory = getReservedBudgetCategoryForAddOn(addOnCategory);
+  if (reservedBudgetCategory) {
+    return getReservedPriceForReservedBudgetCategory({
+      plan,
+      reservedBudgetCategory,
+    });
+  }
+
+  // if it's not a reserved budget add on, we assume it's a PAYG only add on (costs $0)
+  return 0;
 }

@@ -7,8 +7,10 @@ import {
   isTransactionNode,
 } from 'sentry/views/performance/newTraceDetails/traceGuards';
 
+import type {BaseNode} from './traceTreeNode/baseNode';
+import type {EapSpanNode} from './traceTreeNode/eapSpanNode';
+import type {TransactionNode} from './traceTreeNode/transactionNode';
 import type {TraceTree} from './traceTree';
-import type {TraceTreeNode} from './traceTreeNode';
 
 export function makeTrace(
   overrides: Partial<TraceSplitResults<TraceTree.Transaction>>
@@ -17,7 +19,7 @@ export function makeTrace(
     transactions: [],
     orphan_errors: [],
     ...overrides,
-  } as TraceSplitResults<TraceTree.Transaction>;
+  };
 }
 
 export function makeEAPTrace(overrides: Partial<TraceTree.EAPTrace>): TraceTree.EAPTrace {
@@ -87,6 +89,7 @@ export function makeEAPSpan(
     parent_span_id: null,
     children: [],
     errors: [],
+    occurrences: [],
     measurements: {},
     duration: 10,
     ...overrides,
@@ -107,7 +110,7 @@ export function makeEAPError(
     issue_id: 1,
     transaction: 'test error transaction',
     ...overrides,
-  } as TraceTree.EAPError;
+  };
 }
 
 export function makeEAPOccurrence(
@@ -119,13 +122,13 @@ export function makeEAPOccurrence(
     start_timestamp: 0,
     project_id: 1,
     project_slug: 'project_slug',
-    transaction: 'occurence.transaction',
+    transaction: 'occurrence.transaction',
     event_type: 'occurrence',
     issue_id: 1,
+    issue_type: 0,
     level: 'info',
     culprit: 'code',
     short_id: 'short_id',
-    type: 0,
     ...overrides,
   };
 }
@@ -188,22 +191,21 @@ export function makeSiblingAutogroup(
     autogrouped_by: {
       op: overrides.op ?? 'op',
       description: overrides.description ?? 'description',
+      name: overrides.name ?? 'name',
     },
     ...overrides,
   } as TraceTree.SiblingAutogroup;
 }
 
 export function assertTransactionNode(
-  node: TraceTreeNode<TraceTree.NodeValue> | null
-): asserts node is TraceTreeNode<TraceTree.Transaction> {
+  node: BaseNode | null
+): asserts node is TransactionNode {
   if (!node || !isTransactionNode(node)) {
     throw new Error('node is not a transaction');
   }
 }
 
-export function assertEAPSpanNode(
-  node: TraceTreeNode<TraceTree.NodeValue> | null
-): asserts node is TraceTreeNode<TraceTree.EAPSpan> {
+export function assertEAPSpanNode(node: BaseNode | null): asserts node is EapSpanNode {
   if (!node || !isEAPSpanNode(node)) {
     throw new Error('node is not a eap span');
   }
@@ -244,12 +246,33 @@ export function makeUptimeCheck(
   } as TraceTree.UptimeCheck;
 }
 
-export function makeNodeMetadata(
-  overrides: Partial<TraceTree.Metadata> = {}
-): TraceTree.Metadata {
+export function makeUptimeCheckTiming(
+  overrides: Partial<TraceTree.UptimeCheckTiming> = {}
+): TraceTree.UptimeCheckTiming {
   return {
-    event_id: undefined,
-    project_slug: undefined,
+    event_id: overrides.event_id ?? uuid4(),
+    event_type: 'uptime_check_timing',
+    op: 'dns.lookup.duration',
+    description: 'DNS lookup',
+    start_timestamp: 0,
+    end_timestamp: 0.05,
+    duration: 0.05,
     ...overrides,
   };
+}
+
+export function mockSpansResponse(
+  spans: TraceTree.Span[],
+  project_slug: string,
+  event_id: string
+): jest.Mock<any, any> {
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore MockApiClient is not defined in the global scope
+  return MockApiClient.addMockResponse({
+    url: `/organizations/org-slug/events/${project_slug}:${event_id}/?averageColumn=span.self_time&averageColumn=span.duration`,
+    method: 'GET',
+    body: makeEventTransaction({
+      entries: [{type: EntryType.SPANS, data: spans}],
+    }),
+  });
 }

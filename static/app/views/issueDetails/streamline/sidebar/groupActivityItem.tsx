@@ -2,13 +2,14 @@ import {Fragment} from 'react';
 import styled from '@emotion/styled';
 import moment from 'moment-timezone';
 
-import CommitLink from 'sentry/components/commitLink';
-import {ExternalLink, Link} from 'sentry/components/core/link';
+import {ExternalLink, Link} from '@sentry/scraps/link';
+
+import {CommitLink} from 'sentry/components/commitLink';
 import {DateTime} from 'sentry/components/dateTime';
-import Duration from 'sentry/components/duration';
-import PullRequestLink from 'sentry/components/pullRequestLink';
-import Version from 'sentry/components/version';
-import VersionHoverCard from 'sentry/components/versionHoverCard';
+import {Duration} from 'sentry/components/duration';
+import {PullRequestLink} from 'sentry/components/pullRequestLink';
+import {Version} from 'sentry/components/version';
+import {VersionHoverCard} from 'sentry/components/versionHoverCard';
 import {t, tct, tn} from 'sentry/locale';
 import type {
   GroupActivity,
@@ -20,10 +21,10 @@ import {GroupActivityType} from 'sentry/types/group';
 import type {Organization, Team} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import type {User} from 'sentry/types/user';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {isSemverRelease} from 'sentry/utils/versions/isSemverRelease';
 
-export default function getGroupActivityItem(
+export function getGroupActivityItem(
   activity: GroupActivity,
   organization: Organization,
   project: Project,
@@ -122,7 +123,7 @@ export default function getGroupActivityItem(
       const team = teams.find(({id}) => id === data.assignee);
       // TODO: could show a loading indicator if the team is loading
       assignee = team ? `#${team.slug}` : '<unknown-team>';
-    } else if (activity.user && data.assignee === activity.user.id) {
+    } else if (data.assignee === activity.user?.id) {
       assignee = t('themselves');
     } else if (data.assigneeType === 'user' && data.assigneeEmail) {
       assignee = data.assigneeEmail;
@@ -284,26 +285,67 @@ export default function getGroupActivityItem(
           }),
         };
       case GroupActivityType.SET_RESOLVED_IN_RELEASE: {
-        // Resolved in the next release
+        const hasIntegration =
+          'integration_id' in activity.data && activity.data.integration_id;
+        const integrationLink = hasIntegration ? (
+          <Link
+            to={`/settings/${organization.slug}/integrations/${activity.data.provider_key}/${activity.data.integration_id}/`}
+          >
+            {activity.data.provider}
+          </Link>
+        ) : null;
+
         if ('current_release_version' in activity.data) {
           const currentVersion = activity.data.current_release_version;
           return {
             title: t('Resolved'),
-            message: tct('by [author] in releases greater than [version] [semver]', {
-              author,
-              version: <ActivityRelease project={project} version={currentVersion} />,
-              semver: isSemverRelease(currentVersion) ? t('(semver)') : t('(non-semver)'),
-            }),
+            message: hasIntegration
+              ? tct(
+                  'by [author] in releases greater than [version] [semver] via [integration]',
+                  {
+                    author,
+                    version: (
+                      <ActivityRelease project={project} version={currentVersion} />
+                    ),
+                    semver: isSemverRelease(currentVersion)
+                      ? t('(semver)')
+                      : t('(non-semver)'),
+                    integration: integrationLink,
+                  }
+                )
+              : tct('by [author] in releases greater than [version] [semver]', {
+                  author,
+                  version: <ActivityRelease project={project} version={currentVersion} />,
+                  semver: isSemverRelease(currentVersion)
+                    ? t('(semver)')
+                    : t('(non-semver)'),
+                }),
           };
         }
         const version = activity.data.version;
+        if (version) {
+          return {
+            title: t('Resolved'),
+            message: hasIntegration
+              ? tct('by [author] in [version] [semver] via [integration]', {
+                  author,
+                  version: <ActivityRelease project={project} version={version} />,
+                  semver: isSemverRelease(version) ? t('(semver)') : t('(non-semver)'),
+                  integration: integrationLink,
+                })
+              : tct('by [author] in [version] [semver]', {
+                  author,
+                  version: <ActivityRelease project={project} version={version} />,
+                  semver: isSemverRelease(version) ? t('(semver)') : t('(non-semver)'),
+                }),
+          };
+        }
         return {
           title: t('Resolved'),
-          message: version
-            ? tct('by [author] in [version] [semver]', {
+          message: hasIntegration
+            ? tct('by [author] in the upcoming release via [integration]', {
                 author,
-                version: <ActivityRelease project={project} version={version} />,
-                semver: isSemverRelease(version) ? t('(semver)') : t('(non-semver)'),
+                integration: integrationLink,
               })
             : tct('by [author] in the upcoming release', {
                 author,
@@ -682,19 +724,19 @@ function ActivityRelease({project, version}: {project: Project; version: string}
 }
 
 const Subtext = styled('div')`
-  font-size: ${p => p.theme.fontSize.sm};
+  font-size: ${p => p.theme.font.size.sm};
 `;
 
 const CodeWrapper = styled('div')`
   overflow-wrap: anywhere;
-  font-size: ${p => p.theme.fontSize.sm};
+  font-size: ${p => p.theme.font.size.sm};
 `;
 
 const StyledRuleSpan = styled('span')`
-  font-family: ${p => p.theme.text.familyMono};
+  font-family: ${p => p.theme.font.family.mono};
 `;
 
 const ReleaseVersion = styled(Version)`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   text-decoration: underline;
 `;

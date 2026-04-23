@@ -37,6 +37,7 @@ def track_response_data(response: SlackResponse, method: str, error: str | None 
         "status_string": str(code),
         "error": error,
         "method": method,
+        "ok": is_ok,
     }
     logger.info("integration.http_response", extra=extra)
 
@@ -94,7 +95,7 @@ class SlackSdkClient(WebClient, metaclass=MetaClass):
         self.integration_id = integration_id
 
         integration: Integration | RpcIntegration | None
-        if SiloMode.get_current_mode() == SiloMode.REGION:
+        if SiloMode.get_current_mode() == SiloMode.CELL:
             """
             # In order to send requests, SlackClient needs to fetch the integration
             # to get access tokens which trips up rpc method/transaction

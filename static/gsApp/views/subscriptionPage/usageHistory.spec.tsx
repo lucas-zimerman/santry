@@ -1,5 +1,5 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {RouteComponentPropsFixture} from 'sentry-fixture/routeComponentPropsFixture';
+import {ProjectFixture} from 'sentry-fixture/project';
 
 import {BillingConfigFixture} from 'getsentry-test/fixtures/billingConfig';
 import {BillingHistoryFixture} from 'getsentry-test/fixtures/billingHistory';
@@ -10,6 +10,7 @@ import {
 } from 'getsentry-test/fixtures/subscription';
 import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {DataCategory} from 'sentry/types/core';
 
 import {PreviewDataFixture} from 'getsentry/__fixtures__/previewData';
@@ -20,7 +21,7 @@ import {
   UNLIMITED_ONDEMAND,
   UNLIMITED_RESERVED,
 } from 'getsentry/constants';
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
 import {OnDemandBudgetMode, PlanTier} from 'getsentry/types';
 import UsageHistory from 'getsentry/views/subscriptionPage/usageHistory';
 
@@ -28,6 +29,7 @@ describe('Subscription > UsageHistory', () => {
   const organization = OrganizationFixture({access: ['org:billing']});
 
   beforeEach(() => {
+    organization.features = [];
     MockApiClient.addMockResponse({
       url: `/customers/${organization.slug}/billing-config/`,
       method: 'GET',
@@ -59,6 +61,21 @@ describe('Subscription > UsageHistory', () => {
     });
   });
 
+  it('renders', async () => {
+    MockApiClient.addMockResponse({
+      url: `/customers/${organization.slug}/history/`,
+      method: 'GET',
+      body: [BillingHistoryFixture()],
+    });
+    const subscription = SubscriptionFixture({organization});
+    SubscriptionStore.set(organization.slug, subscription);
+
+    render(<UsageHistory />, {organization});
+    expect(
+      await screen.findByRole('heading', {name: /Usage History/i})
+    ).toBeInTheDocument();
+  });
+
   it('shows an error for non-billing roles', async () => {
     MockApiClient.addMockResponse({
       url: `/customers/${organization.slug}/history/`,
@@ -74,7 +91,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(org.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization: org});
+    render(<UsageHistory />, {organization: org});
     expect(await screen.findByTestId('permission-denied')).toBeInTheDocument();
   });
 
@@ -92,7 +109,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
     expect(screen.queryByTestId('permission-denied')).not.toBeInTheDocument();
     expect(mockCall).toHaveBeenCalled();
   });
@@ -111,7 +128,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
     expect(mockCall).toHaveBeenCalled();
 
     // Expand button should be present.
@@ -143,9 +160,9 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
-    expect(screen.queryByText('On-demand Spend')).not.toBeInTheDocument();
+    expect(screen.queryByText('On-Demand Spend')).not.toBeInTheDocument();
     expect(mockCall).toHaveBeenCalled();
   });
 
@@ -185,7 +202,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
     expect(await screen.findByText('>100%')).toBeInTheDocument();
     expect(screen.queryByText('Gifted')).not.toBeInTheDocument();
     expect(screen.getByRole('cell', {name: '1 GB'})).toBeInTheDocument();
@@ -228,7 +245,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
     expect(await screen.findByText('Gifted')).toBeInTheDocument();
     expect(screen.queryByText('>100%')).not.toBeInTheDocument();
     expect(screen.queryByRole('cell', {name: '∞'})).not.toBeInTheDocument();
@@ -270,7 +287,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Shared On-demand should show up
     expect(await screen.findByText('On-Demand Spend (Shared)')).toBeInTheDocument();
@@ -322,7 +339,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Per-category On-demand should show up
     expect(await screen.findByText('On-Demand Spend (Per-Category)')).toBeInTheDocument();
@@ -356,7 +373,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(await screen.findByText('On-Demand Spend (Shared)')).toBeInTheDocument();
     expect(
@@ -399,12 +416,12 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Per-category Soft Cap On-demand should show up
-    expect(await screen.findAllByText('Errors (On Demand)')).toHaveLength(2);
-    expect(screen.getAllByText('Transactions (On Demand)')).toHaveLength(2);
-    expect(screen.getAllByText('Attachments (On Demand)')).toHaveLength(2);
+    expect(await screen.findAllByText('Errors (On-Demand)')).toHaveLength(2);
+    expect(screen.getAllByText('Transactions (On-Demand)')).toHaveLength(2);
+    expect(screen.getAllByText('Attachments (On-Demand)')).toHaveLength(2);
     expect(mockCall).toHaveBeenCalled();
   });
 
@@ -442,7 +459,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Per-category Soft Cap True Forward should show up
     expect(await screen.findAllByText('Errors (True Forward)')).toHaveLength(2);
@@ -486,7 +503,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Per-category True Forward should show up
     expect(await screen.findAllByText('Errors (True Forward)')).toHaveLength(2);
@@ -528,7 +545,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -572,7 +589,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -596,7 +613,7 @@ describe('Subscription > UsageHistory', () => {
     const subscription = SubscriptionFixture({organization, plan: 'am2_f'});
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -617,7 +634,7 @@ describe('Subscription > UsageHistory', () => {
     const subscription = SubscriptionFixture({organization, plan: 'am1_f'});
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -658,7 +675,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -698,7 +715,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -741,7 +758,7 @@ describe('Subscription > UsageHistory', () => {
     const subscription = Am3DsEnterpriseSubscriptionFixture({organization});
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -784,7 +801,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     expect(
       await screen.findByRole('row', {
@@ -828,12 +845,38 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Should show 2% (100/6000 * 100)
     expect(await screen.findByText(/UI Profile Hours/i)).toBeInTheDocument();
     expect(await screen.findByText('2%')).toBeInTheDocument();
     expect(screen.queryByText('>100%')).not.toBeInTheDocument();
+  });
+
+  it('opens the per-project CSV URL for the selected project', async () => {
+    window.open = jest.fn();
+    const project = ProjectFixture({slug: 'my-project'});
+    ProjectsStore.loadInitialData([project]);
+
+    MockApiClient.addMockResponse({
+      url: `/customers/${organization.slug}/history/`,
+      method: 'GET',
+      body: [BillingHistoryFixture()],
+    });
+    const subscription = SubscriptionFixture({organization});
+    SubscriptionStore.set(organization.slug, subscription);
+
+    render(<UsageHistory />, {organization});
+
+    await userEvent.click(
+      await screen.findByRole('button', {name: /Download Project Breakdown/i})
+    );
+    await userEvent.click(screen.getByRole('option', {name: 'my-project'}));
+
+    expect(window.open).toHaveBeenCalledWith(
+      'https://sentry.io/organizations/acme/billing/history/625529670/export/per-project/my-project/',
+      '_blank'
+    );
   });
 
   it('shows >100% for UI profile duration overage', async () => {
@@ -863,7 +906,7 @@ describe('Subscription > UsageHistory', () => {
     });
     SubscriptionStore.set(organization.slug, subscription);
 
-    render(<UsageHistory {...RouteComponentPropsFixture()} />, {organization});
+    render(<UsageHistory />, {organization});
 
     // Should show >100% when usage exceeds prepaid limit
     expect(await screen.findByText(/UI Profile Hours/i)).toBeInTheDocument();

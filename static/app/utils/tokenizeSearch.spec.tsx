@@ -203,10 +203,66 @@ describe('utils/tokenizeSearch', () => {
           ],
         },
       },
+      {
+        name: 'should handle contains filter',
+        string: 'message:\uf00dContains\uf00d"test value"',
+        object: {
+          tokens: [
+            {type: TokenType.CONTAINS_FILTER, key: 'message', value: 'test value'},
+          ],
+        },
+      },
+      {
+        name: 'should handle starts with filter',
+        string: 'message:\uf00dStartsWith\uf00d"test value"',
+        object: {
+          tokens: [
+            {type: TokenType.STARTS_WITH_FILTER, key: 'message', value: 'test value'},
+          ],
+        },
+      },
+      {
+        name: 'should handle ends with filter',
+        string: 'message:\uf00dEndsWith\uf00d"test value"',
+        object: {
+          tokens: [
+            {type: TokenType.ENDS_WITH_FILTER, key: 'message', value: 'test value'},
+          ],
+        },
+      },
+      {
+        name: 'should handle trailing paren when quoted value contains parens',
+        string: '(key:"value with (parens)")',
+        object: {
+          tokens: [
+            {type: TokenType.OPERATOR, value: '('},
+            {type: TokenType.FILTER, key: 'key', value: 'value with (parens)'},
+            {type: TokenType.OPERATOR, value: ')'},
+          ],
+        },
+      },
+      {
+        name: 'should handle complex SQL-like query in quoted value with grouping parens',
+        string: '(span.category:db description:"SELECT * FROM users WHERE id = func(1)")',
+        object: {
+          tokens: [
+            {type: TokenType.OPERATOR, value: '('},
+            {type: TokenType.FILTER, key: 'span.category', value: 'db'},
+            {
+              type: TokenType.FILTER,
+              key: 'description',
+              value: 'SELECT * FROM users WHERE id = func(1)',
+            },
+            {type: TokenType.OPERATOR, value: ')'},
+          ],
+        },
+      },
     ];
 
     for (const {name, string, object} of cases) {
-      it(`${name}`, () => expect(new MutableSearch(string)).toEqual(object));
+      // https://github.com/jest-community/eslint-plugin-jest/issues/1940
+      // eslint-disable-next-line jest/valid-title
+      it(name, () => expect(new MutableSearch(string)).toEqual(object));
     }
   });
 
@@ -380,6 +436,18 @@ describe('utils/tokenizeSearch', () => {
       results = new MutableSearch(['a:a', '(b:b1', 'OR', 'b:b2', 'OR', 'b:b3)', 'c:c']);
       results.removeFilter('b');
       expect(results.formatString()).toBe('a:a c:c');
+
+      results = new MutableSearch(['a:a', 'message:\uf00dContains\uf00d"test value"']);
+      results.removeFilter('message');
+      expect(results.formatString()).toBe('a:a');
+
+      results = new MutableSearch(['a:a', 'message:\uf00dStartsWith\uf00d"test value"']);
+      results.removeFilter('message');
+      expect(results.formatString()).toBe('a:a');
+
+      results = new MutableSearch(['a:a', 'message:\uf00dEndsWith\uf00d"test value"']);
+      results.removeFilter('message');
+      expect(results.formatString()).toBe('a:a');
     });
 
     it('can return the tag keys', () => {
@@ -398,6 +466,23 @@ describe('utils/tokenizeSearch', () => {
       expect(results.getFilterValues('tag')).toEqual(['value', 'value2']);
 
       expect(results.getFilterValues('nonexistent')).toEqual([]);
+    });
+
+    it('handles adding wildcard filters', () => {
+      const results = new MutableSearch(['a:a']);
+
+      results.addContainsFilterValue('b', 'b');
+      expect(results.formatString()).toBe('a:a b:\uf00dContains\uf00db');
+
+      results.addStartsWithFilterValue('c', 'c');
+      expect(results.formatString()).toBe(
+        'a:a b:\uf00dContains\uf00db c:\uf00dStartsWith\uf00dc'
+      );
+
+      results.addEndsWithFilterValue('d', 'd');
+      expect(results.formatString()).toBe(
+        'a:a b:\uf00dContains\uf00db c:\uf00dStartsWith\uf00dc d:\uf00dEndsWith\uf00dd'
+      );
     });
   });
 
@@ -580,10 +665,73 @@ describe('utils/tokenizeSearch', () => {
         object: new MutableSearch(['message:"[test, "[Filtered]"]"']),
         string: 'message:"[test, "[Filtered]"]"',
       },
+      {
+        name: 'handles contains filter',
+        object: new MutableSearch(['message:\uf00dContains\uf00d"test value"']),
+        string: 'message:\uf00dContains\uf00d"test value"',
+      },
+      {
+        name: 'handles starts with filter',
+        object: new MutableSearch(['message:\uf00dStartsWith\uf00d"test value"']),
+        string: 'message:\uf00dStartsWith\uf00d"test value"',
+      },
+      {
+        name: 'handles ends with filter',
+        object: new MutableSearch(['message:\uf00dEndsWith\uf00d"test value"']),
+        string: 'message:\uf00dEndsWith\uf00d"test value"',
+      },
+      {
+        name: 'should preserve grouping parens when quoted value contains parens',
+        object: new MutableSearch(['(key:"value with (parens)")']),
+        string: '( key:"value with (parens)" )',
+      },
+      {
+        name: 'should preserve complex query with SQL-like quoted value and grouping parens',
+        object: new MutableSearch([
+          '(span.category:db',
+          'description:"SELECT * FROM users WHERE id = func(1)")',
+        ]),
+        string:
+          '( span.category:db description:"SELECT * FROM users WHERE id = func(1)" )',
+      },
     ];
 
     for (const {name, string, object} of cases) {
-      it(`${name}`, () => expect(object.formatString()).toEqual(string));
+      // https://github.com/jest-community/eslint-plugin-jest/issues/1940
+      // eslint-disable-next-line jest/valid-title
+      it(name, () => expect(object.formatString()).toEqual(string));
     }
+  });
+
+  describe('renameFilter', () => {
+    it('renames a simple filter key', () => {
+      const search = new MutableSearch('request.method:GET');
+      search.renameFilter('request.method', 'http.method');
+      expect(search.formatString()).toBe('http.method:GET');
+    });
+
+    it('renames negated filter keys', () => {
+      const search = new MutableSearch('!request.method:GET');
+      search.renameFilter('request.method', 'http.method');
+      expect(search.formatString()).toBe('!http.method:GET');
+    });
+
+    it('preserves OR grouping', () => {
+      const search = new MutableSearch('(request.method:GET OR request.method:POST)');
+      search.renameFilter('request.method', 'http.method');
+      expect(search.formatString()).toBe('( http.method:GET OR http.method:POST )');
+    });
+
+    it('does not rename unrelated keys', () => {
+      const search = new MutableSearch('request.method:GET browser:Chrome');
+      search.renameFilter('request.method', 'http.method');
+      expect(search.formatString()).toBe('http.method:GET browser:Chrome');
+    });
+
+    it('is a no-op when key is not present', () => {
+      const search = new MutableSearch('browser:Chrome');
+      search.renameFilter('request.method', 'http.method');
+      expect(search.formatString()).toBe('browser:Chrome');
+    });
   });
 });

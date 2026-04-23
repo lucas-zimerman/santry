@@ -1,12 +1,15 @@
 import logging
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, Protocol, TypedDict
 
-from sentry import features
+from django.core.exceptions import ValidationError
+from taskbroker_client.retry import RetryTaskError
+from taskbroker_client.worker.workerchild import ProcessingDeadlineExceeded
+
 from sentry.constants import ObjectStatus
+from sentry.exceptions import InvalidIdentity
 from sentry.incidents.grouptype import MetricIssueEvidenceData
 from sentry.incidents.models.incident import TriggerStatus
 from sentry.incidents.typings.metric_detector import (
@@ -15,6 +18,8 @@ from sentry.incidents.typings.metric_detector import (
     NotificationContext,
     OpenPeriodContext,
 )
+from sentry.integrations.services.integration.model import RpcIntegration
+from sentry.integrations.services.integration.service import integration_service
 from sentry.models.activity import Activity
 from sentry.models.group import Group, GroupStatus
 from sentry.models.organization import Organization
@@ -23,11 +28,15 @@ from sentry.models.rule import Rule, RuleSource
 from sentry.notifications.types import TEST_NOTIFICATION_ID
 from sentry.rules.processing.processor import activate_downstream_actions
 from sentry.services.eventstore.models import GroupEvent
+from sentry.shared_integrations.exceptions import (
+    ApiError,
+    IntegrationConfigurationError,
+    IntegrationFormError,
+)
 from sentry.types.activity import ActivityType
 from sentry.types.rules import RuleFuture
-from sentry.utils.safe import safe_execute
-from sentry.workflow_engine.models import Action, AlertRuleWorkflow, Detector
-from sentry.workflow_engine.types import DetectorPriorityLevel, WorkflowEventData
+from sentry.workflow_engine.models import Action, AlertRuleWorkflow, Detector, Workflow
+from sentry.workflow_engine.types import ActionInvocation, DetectorPriorityLevel, WorkflowEventData
 from sentry.workflow_engine.typings.notification_action import (
     ACTION_FIELD_MAPPINGS,
     ActionFieldMapping,
@@ -36,6 +45,8 @@ from sentry.workflow_engine.typings.notification_action import (
 )
 
 logger = logging.getLogger(__name__)
+
+FutureCallback = Callable[[GroupEvent, Sequence[RuleFuture]], Any]
 
 
 class RuleData(TypedDict):
@@ -50,13 +61,53 @@ class LegacyRegistryHandler(ABC):
 
     @staticmethod
     @abstractmethod
-    def handle_workflow_action(
-        event_data: WorkflowEventData, action: Action, detector: Detector
-    ) -> None:
+    def handle_workflow_action(invocation: ActionInvocation) -> None:
         """
         Implement this method to handle the specific notification logic for your handler.
         """
         raise NotImplementedError
+
+
+EXCEPTION_IGNORE_LIST = (IntegrationFormError, IntegrationConfigurationError, InvalidIdentity)
+RETRYABLE_EXCEPTIONS = (ApiError,)
+
+
+def invoke_future_with_error_handling(
+    event_data: WorkflowEventData,
+    callback: FutureCallback,
+    future: Sequence[RuleFuture],
+) -> None:
+    # WorkflowEventData should only ever be a GroupEvent in this context, so we
+    # narrow the type here to keep mypy happy.
+    assert isinstance(event_data.event, GroupEvent), (
+        f"Expected a GroupEvent, received: {type(event_data.event).__name__}"
+    )
+    try:
+        callback(event_data.event, future)
+    except EXCEPTION_IGNORE_LIST:
+        # no-op on any exceptions in the ignore list. We likely have
+        # reporting for them in the integration code already.
+        pass
+    except ProcessingDeadlineExceeded:
+        # We need to reraise ProcessingDeadlineExceeded for workflow engine to
+        # monitor and potentially retry this action.
+        raise
+    except RETRYABLE_EXCEPTIONS as e:
+        raise RetryTaskError from e
+    except Exception as e:
+        # This is just a redefinition of the safe_execute util function, as we
+        # still want to report any unhandled exceptions.
+        if hasattr(callback, "im_class"):
+            cls = callback.im_class
+        else:
+            cls = callback.__class__
+
+        func_name = getattr(callback, "__name__", str(callback))
+        cls_name = cls.__name__
+        local_logger = logging.getLogger(f"sentry.safe_action.{cls_name.lower()}")
+
+        local_logger.exception("%s.process_error", func_name, extra={"exception": e})
+        return None
 
 
 class BaseIssueAlertHandler(ABC):
@@ -99,15 +150,42 @@ class BaseIssueAlertHandler(ABC):
         return {}
 
     @classmethod
+    def get_action_mapping(cls, action: Action) -> ActionFieldMapping:
+        mapping = ACTION_FIELD_MAPPINGS.get(Action.Type(action.type))
+        if mapping is None:
+            raise ValueError(f"No mapping found for action type: {action.type}")
+        return mapping
+
+    @staticmethod
+    def _get_cached_integration(
+        integration_id: Any,
+        integration_cache: dict[int, RpcIntegration] | None,
+    ) -> RpcIntegration | None:
+        """Look up an integration from the pre-fetched cache, safely coercing the ID to int."""
+        if integration_cache is None or integration_id is None:
+            return None
+        try:
+            return integration_cache.get(int(integration_id))
+        except (ValueError, TypeError):
+            return None
+
+    @classmethod
+    def render_label(
+        cls,
+        organization_id: int,
+        blob: dict[str, Any],
+        integration_cache: dict[int, RpcIntegration] | None = None,
+    ) -> str:
+        return "Send a notification"
+
+    @classmethod
     def build_rule_action_blob(
         cls,
         action: Action,
         organization_id: int,
     ) -> dict[str, Any]:
         """Build the base action blob using the standard mapping"""
-        mapping = ACTION_FIELD_MAPPINGS.get(Action.Type(action.type))
-        if mapping is None:
-            raise ValueError(f"No mapping found for action type: {action.type}")
+        mapping = cls.get_action_mapping(action)
         blob: dict[str, Any] = {
             "id": mapping["id"],
         }
@@ -139,49 +217,53 @@ class BaseIssueAlertHandler(ABC):
         }
 
         workflow_id = getattr(action, "workflow_id", None)
+        rule_id = None
 
-        label = detector.name
-        # We need to pass the legacy rule id when the workflow-engine-ui-links feature flag is disabled
-        # This is so we can build the old link to the rule
-        if not features.has(
-            "organizations:workflow-engine-ui-links", detector.project.organization
-        ):
-            if workflow_id is None:
-                raise ValueError("Workflow ID is required when triggering an action")
+        label = None
+        # Attempt to query the workflow name for non-test notifications.
+        if workflow_id is not None and workflow_id != TEST_NOTIFICATION_ID:
+            try:
+                workflow = Workflow.objects.get(id=workflow_id)
+                label = workflow.name
+            except Workflow.DoesNotExist:
+                # If the workflow no longer exists, bail and use detector name
+                # as a fallback.
+                pass
 
-            # If test event, just set the legacy rule id to -1
-            if workflow_id == TEST_NOTIFICATION_ID:
-                data["actions"][0]["legacy_rule_id"] = TEST_NOTIFICATION_ID
-            else:
+        if label is None:
+            label = detector.name
+        # Build link to the rule if it exists, otherwise build link to the workflow.
+        # FE will handle redirection if necessary from rule -> workflow
+
+        # If test event, just set the legacy rule id to -1
+        if workflow_id == TEST_NOTIFICATION_ID:
+            data["actions"][0]["legacy_rule_id"] = TEST_NOTIFICATION_ID
+        elif workflow_id is not None:
+            data["actions"][0]["workflow_id"] = workflow_id
+
+            # attempt to find legacy_rule_id from the alert rule workflow
+            alert_rule_workflow = AlertRuleWorkflow.objects.filter(
+                workflow_id=workflow_id,
+            ).first()
+            if alert_rule_workflow:
                 try:
-                    alert_rule_workflow = AlertRuleWorkflow.objects.get(
-                        workflow_id=workflow_id,
-                    )
-                except AlertRuleWorkflow.DoesNotExist:
-                    raise ValueError(
-                        "AlertRuleWorkflow not found when querying for AlertRuleWorkflow"
-                    )
-
-                if alert_rule_workflow.rule_id is None:
-                    raise ValueError("Rule not found when querying for AlertRuleWorkflow")
-
-                data["actions"][0]["legacy_rule_id"] = alert_rule_workflow.rule_id
-
-                # Get the legacy rule label
-                try:
-                    rule = Rule.objects.get(id=alert_rule_workflow.rule_id)
-                    label = rule.label
+                    label = Rule.objects.get(id=alert_rule_workflow.rule_id).label
+                    rule_id = alert_rule_workflow.rule_id
                 except Rule.DoesNotExist:
                     logger.exception(
                         "Rule not found when querying for AlertRuleWorkflow",
                         extra={"rule_id": alert_rule_workflow.rule_id},
                     )
-                    # We shouldn't fail badly here since we can still send the notification, so just set it to the rule id
-                    label = f"Rule {alert_rule_workflow.rule_id}"
 
-        # In the new UI, we need this for to build the link to the new rule in the notification action
-        else:
-            data["actions"][0]["workflow_id"] = workflow_id
+            if rule_id:
+                data["actions"][0]["legacy_rule_id"] = rule_id
+
+        if workflow_id is None and rule_id is None:
+            raise ValueError("Workflow ID or rule ID is required to fire notification")
+
+        if workflow_id == TEST_NOTIFICATION_ID and action.type == Action.Type.EMAIL:
+            # mail action needs to have skipDigests set to True
+            data["actions"][0]["skipDigests"] = True
 
         rule = Rule(
             id=action.id,
@@ -216,9 +298,7 @@ class BaseIssueAlertHandler(ABC):
     @staticmethod
     def execute_futures(
         event_data: WorkflowEventData,
-        futures: Collection[
-            tuple[Callable[[GroupEvent, Sequence[RuleFuture]], None], list[RuleFuture]]
-        ],
+        futures: Collection[tuple[FutureCallback, list[RuleFuture]]],
     ) -> None:
         """
         This method will execute the futures.
@@ -230,7 +310,7 @@ class BaseIssueAlertHandler(ABC):
             )
 
         for callback, future in futures:
-            safe_execute(callback, event_data.event, future)
+            invoke_future_with_error_handling(event_data, callback, future)
 
     @staticmethod
     def send_test_notification(
@@ -252,12 +332,7 @@ class BaseIssueAlertHandler(ABC):
             callback(event_data.event, future)
 
     @classmethod
-    def invoke_legacy_registry(
-        cls,
-        event_data: WorkflowEventData,
-        action: Action,
-        detector: Detector,
-    ) -> None:
+    def invoke_legacy_registry(cls, invocation: ActionInvocation) -> None:
         """
         This method will create a rule instance from the Action model, and then invoke the legacy registry.
         This method encompasses the following logic in our legacy system:
@@ -265,18 +340,17 @@ class BaseIssueAlertHandler(ABC):
         2. activate_downstream_actions
         3. execute_futures (also in post_process process_rules)
         """
-        # Create a notification uuid
-        notification_uuid = str(uuid.uuid4())
-
         # Create a rule
-        rule = cls.create_rule_instance_from_action(action, detector, event_data)
+        rule = cls.create_rule_instance_from_action(
+            invocation.action, invocation.detector, invocation.event_data
+        )
 
         logger.info(
             "notification_action.execute_via_issue_alert_handler",
             extra={
-                "action_id": action.id,
-                "detector_id": detector.id,
-                "event_data": asdict(event_data),
+                "action_id": invocation.action.id,
+                "detector_id": invocation.detector.id,
+                "event_data": asdict(invocation.event_data),
                 "rule_id": rule.id,
                 "rule_project_id": rule.project.id,
                 "rule_environment_id": rule.environment_id,
@@ -285,17 +359,39 @@ class BaseIssueAlertHandler(ABC):
             },
         )
         # Get the futures
-        futures = cls.get_rule_futures(event_data, rule, notification_uuid)
+        futures = cls.get_rule_futures(invocation.event_data, rule, invocation.notification_uuid)
 
         # Execute the futures
         # If the rule id is -1, we are sending a test notification
         if rule.id == TEST_NOTIFICATION_ID:
-            cls.send_test_notification(event_data, futures)
+            cls.send_test_notification(invocation.event_data, futures)
         else:
-            cls.execute_futures(event_data, futures)
+            cls.execute_futures(invocation.event_data, futures)
 
 
 class TicketingIssueAlertHandler(BaseIssueAlertHandler):
+    # XXX: this label template is used by the WorkflowEngineRuleSerializer to return the same label as the old APIs
+    # once we remove those, we can remove this and all the render_label methods on the IssueAlertHanders
+    label_template = "Create a ticket in {integration}"
+
+    @classmethod
+    def render_label(
+        cls,
+        organization_id: int,
+        blob: dict[str, Any],
+        integration_cache: dict[int, RpcIntegration] | None = None,
+    ) -> str:
+        integration_id = blob.get("integration")
+        integration = cls._get_cached_integration(integration_id, integration_cache)
+        if integration is None:
+            integration = integration_service.get_integration(
+                integration_id=integration_id,
+                organization_id=organization_id,
+                status=ObjectStatus.ACTIVE,
+            )
+        integration_name = integration.name if integration else "[removed]"
+        return cls.label_template.format(integration=integration_name)
+
     @classmethod
     def get_target_display(cls, action: Action, mapping: ActionFieldMapping) -> dict[str, Any]:
         return {}
@@ -334,7 +430,7 @@ class BaseMetricAlertHandler(ABC):
         cls,
         detector: Detector,
         evidence_data: MetricIssueEvidenceData,
-        group_status: GroupStatus,
+        group_status: int,
         detector_priority_level: DetectorPriorityLevel,
     ) -> AlertContext:
         return AlertContext.from_workflow_engine_models(
@@ -415,56 +511,41 @@ class BaseMetricAlertHandler(ABC):
         return evidence_data, priority
 
     @classmethod
-    def invoke_legacy_registry(
-        cls,
-        event_data: WorkflowEventData,
-        action: Action,
-        detector: Detector,
-    ) -> None:
-
-        event = event_data.event
+    def invoke_legacy_registry(cls, invocation: ActionInvocation) -> None:
+        event = invocation.event_data.event
 
         # Extract evidence data and priority based on event type
         if isinstance(event, GroupEvent):
             evidence_data, priority = cls._extract_from_group_event(event)
         elif isinstance(event, Activity):
-            # we only want to fire resolution activities if we are single processing
-            if not features.has(
-                "organizations:workflow-engine-single-process-metric-issues",
-                event_data.group.organization,
-            ):
-                return
-
             evidence_data, priority = cls._extract_from_activity(event)
         else:
             raise ValueError(
                 "WorkflowEventData.event must be a GroupEvent or Activity to invoke metric alert legacy registry"
             )
 
-        notification_context = cls.build_notification_context(action)
+        notification_context = cls.build_notification_context(invocation.action)
         alert_context = cls.build_alert_context(
-            detector, evidence_data, event_data.group.status, priority
+            invocation.detector, evidence_data, invocation.event_data.group.status, priority
         )
 
         metric_issue_context = cls.build_metric_issue_context(
-            event_data.group, evidence_data, priority
+            invocation.event_data.group, evidence_data, priority
         )
-        open_period_context = cls.build_open_period_context(event_data.group)
+        open_period_context = cls.build_open_period_context(invocation.event_data.group)
 
-        trigger_status = cls.get_trigger_status(event_data.group)
-
-        notification_uuid = str(uuid.uuid4())
+        trigger_status = cls.get_trigger_status(invocation.event_data.group)
 
         logger.info(
             "notification_action.execute_via_metric_alert_handler",
             extra={
-                "action_id": action.id,
-                "detector_id": detector.id,
-                "event_data": asdict(event_data),
+                "action_id": invocation.action.id,
+                "detector_id": invocation.detector.id,
+                "event_data": asdict(invocation.event_data),
                 "notification_context": asdict(notification_context),
                 "alert_context": asdict(alert_context),
                 "metric_issue_context": asdict(metric_issue_context),
-                "open_period_context": asdict(open_period_context),
+                "open_period_context": open_period_context.dict(),
                 "trigger_status": trigger_status,
             },
         )
@@ -474,7 +555,74 @@ class BaseMetricAlertHandler(ABC):
             metric_issue_context=metric_issue_context,
             open_period_context=open_period_context,
             trigger_status=trigger_status,
-            notification_uuid=notification_uuid,
-            organization=detector.project.organization,
-            project=detector.project,
+            notification_uuid=invocation.notification_uuid,
+            organization=invocation.detector.project.organization,
+            project=invocation.detector.project,
         )
+
+
+class NotificationActionForm(Protocol):
+    """Protocol for notification action forms since they have various inheritance layers and but all have the same __init__ signature"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+
+    def is_valid(self) -> bool: ...
+
+    @property
+    def cleaned_data(self) -> dict[str, Any]: ...
+
+    @property
+    def errors(self) -> dict[str, Any]: ...
+
+
+def _get_integrations(organization: Organization, provider: str) -> list[RpcIntegration]:
+    return integration_service.get_integrations(
+        organization_id=organization.id,
+        status=ObjectStatus.ACTIVE,
+        org_integration_status=ObjectStatus.ACTIVE,
+        providers=[provider],
+    )
+
+
+class BaseActionValidatorProtocol(Protocol):
+    def __init__(self, validated_data: dict[str, Any], organization: Organization) -> None: ...
+
+    def clean_data(self) -> dict[str, Any]: ...
+
+
+class BaseActionValidatorHandler(ABC):
+    provider: str
+    notify_action_form: type[NotificationActionForm] | None
+
+    def __init__(self, validated_data: dict[str, Any], organization: Organization) -> None:
+        self.validated_data = validated_data
+        self.organization = organization
+
+    def generate_action_form_payload(self) -> dict[str, Any]:
+        return {
+            "data": self.generate_action_form_data(),
+            "integrations": _get_integrations(self.organization, self.provider),
+        }
+
+    def clean_data(self) -> dict[str, Any]:
+        if self.notify_action_form is None:
+            return self.validated_data
+
+        notify_action_form = self.notify_action_form(
+            **self.generate_action_form_payload(),
+        )
+
+        if notify_action_form.is_valid():
+            return self.update_action_data(notify_action_form.cleaned_data)
+
+        raise ValidationError(notify_action_form.errors)
+
+    @abstractmethod
+    def generate_action_form_data(self) -> dict[str, Any]:
+        # translate validated data from BaseActionValidator to notify action form data
+        pass
+
+    @abstractmethod
+    def update_action_data(self, cleaned_data: dict[str, Any]) -> dict[str, Any]:
+        # update BaseActionValidator data with cleaned notify action form data
+        pass

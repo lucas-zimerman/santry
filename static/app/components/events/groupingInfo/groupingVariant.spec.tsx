@@ -4,7 +4,7 @@ import {render, screen, within} from 'sentry-test/reactTestingLibrary';
 
 import {EventGroupVariantType} from 'sentry/types/event';
 
-import GroupingVariant from './groupingVariant';
+import {GroupingVariant} from './groupingVariant';
 
 describe('Grouping Variant', () => {
   const event = EventFixture({
@@ -38,9 +38,11 @@ describe('Grouping Variant', () => {
   });
   const performanceIssueVariant = {
     type: EventGroupVariantType.PERFORMANCE_PROBLEM,
+    contributes: true,
     description: 'performance issue',
     hash: 'hash3',
     hashMismatch: false,
+    hint: null,
     key: 'perf-issue',
     evidence: {
       desc: 'performance issue',

@@ -2,12 +2,11 @@ from datetime import timedelta
 
 from django.db import DatabaseError, IntegrityError, router
 from django.utils import timezone
+from taskbroker_client.retry import Retry
 
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task, retry
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import deletion_control_tasks, deletion_tasks
-from sentry.taskworker.retry import Retry
 from sentry.utils.db import atomic_transaction
 
 MAX_RETRIES = 5
@@ -15,19 +14,13 @@ MAX_RETRIES = 5
 
 @instrumented_task(
     name="sentry.tasks.files.delete_file",
-    queue="files.delete",
-    default_retry_delay=60 * 5,
-    max_retries=MAX_RETRIES,
-    autoretry_for=(DatabaseError, IntegrityError),
-    acks_late=True,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=deletion_tasks,
-        retry=Retry(
-            times=MAX_RETRIES,
-            on=(DatabaseError, IntegrityError),
-        ),
+    namespace=deletion_tasks,
+    retry=Retry(
+        times=MAX_RETRIES,
+        delay=60 * 5,
+        on=(DatabaseError, IntegrityError),
     ),
+    silo_mode=SiloMode.CELL,
 )
 def delete_file_region(path, checksum, **kwargs):
     from sentry.models.files import FileBlob
@@ -37,20 +30,13 @@ def delete_file_region(path, checksum, **kwargs):
 
 @instrumented_task(
     name="sentry.tasks.files.delete_file_control",
-    queue="files.delete.control",
-    default_retry_delay=60 * 5,
-    max_retries=MAX_RETRIES,
-    autoretry_for=(DatabaseError, IntegrityError),
-    acks_late=True,
-    silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(
-        namespace=deletion_control_tasks,
-        retry=Retry(
-            times=MAX_RETRIES,
-            on=(DatabaseError, IntegrityError),
-            delay=60 * 5,
-        ),
+    namespace=deletion_control_tasks,
+    retry=Retry(
+        times=MAX_RETRIES,
+        on=(DatabaseError, IntegrityError),
+        delay=60 * 5,
     ),
+    silo_mode=SiloMode.CONTROL,
 )
 def delete_file_control(path, checksum, **kwargs):
     from sentry.models.files import ControlFileBlob
@@ -70,17 +56,12 @@ def delete_file(file_blob_model, path, checksum, **kwargs):
 
 @instrumented_task(
     name="sentry.tasks.files.delete_unreferenced_blobs",
-    queue="files.delete",
-    default_retry_delay=60 * 5,
-    max_retries=MAX_RETRIES,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=deletion_tasks,
-        retry=Retry(
-            times=MAX_RETRIES,
-            delay=60 * 5,
-        ),
+    namespace=deletion_tasks,
+    retry=Retry(
+        times=MAX_RETRIES,
+        delay=60 * 5,
     ),
+    silo_mode=SiloMode.CELL,
 )
 @retry
 def delete_unreferenced_blobs_region(blob_ids):
@@ -92,17 +73,12 @@ def delete_unreferenced_blobs_region(blob_ids):
 
 @instrumented_task(
     name="sentry.tasks.files.delete_unreferenced_blobs_control",
-    queue="files.delete.control",
-    default_retry_delay=60 * 5,
-    max_retries=MAX_RETRIES,
-    silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(
-        namespace=deletion_control_tasks,
-        retry=Retry(
-            times=MAX_RETRIES,
-            delay=60 * 5,
-        ),
+    namespace=deletion_control_tasks,
+    retry=Retry(
+        times=MAX_RETRIES,
+        delay=60 * 5,
     ),
+    silo_mode=SiloMode.CONTROL,
 )
 @retry
 def delete_unreferenced_blobs_control(blob_ids):
@@ -113,7 +89,6 @@ def delete_unreferenced_blobs_control(blob_ids):
 
 
 def delete_unreferenced_blobs(blob_model, blob_index_model, blob_ids):
-
     for blob_id in blob_ids:
         # If a blob is referenced, we do not want to delete it
         if blob_index_model.objects.filter(blob_id=blob_id).exists():

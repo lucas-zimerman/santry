@@ -1,22 +1,31 @@
 import {useCallback, useMemo, useState, type ComponentProps} from 'react';
 import styled from '@emotion/styled';
+import {parseAsString, useQueryState} from 'nuqs';
+
+import NoAlertsImage from 'sentry-images/features/alerts-not-found.svg';
+
+import {LinkButton} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+import {Heading, Text} from '@sentry/scraps/text';
 
 import {hasEveryAccess} from 'sentry/components/acl/access';
-import LoadingError from 'sentry/components/loadingError';
+import {LoadingError} from 'sentry/components/loadingError';
 import {SimpleTable} from 'sentry/components/tables/simpleTable';
+import {SelectAllHeaderCheckbox} from 'sentry/components/workflowEngine/ui/selectAllHeaderCheckbox';
+import {IconSearch} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Automation} from 'sentry/types/workflowEngine/automations';
 import type {Sort} from 'sentry/utils/discover/fields';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {AutomationsTableActions} from 'sentry/views/automations/components/automationListTable/actions';
 import {
   AutomationListRow,
   AutomationListRowSkeleton,
 } from 'sentry/views/automations/components/automationListTable/row';
 import {AUTOMATION_LIST_PAGE_LIMIT} from 'sentry/views/automations/constants';
+import {makeMonitorBasePathname} from 'sentry/views/detectors/pathnames';
 
 type AutomationListTableProps = {
   allResultsVisible: boolean;
@@ -72,7 +81,7 @@ function HeaderCell({
   );
 }
 
-function AutomationListTable({
+export function AutomationListTable({
   automations,
   isPending,
   isError,
@@ -83,7 +92,7 @@ function AutomationListTable({
 }: AutomationListTableProps) {
   const organization = useOrganization();
   const canEditAutomations = hasEveryAccess(['alerts:write'], {organization});
-
+  const [query] = useQueryState('query', parseAsString);
   const [selected, setSelected] = useState(new Set<string>());
 
   const togglePageSelected = (pageSelected: boolean) => {
@@ -94,7 +103,11 @@ function AutomationListTable({
     setSelected(newSelected);
   };
   const automationIds = new Set(automations.map(a => a.id));
-  const pageSelected = automationIds.difference(selected).size === 0;
+  const pageSelected =
+    !isPending &&
+    automationIds.size !== 0 &&
+    automationIds.difference(selected).size === 0;
+  const anySelected = selected.size > 0;
 
   const canEnable = useMemo(
     () =>
@@ -125,7 +138,13 @@ function AutomationListTable({
       {canEditAutomations && selected.size === 0 ? (
         <SimpleTable.Header key="header">
           <HeaderCell sort={sort} sortKey="name">
-            <NamePadding>{t('Name')}</NamePadding>
+            <Flex gap="md" align="center">
+              <SelectAllHeaderCheckbox
+                checked={pageSelected || (anySelected ? 'indeterminate' : false)}
+                onChange={checked => togglePageSelected(checked)}
+              />
+              <span>{t('Name')}</span>
+            </Flex>
           </HeaderCell>
           <HeaderCell
             data-column-name="last-triggered"
@@ -161,9 +180,28 @@ function AutomationListTable({
         />
       )}
       {isSuccess && automations.length === 0 && (
-        <SimpleTable.Empty>{t('No automations found')}</SimpleTable.Empty>
+        <SimpleTable.Empty>
+          <StyledFlex gap="xl" direction="column" align="center">
+            <img src={NoAlertsImage} />
+            <Heading as="h3">{t('No alerts found.')}</Heading>
+            <Text align="center" variant="muted">
+              {t('Try out that same query on the Monitors page.')}
+            </Text>
+
+            <LinkButton
+              icon={<IconSearch />}
+              priority="primary"
+              to={{
+                pathname: makeMonitorBasePathname(organization.slug),
+                query: {query},
+              }}
+            >
+              {t('Search Monitors')}
+            </LinkButton>
+          </StyledFlex>
+        </SimpleTable.Empty>
       )}
-      {isError && <LoadingError message={t('Error loading automations')} />}
+      {isError && <LoadingError message={t('Error loading alerts')} />}
       {isPending && <LoadingSkeletons />}
       {isSuccess &&
         automations.map(automation => (
@@ -178,10 +216,14 @@ function AutomationListTable({
   );
 }
 
+const StyledFlex = styled(Flex)`
+  padding: ${p => p.theme.size.sm};
+`;
+
 const AutomationsSimpleTable = styled(SimpleTable)`
   grid-template-columns: 1fr;
 
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
 
   [data-column-name='last-triggered'],
   [data-column-name='action'],
@@ -207,7 +249,7 @@ const AutomationsSimpleTable = styled(SimpleTable)`
   }
 
   @media (min-width: ${p => p.theme.breakpoints.md}) {
-    grid-template-columns: 2.5fr 1fr 1fr 1fr;
+    grid-template-columns: 2.5fr minmax(160px, 1fr) 1fr 1fr;
 
     [data-column-name='last-triggered'] {
       display: flex;
@@ -215,16 +257,10 @@ const AutomationsSimpleTable = styled(SimpleTable)`
   }
 
   @media (min-width: ${p => p.theme.breakpoints.lg}) {
-    grid-template-columns: minmax(0, 3fr) 1fr 1fr 1fr 1fr;
+    grid-template-columns: minmax(0, 3fr) minmax(160px, 1fr) 1fr 1fr 1fr;
 
     [data-column-name='connected-monitors'] {
       display: flex;
     }
   }
 `;
-
-const NamePadding = styled('div')`
-  padding-left: 28px;
-`;
-
-export default AutomationListTable;

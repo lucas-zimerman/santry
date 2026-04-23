@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from unittest import mock
 
 import pytest
@@ -409,9 +410,10 @@ class SnubaSessionsTest(TestCase, ReleaseHealthBaseTestCase):
         self.bulk_store_sessions(self.create_sessions__v2_crashed())
 
         data = self.backend.get_oldest_health_data_for_releases([(self.project.id, release_v1_0_0)])
-        assert data == {
-            (self.project.id, release_v1_0_0): format_timestamp(self.session_started // 3600 * 3600)
-        }
+        expected_timestamp = datetime.fromtimestamp(
+            self.session_started // 3600 * 3600, tz=dt_timezone.utc
+        )
+        assert data == {(self.project.id, release_v1_0_0): expected_timestamp}
 
     def test_get_release_adoption(self) -> None:
         self.bulk_store_sessions(self.create_sessions__v2_crashed())
@@ -1495,7 +1497,6 @@ class CheckNumberOfSessions(TestCase, BaseMetricsTestCase):
         actual = self.backend.get_num_sessions_per_project(
             project_ids=[self.project.id, self.project_2.id],
             environment_ids=None,
-            rollup=60,
             start=self._30_min_ago_dt,
             end=self.now_dt,
         )
@@ -1566,7 +1567,6 @@ class CheckNumberOfSessions(TestCase, BaseMetricsTestCase):
         actual = self.backend.get_num_sessions_per_project(
             project_ids=[project_1.id, project_2.id],
             environment_ids=[dev_env.id, prod_env.id],
-            rollup=60,
             start=self._2_h_ago_dt,
             end=self.now_dt,
         )
@@ -1578,7 +1578,6 @@ class CheckNumberOfSessions(TestCase, BaseMetricsTestCase):
             actual = self.backend.get_num_sessions_per_project(
                 project_ids=[project_1.id, project_2.id],
                 environment_ids=eids,
-                rollup=60,
                 start=self._2_h_ago_dt,
                 end=self.now_dt,
             )

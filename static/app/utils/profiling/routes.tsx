@@ -37,46 +37,6 @@ function generateContinuousProfileFlamechartRoute({
   return `/organizations/${organization.slug}/${PROFILING_BASE_PATHNAME}/profile/${projectSlug}/flamegraph/`;
 }
 
-function generateProfileDifferentialFlamegraphRoute({
-  organization,
-  projectSlug,
-}: {
-  organization: Organization;
-  projectSlug: Project['slug'];
-}): string {
-  return `/organizations/${organization.slug}/${PROFILING_BASE_PATHNAME}/profile/${projectSlug}/differential-flamegraph/`;
-}
-
-export function generateProfileDifferentialFlamegraphRouteWithQuery({
-  organization,
-  projectSlug,
-  query,
-  fingerprint,
-  transaction,
-  breakpoint,
-}: {
-  breakpoint: number;
-  fingerprint: number;
-  organization: Organization;
-  projectSlug: Project['slug'];
-  transaction: string;
-  query?: Location['query'];
-}): LocationDescriptor {
-  const pathname = generateProfileDifferentialFlamegraphRoute({
-    organization,
-    projectSlug,
-  });
-  return {
-    pathname,
-    query: {
-      ...query,
-      transaction,
-      fingerprint,
-      breakpoint,
-    },
-  };
-}
-
 export function generateProfilingRouteWithQuery({
   organization,
   query,
@@ -214,8 +174,10 @@ export function generateProfileRouteFromProfileReference({
       profilerId: reference.profiler_id,
       frameName,
       framePackage,
-      start: new Date(reference.start * 1e3).toISOString(),
-      end: new Date(reference.end * 1e3).toISOString(),
+      // when converting to a timestamp, we round the start timestamp down and round
+      // the end timestamp up to the millisecond to ensure we capture the full profile
+      start: new Date(Math.floor(reference.start * 1e3)).toISOString(),
+      end: new Date(Math.ceil(reference.end * 1e3)).toISOString(),
       query: dropUndefinedKeys({
         ...query,
         frameName,

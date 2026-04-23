@@ -81,7 +81,6 @@ class MarkOkTestCase(TestCase):
                 "checkin_margin": None,
                 "recovery_threshold": None,
             },
-            is_muted=True,
         )
 
         # Start with monitor in an ERROR state
@@ -215,7 +214,7 @@ class MarkOkTestCase(TestCase):
             mark_ok(checkin, checkin.date_added)
 
         # recovery has hit threshold, monitor should be in an ok state
-        incident.refresh_from_db()
+        incident = MonitorIncident.objects.get(id=incident.id)
         monitor_environment.refresh_from_db()
 
         assert monitor_environment.status == MonitorStatus.OK
@@ -240,6 +239,7 @@ class MarkOkTestCase(TestCase):
                 "project_id": monitor.project_id,
                 "new_status": GroupStatus.RESOLVED,
                 "new_substatus": None,
+                "update_date": last_checkin.date_added,
             },
         ) == dict(status_change)
 

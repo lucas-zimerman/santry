@@ -1,12 +1,14 @@
 import {useCallback, useMemo} from 'react';
+import {useQueryClient} from '@tanstack/react-query';
 
 import type {Client} from 'sentry/api';
 import type {Organization, OrganizationSummary} from 'sentry/types/organization';
 import {defined} from 'sentry/utils';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {promptIsDismissed} from 'sentry/utils/promptIsDismissed';
 import type {ApiQueryKey, UseApiQueryOptions} from 'sentry/utils/queryClient';
-import {setApiQueryData, useApiQuery, useQueryClient} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
+import {setApiQueryData, useApiQuery} from 'sentry/utils/queryClient';
+import {useApi} from 'sentry/utils/useApi';
 
 type PromptsUpdateParams = {
   /**
@@ -25,7 +27,9 @@ type PromptsUpdateParams = {
  * Update the status of a prompt
  */
 export function promptsUpdate(api: Client, params: PromptsUpdateParams) {
-  const url = `/organizations/${params.organization.slug}/prompts-activity/`;
+  const url = getApiUrl('/organizations/$organizationIdOrSlug/prompts-activity/', {
+    path: {organizationIdOrSlug: params.organization.slug},
+  });
   return api.requestPromise(url, {
     method: 'PUT',
     data: {
@@ -42,10 +46,16 @@ type PromptCheckParams = {
    * The prompt feature name
    */
   feature: string | string[];
-  organization: OrganizationSummary | null;
+  organization: OrganizationSummary;
   /**
    * The numeric project ID as a string
    */
+  projectId?: string;
+};
+
+type PromptCheckHookParams = {
+  feature: string | string[];
+  organization: OrganizationSummary | null;
   projectId?: string;
 };
 
@@ -90,10 +100,9 @@ export async function promptsCheck(
 ): Promise<PromptData> {
   const query = {
     feature: params.feature,
-    organization_id: params.organization?.id,
     ...(params.projectId === undefined ? {} : {project_id: params.projectId}),
   };
-  const url = `/organizations/${params.organization?.slug}/prompts-activity/`;
+  const url = `/organizations/${params.organization.slug}/prompts-activity/`;
   const response: PromptResponse = await api.requestPromise(url, {
     query,
   });
@@ -112,16 +121,15 @@ export const makePromptsCheckQueryKey = ({
   feature,
   organization,
   projectId,
-}: PromptCheckParams): ApiQueryKey => {
-  const url = `/organizations/${organization?.slug}/prompts-activity/`;
-  return [
-    url,
-    {query: {feature, organization_id: organization?.id, project_id: projectId}},
-  ];
+}: PromptCheckHookParams): ApiQueryKey => {
+  const url = getApiUrl('/organizations/$organizationIdOrSlug/prompts-activity/', {
+    path: {organizationIdOrSlug: organization?.slug!},
+  });
+  return [url, {query: {feature, project_id: projectId}}];
 };
 
 export function usePromptsCheck(
-  {feature, organization, projectId}: PromptCheckParams,
+  {feature, organization, projectId}: PromptCheckHookParams,
   {enabled = true, ...options}: Partial<UseApiQueryOptions<PromptResponse>> = {}
 ) {
   return useApiQuery<PromptResponse>(
@@ -156,19 +164,16 @@ export function usePrompts({
   const api = useApi({persistInFlight: true});
   const prompts = usePromptsCheck({feature: features, organization, projectId}, options);
   const queryClient = useQueryClient();
-  const isPromptDismissed: Record<string, boolean> = useMemo(() => {
+  const isPromptDismissed = useMemo(() => {
     if (prompts.isSuccess) {
-      return features.reduce(
-        (acc, feature) => {
-          const prompt = prompts.data.features?.[feature];
-          acc[feature] = isDismissed(
-            {dismissedTime: prompt?.dismissed_ts, snoozedTime: prompt?.snoozed_ts},
-            daysToSnooze
-          );
-          return acc;
-        },
-        {} as Record<string, boolean>
-      );
+      return features.reduce<Record<string, boolean>>((acc, feature) => {
+        const prompt = prompts.data.features?.[feature];
+        acc[feature] = isDismissed(
+          {dismissedTime: prompt?.dismissed_ts, snoozedTime: prompt?.snoozed_ts},
+          daysToSnooze
+        );
+        return acc;
+      }, {});
     }
     return {};
   }, [prompts.isSuccess, prompts.data?.features, features, daysToSnooze, isDismissed]);
@@ -401,6 +406,7 @@ export function usePrompt({
   return {
     isLoading: prompt.isPending,
     isError: prompt.isError,
+    data: prompt.data?.data,
     isPromptDismissed,
     dismissPrompt,
     snoozePrompt,
@@ -421,7 +427,6 @@ export async function batchedPromptsCheck<T extends readonly string[]>(
 ): Promise<Record<T[number], PromptData>> {
   const query = {
     feature: features,
-    organization_id: params.organization.id,
     ...(params.projectId === undefined ? {} : {project_id: params.projectId}),
   };
   const url = `/organizations/${params.organization.slug}/prompts-activity/`;

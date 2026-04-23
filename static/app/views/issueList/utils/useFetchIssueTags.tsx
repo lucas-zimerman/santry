@@ -1,20 +1,17 @@
 import {useMemo} from 'react';
 
 import {useFetchOrganizationTags} from 'sentry/actionCreators/tags';
-import {
-  ItemType,
-  type SearchGroup,
-} from 'sentry/components/deprecatedSmartSearchBar/types';
 import {makeFeatureFlagSearchKey} from 'sentry/components/events/featureFlags/utils';
+import {ItemType, type SearchGroup} from 'sentry/components/searchBar/types';
 import {
   FixabilityScoreThresholds,
   getIssueTitleFromType,
   ISSUE_CATEGORY_TO_DESCRIPTION,
   IssueCategory,
   PriorityLevel,
-  VALID_ISSUE_CATEGORIES_V2,
+  VALID_ISSUE_CATEGORIES,
+  AI_DETECTED_ISSUE_TYPES,
   VISIBLE_ISSUE_TYPES,
-  type Tag,
   type TagCollection,
 } from 'sentry/types/group';
 import type {Organization} from 'sentry/types/organization';
@@ -29,11 +26,10 @@ import {
   ISSUE_FIELDS,
   ISSUE_PROPERTY_FIELDS,
 } from 'sentry/utils/fields';
-import useAssignedSearchValues from 'sentry/utils/membersAndTeams/useAssignedSearchValues';
-import useMemberUsernames from 'sentry/utils/membersAndTeams/useMemberUsernames';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useAssignedSearchValues} from 'sentry/utils/membersAndTeams/useAssignedSearchValues';
+import {useMemberUsernames} from 'sentry/utils/membersAndTeams/useMemberUsernames';
 import {Dataset} from 'sentry/views/alerts/rules/metric/types';
-import useFetchOrganizationFeatureFlags from 'sentry/views/issueList/utils/useFetchOrganizationFeatureFlags';
+import {useFetchOrganizationFeatureFlags} from 'sentry/views/issueList/utils/useFetchOrganizationFeatureFlags';
 
 type UseFetchIssueTagsParams = {
   org: Organization;
@@ -59,9 +55,28 @@ const PREDEFINED_FIELDS = {
 };
 
 // "environment" is excluded because it should be handled by the environment page filter
-const EXCLUDED_TAGS = ['environment'];
+const EXCLUDED_TAGS = [
+  'environment',
+  'ai_categorization.label.0',
+  'ai_categorization.label.1',
+  'ai_categorization.label.2',
+  'ai_categorization.label.3',
+  'ai_categorization.label.4',
+  'ai_categorization.label.5',
+  'ai_categorization.label.6',
+  'ai_categorization.label.7',
+  'ai_categorization.label.8',
+  'ai_categorization.label.9',
+  'ai_categorization.label.10',
+  'ai_categorization.label.11',
+  'ai_categorization.label.12',
+  'ai_categorization.label.13',
+  'ai_categorization.label.14',
+  'ai_categorization.label.15',
+  'ai_categorization.labels',
+];
 
-const SEARCHABLE_ISSUE_CATEGORIES = VALID_ISSUE_CATEGORIES_V2.filter(
+const SEARCHABLE_ISSUE_CATEGORIES = VALID_ISSUE_CATEGORIES.filter(
   category => category !== IssueCategory.FEEDBACK
 );
 
@@ -101,8 +116,6 @@ export const useFetchIssueTags = ({
   includeFeatureFlags = false,
   ...statsPeriodParams
 }: UseFetchIssueTagsParams) => {
-  const organization = useOrganization();
-
   const eventsTagsQuery = useFetchOrganizationTags(
     {
       orgSlug: org.slug,
@@ -147,9 +160,9 @@ export const useFetchIssueTags = ({
   const usernames = useMemberUsernames();
 
   const allTags = useMemo(() => {
-    const eventsTags: Tag[] = eventsTagsQuery.data || [];
-    const issuePlatformTags: Tag[] = issuePlatformTagsQuery.data || [];
-    const featureFlagTags: Tag[] = featureFlagTagsQuery.data || [];
+    const eventsTags = eventsTagsQuery.data || [];
+    const issuePlatformTags = issuePlatformTagsQuery.data || [];
+    const featureFlagTags = featureFlagTagsQuery.data || [];
 
     const allTagsCollection: TagCollection = eventsTags.reduce<TagCollection>(
       (acc, tag) => {
@@ -192,7 +205,7 @@ export const useFetchIssueTags = ({
       currentTags: renamedTags,
       assigneeFieldValues: assignedValues,
       bookmarksValues: usernames,
-      organization,
+      organization: org,
     });
 
     return {
@@ -205,7 +218,7 @@ export const useFetchIssueTags = ({
     featureFlagTagsQuery.data,
     usernames,
     assignedValues,
-    organization,
+    org,
   ]);
 
   return {
@@ -222,10 +235,10 @@ export const useFetchIssueTags = ({
 };
 
 function builtInIssuesFields({
-  organization,
   currentTags,
   assigneeFieldValues = [],
   bookmarksValues = [],
+  organization,
 }: {
   assigneeFieldValues: SearchGroup[] | string[];
   bookmarksValues: string[];
@@ -245,10 +258,13 @@ function builtInIssuesFields({
     },
     {}
   );
-  const hasFieldValues = [
-    ...Object.values(currentTags).map(tag => tag.key),
-    ...Object.values(SEMVER_TAGS).map(tag => tag.key),
-  ].sort();
+  const hasFieldValues = Array.from(
+    new Set([
+      ...Object.values(currentTags).map(tag => tag.key),
+      ...Object.values(SEMVER_TAGS).map(tag => tag.key),
+      ...ISSUE_EVENT_PROPERTY_FIELDS,
+    ])
+  ).sort();
 
   const tagCollection: TagCollection = {
     [FieldKey.IS]: {
@@ -297,29 +313,27 @@ function builtInIssuesFields({
     [FieldKey.ISSUE_CATEGORY]: {
       ...PREDEFINED_FIELDS[FieldKey.ISSUE_CATEGORY]!,
       name: 'Issue Category',
-      values: organization.features.includes('issue-taxonomy')
-        ? SEARCHABLE_ISSUE_CATEGORIES.map(value => ({
-            icon: null,
-            title: value,
-            name: value,
-            documentation: ISSUE_CATEGORY_TO_DESCRIPTION[value],
-            value,
-            type: ItemType.TAG_VALUE,
-            children: [],
-          }))
-        : [
-            IssueCategory.ERROR,
-            IssueCategory.PERFORMANCE,
-            IssueCategory.REPLAY,
-            IssueCategory.CRON,
-            IssueCategory.UPTIME,
-          ],
+      values: SEARCHABLE_ISSUE_CATEGORIES.map(value => ({
+        icon: null,
+        title: value,
+        name: value,
+        documentation: ISSUE_CATEGORY_TO_DESCRIPTION[value],
+        value,
+        type: ItemType.TAG_VALUE,
+        children: [],
+      })),
       predefined: true,
     },
     [FieldKey.ISSUE_TYPE]: {
       ...PREDEFINED_FIELDS[FieldKey.ISSUE_TYPE]!,
       name: 'Issue Type',
-      values: VISIBLE_ISSUE_TYPES.map(value => ({
+      values: [
+        ...VISIBLE_ISSUE_TYPES,
+        ...(organization.features.includes('ai-issue-detection') &&
+        !organization.hideAiFeatures
+          ? [...AI_DETECTED_ISSUE_TYPES]
+          : []),
+      ].map(value => ({
         icon: null,
         title: value,
         name: value,

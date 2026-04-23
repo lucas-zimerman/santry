@@ -89,10 +89,7 @@ class BaseEvent(metaclass=abc.ABCMeta):
 
     @property
     def trace_id(self) -> str | None:
-        ret_value = None
-        if self.data:
-            ret_value = self.data.get("contexts", {}).get("trace", {}).get("trace_id")
-        return ret_value
+        return get_path(self.data, "contexts", "trace", "trace_id")
 
     @property
     def platform(self) -> str | None:
@@ -122,8 +119,7 @@ class BaseEvent(metaclass=abc.ABCMeta):
             return parse_date(self._snuba_data[column]).replace(tzinfo=timezone.utc)
 
         timestamp = self.data["timestamp"]
-        date = datetime.fromtimestamp(timestamp)
-        date = date.replace(tzinfo=timezone.utc)
+        date = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         return date
 
     @property
@@ -261,7 +257,7 @@ class BaseEvent(metaclass=abc.ABCMeta):
             return title
 
         event_type_instance = eventtypes.get(event_type)()
-        return cast(str, event_type_instance.get_title(self.get_event_metadata()))
+        return event_type_instance.get_title(self.get_event_metadata())
 
     @property
     def culprit(self) -> str | None:
@@ -276,7 +272,7 @@ class BaseEvent(metaclass=abc.ABCMeta):
         if column in self._snuba_data:
             return cast(str, self._snuba_data[column])
         et = eventtypes.get(self.get_event_type())()
-        return cast(Optional[str], et.get_location(self.get_event_metadata()))
+        return et.get_location(self.get_event_metadata())
 
     @classmethod
     def generate_node_id(cls, project_id: int, event_id: str) -> str:
@@ -293,7 +289,7 @@ class BaseEvent(metaclass=abc.ABCMeta):
         from sentry.models.project import Project
 
         if not hasattr(self, "_project_cache"):
-            self._project_cache = Project.objects.get(id=self.project_id)
+            self._project_cache = Project.objects.get_from_cache(id=self.project_id)
         return self._project_cache
 
     @project.setter
@@ -602,8 +598,8 @@ class Event(BaseEvent):
         return state
 
     def __repr__(self) -> str:
-        return "<sentry.services.eventstore.models.Event at 0x{:x}: event_id={}>".format(
-            id(self), self.event_id
+        return (
+            f"<sentry.services.eventstore.models.Event at 0x{id(self):x}: event_id={self.event_id}>"
         )
 
     @property

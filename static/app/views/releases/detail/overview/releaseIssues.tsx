@@ -4,23 +4,23 @@ import type {Location} from 'history';
 import isEqual from 'lodash/isEqual';
 import * as qs from 'query-string';
 
+import {LinkButton} from '@sentry/scraps/button';
+import {Grid, type GridProps} from '@sentry/scraps/layout';
+import {SegmentedControl} from '@sentry/scraps/segmentedControl';
+
 import type {Client} from 'sentry/api';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {SegmentedControl} from 'sentry/components/core/segmentedControl';
-import GroupList from 'sentry/components/issues/groupList';
-import Pagination from 'sentry/components/pagination';
-import QueryCount from 'sentry/components/queryCount';
+import {GroupList} from 'sentry/components/issues/groupList';
+import {Pagination} from 'sentry/components/pagination';
+import {QueryCount} from 'sentry/components/queryCount';
 import {DEFAULT_RELATIVE_PERIODS} from 'sentry/constants';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
 import {escapeDoubleQuotes} from 'sentry/utils';
 import {browserHistory} from 'sentry/utils/browserHistory';
 import {DemoTourElement, DemoTourStep} from 'sentry/utils/demoMode/demoTours';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import withApi from 'sentry/utils/withApi';
-import withOrganization from 'sentry/utils/withOrganization';
+import {withApi} from 'sentry/utils/withApi';
+import {withOrganization} from 'sentry/utils/withOrganization';
 import {IssueSortOptions} from 'sentry/views/issueList/utils';
 import {EmptyState} from 'sentry/views/releases/detail/commitsAndFiles/emptyState';
 import type {ReleaseBounds} from 'sentry/views/releases/utils';
@@ -151,8 +151,11 @@ class ReleaseIssues extends Component<Props, State> {
     };
   }
 
-  getIssuesEndpoint(): {path: string; queryParams: IssuesQueryParams} {
-    const {version, organization, location, releaseBounds} = this.props;
+  getIssuesEndpoint(): {
+    endpoint: React.ComponentProps<typeof GroupList>['endpoint'];
+    queryParams: IssuesQueryParams;
+  } {
+    const {version, location, releaseBounds} = this.props;
     const issuesType = this.getActiveIssuesType();
 
     const queryParams = {
@@ -168,7 +171,9 @@ class ReleaseIssues extends Component<Props, State> {
     switch (issuesType) {
       case IssuesType.ALL:
         return {
-          path: `/organizations/${organization.slug}/issues/`,
+          endpoint: {
+            path: '/organizations/$organizationIdOrSlug/issues/',
+          },
           queryParams: {
             ...queryParams,
             query: new MutableSearch([
@@ -179,14 +184,17 @@ class ReleaseIssues extends Component<Props, State> {
         };
       case IssuesType.RESOLVED:
         return {
-          path: `/organizations/${organization.slug}/releases/${encodeURIComponent(
-            version
-          )}/resolved/`,
+          endpoint: {
+            path: '/organizations/$organizationIdOrSlug/releases/$version/resolved/',
+            version,
+          },
           queryParams: {...queryParams, query: ''},
         };
       case IssuesType.UNHANDLED:
         return {
-          path: `/organizations/${organization.slug}/issues/`,
+          endpoint: {
+            path: '/organizations/$organizationIdOrSlug/issues/',
+          },
           queryParams: {
             ...queryParams,
             query: new MutableSearch([
@@ -198,7 +206,9 @@ class ReleaseIssues extends Component<Props, State> {
         };
       case IssuesType.REGRESSED:
         return {
-          path: `/organizations/${organization.slug}/issues/`,
+          endpoint: {
+            path: '/organizations/$organizationIdOrSlug/issues/',
+          },
           queryParams: {
             ...queryParams,
             query: new MutableSearch([
@@ -209,7 +219,9 @@ class ReleaseIssues extends Component<Props, State> {
       case IssuesType.NEW:
       default:
         return {
-          path: `/organizations/${organization.slug}/issues/`,
+          endpoint: {
+            path: '/organizations/$organizationIdOrSlug/issues/',
+          },
           queryParams: {
             ...queryParams,
             query: new MutableSearch([
@@ -345,7 +357,7 @@ class ReleaseIssues extends Component<Props, State> {
     const {count, pageLinks, onCursor} = this.state;
     const issuesType = this.getActiveIssuesType();
     const {queryFilterDescription, withChart, version} = this.props;
-    const {path, queryParams} = this.getIssuesEndpoint();
+    const {endpoint, queryParams} = this.getIssuesEndpoint();
     const issuesTypes = [
       {value: IssuesType.ALL, label: t('All Issues'), issueCount: count.all},
       {value: IssuesType.NEW, label: t('New Issues'), issueCount: count.new},
@@ -370,30 +382,35 @@ class ReleaseIssues extends Component<Props, State> {
       <Fragment>
         <ControlsWrapper>
           <DemoTourElement
-            id={DemoTourStep.RELEASES_STATES}
+            id={DemoTourStep.RELEASES_ISSUES}
             title={t('New and regressed issues')}
             description={t(
-              `Along with reviewing how your release is trending over time compared to previous releases, you can view new and regressed issues here.`
+              'Along with reviewing how your release is trending over time compared to previous releases, you can view new and regressed issues here.'
             )}
+            position="top-start"
           >
-            <SegmentedControl
-              aria-label={t('Issue type')}
-              size="xs"
-              value={issuesType}
-              onChange={key => this.handleIssuesTypeSelection(key)}
-            >
-              {issuesTypes.map(({value, label, issueCount}) => (
-                <SegmentedControl.Item key={value} textValue={label}>
-                  {label}&nbsp;
-                  <QueryCount
-                    count={issueCount}
-                    max={99}
-                    hideParens
-                    hideIfEmpty={false}
-                  />
-                </SegmentedControl.Item>
-              ))}
-            </SegmentedControl>
+            {tourProps => (
+              <div {...tourProps}>
+                <SegmentedControl
+                  aria-label={t('Issue type')}
+                  size="xs"
+                  value={issuesType}
+                  onChange={key => this.handleIssuesTypeSelection(key)}
+                >
+                  {issuesTypes.map(({value, label, issueCount}) => (
+                    <SegmentedControl.Item key={value} textValue={label}>
+                      {label}&nbsp;
+                      <QueryCount
+                        count={issueCount}
+                        max={99}
+                        hideParens
+                        hideIfEmpty={false}
+                      />
+                    </SegmentedControl.Item>
+                  ))}
+                </SegmentedControl>
+              </div>
+            )}
           </DemoTourElement>
 
           <OpenInButtonBar>
@@ -406,7 +423,7 @@ class ReleaseIssues extends Component<Props, State> {
         </ControlsWrapper>
         <div data-test-id="release-wrapper">
           <GroupList
-            endpointPath={path}
+            endpoint={endpoint}
             queryParams={queryParams}
             query={`release:"${escapeDoubleQuotes(version)}"`}
             canSelectGroups={false}
@@ -434,8 +451,10 @@ const ControlsWrapper = styled('div')`
   }
 `;
 
-const OpenInButtonBar = styled(ButtonBar)`
-  margin: ${space(1)} 0;
+const OpenInButtonBar = styled((props: GridProps) => (
+  <Grid flow="column" align="center" gap="md" {...props} />
+))`
+  margin: ${p => p.theme.space.md} 0;
 `;
 
 const StyledPagination = styled(Pagination)`

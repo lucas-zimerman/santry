@@ -3,18 +3,14 @@ import {useTheme, type Theme} from '@emotion/react';
 import type {Location} from 'history';
 
 import {loadOrganizationTags} from 'sentry/actionCreators/tags';
-import LoadingContainer from 'sentry/components/loading/loadingContainer';
-import {t} from 'sentry/locale';
-import type {PageFilters} from 'sentry/types/core';
+import {LoadingContainer} from 'sentry/components/loading/loadingContainer';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import type {Organization} from 'sentry/types/organization';
-import type {Project} from 'sentry/types/project';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {useDiscoverQuery} from 'sentry/utils/discover/discoverQuery';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import type {Column, QueryFieldValue} from 'sentry/utils/discover/fields';
-import {isAggregateField} from 'sentry/utils/discover/fields';
-import {DiscoverDatasets} from 'sentry/utils/discover/types';
-import type {WebVital} from 'sentry/utils/fields';
+import {WebVital} from 'sentry/utils/fields';
 import {useMetricsCardinalityContext} from 'sentry/utils/performance/contexts/metricsCardinality';
 import {
   getIsMetricsDataFromResults,
@@ -25,47 +21,36 @@ import {
   useMEPSettingContext,
 } from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {removeHistogramQueryStrings} from 'sentry/utils/performance/histogram';
-import {decodeScalar} from 'sentry/utils/queryString';
-import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
+import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import withOrganization from 'sentry/utils/withOrganization';
-import withPageFilters from 'sentry/utils/withPageFilters';
-import withProjects from 'sentry/utils/withProjects';
-import {useTransactionSummaryEAP} from 'sentry/views/performance/otlp/useTransactionSummaryEAP';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useTransactionSummaryEAP} from 'sentry/views/performance/eap/useTransactionSummaryEAP';
 import {
   decodeFilterFromLocation,
   filterToLocationQuery,
   SpanOperationBreakdownFilter,
 } from 'sentry/views/performance/transactionSummary/filter';
-import type {ChildProps} from 'sentry/views/performance/transactionSummary/pageLayout';
-import PageLayout from 'sentry/views/performance/transactionSummary/pageLayout';
-import Tab from 'sentry/views/performance/transactionSummary/tabs';
 import {getTransactionMEPParamsIfApplicable} from 'sentry/views/performance/transactionSummary/transactionOverview/utils';
+import {useTransactionSummaryContext} from 'sentry/views/performance/transactionSummary/transactionSummaryContext';
 import {
+  EAP_WEB_VITALS,
   makeVitalGroups,
   PERCENTILE as VITAL_PERCENTILE,
 } from 'sentry/views/performance/transactionSummary/transactionVitals/constants';
 import {addRoutePerformanceContext} from 'sentry/views/performance/utils';
 
 import {ZOOM_END, ZOOM_START} from './latencyChart/utils';
-import SummaryContent, {OTelSummaryContent} from './content';
+import SummaryContent, {EAPSummaryContent} from './content';
 
 // Used to cast the totals request to numbers
 // as string | number
 type TotalValues = Record<string, number>;
 
-type Props = {
-  location: Location;
-  organization: Organization;
-  projects: Project[];
-  selection: PageFilters;
-};
-
-function TransactionOverview(props: Props) {
+function TransactionOverview() {
   const api = useApi();
-
-  const {location, selection, organization, projects} = props;
+  const organization = useOrganization();
+  const {selection} = usePageFilters();
 
   useEffect(() => {
     loadOrganizationTags(api, organization.slug, selection);
@@ -79,54 +64,46 @@ function TransactionOverview(props: Props) {
 
   return (
     <MEPSettingProvider>
-      <PageLayout
-        location={location}
-        organization={organization}
-        projects={projects}
-        tab={Tab.TRANSACTION_SUMMARY}
-        getDocumentTitle={getDocumentTitle}
-        generateEventView={generateEventView}
-        childComponent={
-          shouldUseTransactionSummaryEAP
-            ? EAPCardinalityLoadingWrapper
-            : CardinalityLoadingWrapper
-        }
-      />
+      {shouldUseTransactionSummaryEAP ? (
+        <EAPCardinalityLoadingWrapper />
+      ) : (
+        <CardinalityLoadingWrapper />
+      )}
     </MEPSettingProvider>
   );
 }
 
-function CardinalityLoadingWrapper(props: ChildProps) {
+function CardinalityLoadingWrapper() {
   const mepCardinalityContext = useMetricsCardinalityContext();
 
   if (mepCardinalityContext.isLoading) {
     return <LoadingContainer isLoading />;
   }
 
-  return <OverviewContentWrapper {...props} />;
+  return <OverviewContentWrapper />;
 }
 
-function EAPCardinalityLoadingWrapper(props: ChildProps) {
+function EAPCardinalityLoadingWrapper() {
   const mepCardinalityContext = useMetricsCardinalityContext();
 
   if (mepCardinalityContext.isLoading) {
     return <LoadingContainer isLoading />;
   }
 
-  return <OTelOverviewContentWrapper {...props} />;
+  return <EAPOverviewContentWrapper />;
 }
 
-function OTelOverviewContentWrapper(props: ChildProps) {
+function EAPOverviewContentWrapper() {
   const {
-    location,
     organization,
     eventView,
     projectId,
     transactionName,
     transactionThreshold,
     transactionThresholdMetric,
-  } = props;
+  } = useTransactionSummaryContext();
 
+  const location = useLocation();
   const navigate = useNavigate();
   const mepContext = useMEPDataContext();
 
@@ -167,7 +144,7 @@ function OTelOverviewContentWrapper(props: ChildProps) {
 
   const spanOperationBreakdownFilter = decodeFilterFromLocation(location);
 
-  const onChangeFilter = (newFilter: SpanOperationBreakdownFilter) => {
+  const onChangeFilter = (newFilter: SpanOperationBreakdownFilter | undefined) => {
     trackAnalytics('performance_views.filter_dropdown.selection', {
       organization,
       action: newFilter as string,
@@ -198,7 +175,7 @@ function OTelOverviewContentWrapper(props: ChildProps) {
   totals = {...totals, ...totalCountData};
 
   return (
-    <OTelSummaryContent
+    <EAPSummaryContent
       location={location}
       organization={organization}
       eventView={eventView}
@@ -213,18 +190,18 @@ function OTelOverviewContentWrapper(props: ChildProps) {
   );
 }
 
-function OverviewContentWrapper(props: ChildProps) {
+function OverviewContentWrapper() {
   const {
-    location,
     organization,
     eventView,
     projectId,
     transactionName,
     transactionThreshold,
     transactionThresholdMetric,
-  } = props;
+  } = useTransactionSummaryContext();
   const theme = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const mepContext = useMEPDataContext();
   const mepSetting = useMEPSettingContext();
@@ -273,7 +250,7 @@ function OverviewContentWrapper(props: ChildProps) {
 
   const spanOperationBreakdownFilter = decodeFilterFromLocation(location);
 
-  const onChangeFilter = (newFilter: SpanOperationBreakdownFilter) => {
+  const onChangeFilter = (newFilter: SpanOperationBreakdownFilter | undefined) => {
     trackAnalytics('performance_views.filter_dropdown.selection', {
       organization,
       action: newFilter as string,
@@ -316,77 +293,6 @@ function OverviewContentWrapper(props: ChildProps) {
       onChangeFilter={onChangeFilter}
       spanOperationBreakdownFilter={spanOperationBreakdownFilter}
     />
-  );
-}
-
-function getDocumentTitle(transactionName: string): string {
-  const hasTransactionName =
-    typeof transactionName === 'string' && String(transactionName).trim().length > 0;
-
-  if (hasTransactionName) {
-    return [String(transactionName).trim(), t('Performance')].join(' - ');
-  }
-
-  return [t('Summary'), t('Performance')].join(' - ');
-}
-
-function generateEventView({
-  location,
-  transactionName,
-  shouldUseOTelFriendlyUI,
-}: {
-  location: Location;
-  shouldUseOTelFriendlyUI: boolean;
-  transactionName: string;
-}): EventView {
-  // Use the user supplied query but overwrite any transaction or event type
-  // conditions they applied.
-
-  const query = decodeScalar(location.query.query, '');
-  const conditions = new MutableSearch(query);
-
-  if (shouldUseOTelFriendlyUI) {
-    conditions.setFilterValues('is_transaction', ['true']);
-    conditions.setFilterValues(
-      'transaction.method',
-      conditions.getFilterValues('http.method')
-    );
-    conditions.removeFilter('http.method');
-  } else {
-    conditions.setFilterValues('event.type', ['transaction']);
-  }
-  conditions.setFilterValues('transaction', [transactionName]);
-
-  Object.keys(conditions.filters).forEach(field => {
-    if (isAggregateField(field)) {
-      conditions.removeFilter(field);
-    }
-  });
-
-  const fields = shouldUseOTelFriendlyUI
-    ? [
-        'id',
-        'user.email',
-        'user.username',
-        'user.id',
-        'user.ip',
-        'span.duration',
-        'trace',
-        'timestamp',
-      ]
-    : ['id', 'user.display', 'transaction.duration', 'trace', 'timestamp'];
-
-  return EventView.fromNewQueryWithLocation(
-    {
-      id: undefined,
-      version: 2,
-      name: transactionName,
-      fields,
-      query: conditions.formatString(),
-      projects: [],
-      dataset: shouldUseOTelFriendlyUI ? DiscoverDatasets.SPANS : undefined,
-    },
-    location
   );
 }
 
@@ -465,6 +371,8 @@ function getEAPTotalsEventView(
   _organization: Organization,
   eventView: EventView
 ): EventView {
+  const vitals = EAP_WEB_VITALS;
+
   const totalsColumns: QueryFieldValue[] = [
     {
       kind: 'function',
@@ -476,7 +384,16 @@ function getEAPTotalsEventView(
     },
   ];
 
-  return eventView.withColumns([...totalsColumns]);
+  return eventView.withColumns([
+    ...totalsColumns,
+    ...vitals.map(
+      vital =>
+        ({
+          kind: 'function',
+          function: ['percentile', vital, VITAL_PERCENTILE.toString(), undefined],
+        }) as Column
+    ),
+  ]);
 }
 
-export default withPageFilters(withProjects(withOrganization(TransactionOverview)));
+export default TransactionOverview;

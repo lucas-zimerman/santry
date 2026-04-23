@@ -1,6 +1,7 @@
 from unittest import mock
 
 import pytest
+from taskbroker_client.retry import RetryTaskError
 
 from sentry.integrations.example import ExampleIntegration
 from sentry.integrations.models import ExternalIssue, Integration
@@ -149,9 +150,7 @@ class TestUpdateComment(TestCase):
             integration=self.example_integration,
         )
 
-        with pytest.raises(Exception) as exc:
+        with pytest.raises(RetryTaskError):
             update_comment(external_issue.id, self.user.id, self.activity.id)
-
-        assert exc.match("Something went wrong updating comment")
 
         assert_failure_metric(mock_record_event, Exception("Something went wrong updating comment"))

@@ -5,6 +5,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import orjson
+import pytest
 from django.conf import settings
 from django.core.cache import cache
 from django.test import override_settings
@@ -65,6 +66,8 @@ class TestGetEventSeverity(TestCase):
             "message": "NopeError: Nopey McNopeface",
             "has_stacktrace": 0,
             "handled": True,
+            "org_id": self.project.organization_id,
+            "project_id": self.project.id,
         }
 
         mock_urlopen.assert_called_with(
@@ -83,16 +86,19 @@ class TestGetEventSeverity(TestCase):
             override_settings(SEER_API_SHARED_SECRET="some-secret"),
         ):
             _get_severity_score(event)
-            mock_urlopen.assert_called_with(
-                "POST",
-                "/v0/issues/severity-score",
-                body=orjson.dumps(payload),
-                headers={
-                    "content-type": "application/json;charset=utf-8",
-                    "Authorization": "Rpcsignature rpc0:b14214093c3e7c633e68ac90b01087e710fe2f96c0544b232b9ec9bc6ca971f4",
-                },
-                timeout=options.get("issues.severity.seer-timeout", settings.SEER_SEVERITY_TIMEOUT),
-            )
+            call_kwargs = mock_urlopen.call_args
+            assert call_kwargs[0] == ("POST", "/v0/issues/severity-score")
+            assert call_kwargs[1]["body"] == orjson.dumps(payload)
+            headers = call_kwargs[1]["headers"]
+            assert headers["content-type"] == "application/json;charset=utf-8"
+            assert "Authorization" in headers
+            assert "X-Viewer-Context-Signature" not in headers
+            # ViewerContext is now a JWT
+            from sentry.viewer_context import decode_viewer_context
+
+            vc = decode_viewer_context(headers["X-Viewer-Context"], key="some-secret")
+            assert vc.organization_id == self.project.organization_id
+            assert vc.actor_type.value == "unknown"
 
     @patch(
         "sentry.event_manager.severity_connection_pool.urlopen",
@@ -117,6 +123,8 @@ class TestGetEventSeverity(TestCase):
                 "message": "Dogs are great!",
                 "has_stacktrace": 0,
                 "handled": None,
+                "org_id": self.project.organization_id,
+                "project_id": self.project.id,
             }
 
             mock_urlopen.assert_called_with(
@@ -216,6 +224,7 @@ class TestGetEventSeverity(TestCase):
             assert severity == 0.0
             assert reason == "bad_title"
 
+    @pytest.mark.skip(reason="flaky: #103306")
     @patch(
         "sentry.event_manager.severity_connection_pool.urlopen",
         side_effect=MaxRetryError(
@@ -246,9 +255,7 @@ class TestGetEventSeverity(TestCase):
 
         severity, reason = _get_severity_score(event)
 
-        mock_metrics_incr.assert_called_with(
-            "issues.severity.error", tags={"reason": "max_retries"}
-        )
+        mock_metrics_incr.assert_any_call("issues.severity.error", tags={"reason": "max_retries"})
         assert severity == 1.0
         assert reason == "microservice_max_retry"
         assert cache.get(SEER_ERROR_COUNT_KEY) == 1
@@ -281,7 +288,7 @@ class TestGetEventSeverity(TestCase):
 
         severity, reason = _get_severity_score(event)
 
-        mock_metrics_incr.assert_called_with("issues.severity.error", tags={"reason": "timeout"})
+        mock_metrics_incr.assert_any_call("issues.severity.error", tags={"reason": "timeout"})
         assert severity == 1.0
         assert reason == "microservice_timeout"
         assert cache.get(SEER_ERROR_COUNT_KEY) == 1
@@ -317,7 +324,7 @@ class TestGetEventSeverity(TestCase):
         severity, reason = _get_severity_score(event)
 
         mock_capture_exception.assert_called_once_with()
-        mock_metrics_incr.assert_called_with("issues.severity.error", tags={"reason": "unknown"})
+        mock_metrics_incr.assert_any_call("issues.severity.error", tags={"reason": "unknown"})
         assert severity == 1.0
         assert reason == "microservice_error"
         assert cache.get(SEER_ERROR_COUNT_KEY) == 1

@@ -12,11 +12,7 @@ import {
 } from 'sentry/components/searchSyntax/parser';
 import {t} from 'sentry/locale';
 import {escapeDoubleQuotes} from 'sentry/utils';
-import {
-  FieldValueType,
-  getFieldDefinition,
-  type FieldDefinition,
-} from 'sentry/utils/fields';
+import {FieldValueType, type FieldDefinition} from 'sentry/utils/fields';
 
 const SHOULD_ESCAPE_REGEX = /[\s"(),]/;
 
@@ -69,12 +65,13 @@ export function isAggregateFilterToken(
   }
 }
 
-export function getValidOpsForFilter(
-  filterToken: TokenResult<Token.FILTER>,
-  hasWildcardOperators: boolean
-): readonly TermOperator[] {
-  const fieldDefinition = getFieldDefinition(filterToken.key.text);
-
+export function getValidOpsForFilter({
+  filterToken,
+  fieldDefinition,
+}: {
+  fieldDefinition: FieldDefinition | null;
+  filterToken: TokenResult<Token.FILTER>;
+}): readonly TermOperator[] {
   // If the token is invalid we want to use the possible expected types as our filter type
   const validTypes = filterToken.invalid?.expectedType ?? [filterToken.filter];
 
@@ -102,7 +99,6 @@ export function getValidOpsForFilter(
   // - Field definition does not allow wildcard operators
   // - Field definition is a string field
   if (
-    !hasWildcardOperators ||
     !areWildcardOperatorsAllowed(fieldDefinition) ||
     fieldDefinition?.valueType !== FieldValueType.STRING
   ) {
@@ -112,17 +108,90 @@ export function getValidOpsForFilter(
   return [...validOps];
 }
 
-export function escapeTagValue(value: string): string {
+function shouldEscapeTagValue(
+  value: string,
+  options: EscapeTagValueOptions = {}
+): boolean {
+  const {allowArrayValue = true, forceQuote = false} = options;
+  return (
+    forceQuote ||
+    SHOULD_ESCAPE_REGEX.test(value) ||
+    (allowArrayValue && value.startsWith('[') && value.endsWith(']'))
+  );
+}
+
+interface EscapeTagValueOptions {
+  allowArrayValue?: boolean;
+  forceQuote?: boolean;
+}
+
+export function escapeTagValue(
+  value: string,
+  options: EscapeTagValueOptions = {}
+): string {
   if (!value) {
     return '';
   }
 
   // Wrap in quotes if there is a space or parens
-  return SHOULD_ESCAPE_REGEX.test(value) ? `"${escapeDoubleQuotes(value)}"` : value;
+  const shouldEscape = shouldEscapeTagValue(value, options);
+  return shouldEscape ? `"${escapeDoubleQuotes(value)}"` : value;
+}
+
+export function escapeTagValueForSearch(
+  value: string,
+  options: EscapeTagValueOptions = {}
+): string {
+  if (!value) {
+    return '';
+  }
+
+  let escapedValue = '';
+  let consecutiveBackslashes = 0;
+
+  for (const char of value) {
+    if (char === '\\') {
+      consecutiveBackslashes += 1;
+      escapedValue += char;
+      continue;
+    }
+
+    if (char === '*' && consecutiveBackslashes % 2 === 0) {
+      escapedValue += '\\';
+    }
+
+    escapedValue += char;
+    consecutiveBackslashes = 0;
+  }
+
+  const shouldEscape = shouldEscapeTagValue(escapedValue, options);
+
+  return shouldEscape ? `"${escapeDoubleQuotes(escapedValue)}"` : escapedValue;
 }
 
 export function unescapeTagValue(value: string): string {
   return value.replace(/\\"/g, '"');
+}
+
+// This only inverts the query builder's wildcard escaping for search values that
+// the search syntax can actually represent. In search syntax, `\*` already means
+// a literal `*`, so odd backslash counts before `*` are not distinct raw values.
+export function unescapeAsteriskSearchValue(value: string): string {
+  let unescapedValue = '';
+
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index];
+
+    if (char === '\\' && value[index + 1] === '*') {
+      unescapedValue += '*';
+      index += 1;
+      continue;
+    }
+
+    unescapedValue += char;
+  }
+
+  return unescapedValue;
 }
 
 export function formatFilterValue({
@@ -138,7 +207,9 @@ export function formatFilterValue({
         return content;
       }
 
-      return token.quoted ? unescapeTagValue(content) : content;
+      return unescapeAsteriskSearchValue(
+        token.quoted ? unescapeTagValue(content) : content
+      );
     }
     case Token.VALUE_RELATIVE_DATE:
       return t('%s', `${token.value}${token.unit} ago`);
@@ -199,27 +270,16 @@ export function convertTokenTypeToValueType(tokenType: Token): FieldValueType {
   }
 }
 
-export function getLabelAndOperatorFromToken(
-  token: TokenResult<Token.FILTER>,
-  hasWildcardOperators: boolean
-) {
+export function getLabelAndOperatorFromToken(token: TokenResult<Token.FILTER>) {
   let operator = token.operator;
 
-  if (hasWildcardOperators && token.negated && token.operator === TermOperator.CONTAINS) {
+  if (token.negated && token.operator === TermOperator.CONTAINS) {
     operator = TermOperator.DOES_NOT_CONTAIN;
-  } else if (
-    hasWildcardOperators &&
-    token.negated &&
-    token.operator === TermOperator.STARTS_WITH
-  ) {
+  } else if (token.negated && token.operator === TermOperator.STARTS_WITH) {
     operator = TermOperator.DOES_NOT_START_WITH;
-  } else if (
-    hasWildcardOperators &&
-    token.negated &&
-    token.operator === TermOperator.ENDS_WITH
-  ) {
+  } else if (token.negated && token.operator === TermOperator.ENDS_WITH) {
     operator = TermOperator.DOES_NOT_END_WITH;
-  } else if (hasWildcardOperators && token.operator === TermOperator.ENDS_WITH) {
+  } else if (token.operator === TermOperator.ENDS_WITH) {
     operator = TermOperator.ENDS_WITH;
   } else if (token.negated) {
     operator = TermOperator.NOT_EQUAL;
@@ -251,5 +311,9 @@ export function areWildcardOperatorsAllowed(
     return false;
   }
 
-  return fieldDefinition.allowWildcard ?? true;
+  if (fieldDefinition.valueType === FieldValueType.STRING) {
+    return fieldDefinition.allowWildcard ?? true;
+  }
+
+  return false;
 }

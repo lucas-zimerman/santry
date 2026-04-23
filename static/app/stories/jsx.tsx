@@ -2,8 +2,6 @@ import type {ReactNode} from 'react';
 import {Fragment, isValidElement} from 'react';
 import styled from '@emotion/styled';
 
-import {space} from 'sentry/styles/space';
-
 interface JSXNodeProps {
   name: string;
   children?: ReactNode;
@@ -21,7 +19,7 @@ export function JSXNode({name, props = {}, children}: JSXNodeProps) {
             <JSXProperty name={propName} value={value} />
           </Fragment>
         ))}
-        {`>`}
+        {'>'}
         <br />
         {children}
         <br />
@@ -37,20 +35,20 @@ export function JSXNode({name, props = {}, children}: JSXNodeProps) {
           <JSXProperty name={propName} value={value} />{' '}
         </Fragment>
       ))}
-      {`/>`}
+      {'/>'}
     </Code>
   );
 }
 
 const Code = styled('code')`
-  font-size: ${p => p.theme.fontSize.md};
+  font-size: ${p => p.theme.font.size.md};
   padding-inline: 0;
   & > [data-property] {
-    font-size: ${p => p.theme.fontSize.md};
+    font-size: ${p => p.theme.font.size.md};
     padding-inline: 0;
   }
   & > [data-node] {
-    padding-left: ${space(2)};
+    padding-left: ${p => p.theme.space.xl};
   }
 `;
 
@@ -61,7 +59,7 @@ interface JSXPropertyProps {
 
 export function JSXProperty({name, value}: JSXPropertyProps) {
   if (name === 'children') {
-    return <code data-property="children">{`{children}`}</code>;
+    return <code data-property="children">{'{children}'}</code>;
   }
   if (value === null || value === undefined) {
     return <code data-property="nullish">{`${name}={${value}}`}</code>;

@@ -28,7 +28,7 @@ describe('MetricReadout', () => {
   });
 
   it('parses strings', () => {
-    render(<MetricReadout title="Rate" unit={RateUnit.PER_MINUTE} value={'17.8'} />);
+    render(<MetricReadout title="Rate" unit={RateUnit.PER_MINUTE} value="17.8" />);
 
     expect(screen.getByRole('heading', {name: 'Rate'})).toBeInTheDocument();
     expect(screen.getByText('17.8/min')).toBeInTheDocument();
@@ -119,6 +119,6 @@ describe('MetricReadout', () => {
     render(<MetricReadout title="Count" unit="count" value={7800123} />);
 
     expect(screen.getByRole('heading', {name: 'Count'})).toBeInTheDocument();
-    expect(screen.getByText('7.8m')).toBeInTheDocument();
+    expect(screen.getByText('7.8M')).toBeInTheDocument();
   });
 });

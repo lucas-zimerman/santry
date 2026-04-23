@@ -1,13 +1,13 @@
 import {motion} from 'framer-motion';
 
-import {CodeSnippet} from 'sentry/components/codeSnippet';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {CodeBlock} from '@sentry/scraps/code';
+
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {IconFile} from 'sentry/icons/iconFile';
 import {t} from 'sentry/locale';
-import testableTransition from 'sentry/utils/testableTransition';
-import ContinueButton from 'sentry/views/relocation/components/continueButton';
-import StepHeading from 'sentry/views/relocation/components/stepHeading';
-import Wrapper from 'sentry/views/relocation/components/wrapper';
+import {ContinueButton} from 'sentry/views/relocation/components/continueButton';
+import {StepHeading} from 'sentry/views/relocation/components/stepHeading';
+import {Wrapper} from 'sentry/views/relocation/components/wrapper';
 
 import type {StepProps} from './types';
 
@@ -24,7 +24,6 @@ export function PublicKey({publicKeys, relocationState, onComplete}: StepProps) 
       <StepHeading step={2}>{t("Save Sentry's public key to your machine")}</StepHeading>
       {publicKey ? (
         <motion.div
-          transition={testableTransition()}
           variants={{
             initial: {y: 30, opacity: 0},
             animate: {y: 0, opacity: 1},
@@ -36,14 +35,13 @@ export function PublicKey({publicKeys, relocationState, onComplete}: StepProps) 
               "To do so, you'll need to save the following public key to a file accessible from wherever your self-hosted repository is currently installed. You'll need to have this public key file available for the next step."
             )}
           </p>
-          <CodeSnippet dark filename="key.pub" icon={<IconFile />} hideCopyButton={false}>
+          <CodeBlock dark filename="key.pub" icon={<IconFile />} hideCopyButton={false}>
             {publicKey}
-          </CodeSnippet>
+          </CodeBlock>
           <ContinueButton priority="primary" type="submit" onClick={handleContinue} />
         </motion.div>
       ) : (
         <motion.div
-          transition={testableTransition()}
           variants={{
             initial: {y: 30, opacity: 0},
             animate: {y: 0, opacity: 1},

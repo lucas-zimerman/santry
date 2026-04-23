@@ -20,22 +20,22 @@ export interface TicketCreationAction extends Action {
 }
 
 export interface ActionConfig {
+  targetDisplay: string | null;
+  targetIdentifier: string | null;
   targetType: ActionTarget | null;
-  sentryAppIdentifier?: SentryAppIdentifier;
-  targetDisplay?: string;
-  targetIdentifier?: string;
 }
 
 export enum ActionTarget {
-  SPECIFIC = 0,
-  USER = 1,
-  TEAM = 2,
-  SENTRY_APP = 3,
-  ISSUE_OWNERS = 4,
+  SPECIFIC = 'specific',
+  USER = 'user',
+  TEAM = 'team',
+  SENTRY_APP = 'sentry_app',
+  ISSUE_OWNERS = 'issue_owners',
 }
 
 export enum ActionType {
   SLACK = 'slack',
+  SLACK_STAGING = 'slack_staging',
   MSTEAMS = 'msteams',
   DISCORD = 'discord',
   PAGERDUTY = 'pagerduty',
@@ -55,11 +55,6 @@ export enum ActionGroup {
   NOTIFICATION = 'notification',
   TICKET_CREATION = 'ticket_creation',
   OTHER = 'other',
-}
-
-export enum SentryAppIdentifier {
-  SENTRY_APP_INSTALLATION_UUID = 'sentry_app_installation_uuid',
-  SENTRY_APP_ID = 'sentry_app_id',
 }
 
 export interface ActionHandler {

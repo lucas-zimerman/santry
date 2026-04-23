@@ -9,14 +9,19 @@ from slack_sdk.web.slack_response import SlackResponse
 from sentry.analytics.events.alert_sent import AlertSentEvent
 from sentry.constants import ObjectStatus
 from sentry.integrations.slack import SlackNotifyServiceAction
+from sentry.integrations.slack.analytics import SlackIntegrationNotificationSent
 from sentry.integrations.slack.utils.constants import SLACK_RATE_LIMITED_MESSAGE
 from sentry.integrations.types import ExternalProviders
 from sentry.notifications.additional_attachment_manager import manager
 from sentry.silo.base import SiloMode
 from sentry.testutils.cases import RuleTestCase
-from sentry.testutils.helpers.analytics import assert_last_analytics_event
+from sentry.testutils.helpers.analytics import (
+    assert_any_analytics_event,
+    assert_last_analytics_event,
+)
 from sentry.testutils.silo import assume_test_silo_mode
 from sentry.testutils.skips import requires_snuba
+from sentry.workflow_engine.models import Action
 from tests.sentry.integrations.slack.test_notifications import (
     additional_attachment_generator_block_kit,
 )
@@ -86,7 +91,15 @@ class SlackNotifyActionTest(RuleTestCase):
     ) -> None:
         event = self.get_event()
 
-        rule = self.get_rule(data={"workspace": self.integration.id, "channel": "#my-channel"})
+        fake_rule = self.create_project_rule()
+        action = Action.objects.all().order_by("id").first()
+        assert action
+        fake_rule.id = action.id
+
+        rule = self.get_rule(
+            data={"workspace": self.integration.id, "channel": "#my-channel"},
+            rule=fake_rule,
+        )
 
         results = list(rule.after(event=event))
         assert len(results) == 1
@@ -97,7 +110,7 @@ class SlackNotifyActionTest(RuleTestCase):
         blocks = mock_post.call_args.kwargs["blocks"]
         blocks = orjson.loads(blocks)
 
-        assert event.title in blocks[0]["elements"][0]["elements"][-1]["text"]
+        assert event.title in blocks[0]["text"]["text"]
 
     def test_render_label_with_notes(self) -> None:
         rule = self.get_rule(
@@ -352,12 +365,17 @@ class SlackNotifyActionTest(RuleTestCase):
         ):
             event = self.get_event()
 
+            fake_rule = self.create_project_rule()
+            action = Action.objects.all().order_by("id").first()
+            assert action
+            fake_rule.id = action.id
             rule = self.get_rule(
                 data={
                     "workspace": self.integration.id,
                     "channel": "#my-channel",
                     "channel_id": "123",
-                }
+                },
+                rule=fake_rule,
             )
 
             notification_uuid = "123e4567-e89b-12d3-a456-426614174000"
@@ -369,9 +387,9 @@ class SlackNotifyActionTest(RuleTestCase):
             blocks = mock_post.call_args.kwargs["blocks"]
             blocks = orjson.loads(blocks)
 
-            assert event.title in blocks[0]["elements"][0]["elements"][-1]["text"]
-            assert blocks[5]["text"]["text"] == self.organization.slug
-            assert blocks[6]["text"]["text"] == self.integration.id
+            assert event.title in blocks[0]["text"]["text"]
+            assert blocks[4]["text"]["text"] == self.organization.slug
+            assert blocks[5]["text"]["text"] == self.integration.id
             assert_last_analytics_event(
                 mock_record,
                 AlertSentEvent(
@@ -384,14 +402,16 @@ class SlackNotifyActionTest(RuleTestCase):
                     notification_uuid=notification_uuid,
                 ),
             )
-            mock_record.assert_any_call(
-                "integrations.slack.notification_sent",
-                category="issue_alert",
-                organization_id=self.organization.id,
-                project_id=event.project_id,
-                group_id=event.group_id,
-                notification_uuid=notification_uuid,
-                alert_id=None,
+            assert_any_analytics_event(
+                mock_record,
+                SlackIntegrationNotificationSent(
+                    category="issue_alert",
+                    organization_id=self.organization.id,
+                    project_id=event.project_id,
+                    group_id=event.group_id,
+                    notification_uuid=notification_uuid,
+                    alert_id=None,
+                ),
             )
 
     @responses.activate

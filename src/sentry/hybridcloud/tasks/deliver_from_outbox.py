@@ -4,20 +4,19 @@ import math
 from typing import Any
 
 import sentry_sdk
-from celery import Task
 from django.conf import settings
 from django.db.models import Max, Min
+from taskbroker_client.task import Task
 
 from sentry.hybridcloud.models.outbox import (
+    CellOutboxBase,
     ControlOutboxBase,
     OutboxBase,
     OutboxFlushError,
-    RegionOutboxBase,
 )
 from sentry.hybridcloud.tasks.backfill_outboxes import backfill_outboxes_for
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import hybridcloud_control_tasks, hybridcloud_tasks
 from sentry.utils import metrics
 from sentry.utils.env import in_test_environment
@@ -25,11 +24,8 @@ from sentry.utils.env import in_test_environment
 
 @instrumented_task(
     name="sentry.tasks.enqueue_outbox_jobs_control",
-    queue="outbox.control",
+    namespace=hybridcloud_control_tasks,
     silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(
-        namespace=hybridcloud_control_tasks,
-    ),
 )
 def enqueue_outbox_jobs_control(
     concurrency: int | None = None, process_outbox_backfills: bool = True, **kwargs: Any
@@ -44,17 +40,14 @@ def enqueue_outbox_jobs_control(
 
 @instrumented_task(
     name="sentry.tasks.enqueue_outbox_jobs",
-    queue="outbox",
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=hybridcloud_tasks,
-    ),
+    namespace=hybridcloud_tasks,
+    silo_mode=SiloMode.CELL,
 )
 def enqueue_outbox_jobs(
     concurrency: int | None = None, process_outbox_backfills: bool = True, **kwargs: Any
 ) -> None:
     schedule_batch(
-        silo_mode=SiloMode.REGION,
+        silo_mode=SiloMode.CELL,
         drain_task=drain_outbox_shards,
         concurrency=concurrency,
         process_outbox_backfills=process_outbox_backfills,
@@ -72,7 +65,7 @@ CONCURRENCY = 5
 
 def schedule_batch(
     silo_mode: SiloMode,
-    drain_task: Task,
+    drain_task: Task[Any, Any],
     concurrency: int | None = None,
     process_outbox_backfills: bool = True,
 ) -> None:
@@ -81,7 +74,7 @@ def schedule_batch(
     if not concurrency:
         concurrency = CONCURRENCY
     try:
-        for outbox_name in settings.SENTRY_OUTBOX_MODELS[silo_mode.name]:
+        for outbox_name in settings.SENTRY_OUTBOX_MODELS[silo_mode.value]:
             outbox_model: type[OutboxBase] = OutboxBase.from_outbox_name(outbox_name)
 
             aggregates = outbox_model.objects.all().aggregate(Min("id"), Max("id"))
@@ -139,12 +132,9 @@ def schedule_batch(
 
 @instrumented_task(
     name="sentry.tasks.drain_outbox_shards",
-    queue="outbox",
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=hybridcloud_tasks,
-        processing_deadline_duration=90,
-    ),
+    namespace=hybridcloud_tasks,
+    processing_deadline_duration=90,
+    silo_mode=SiloMode.CELL,
 )
 def drain_outbox_shards(
     outbox_identifier_low: int = 0,
@@ -156,7 +146,7 @@ def drain_outbox_shards(
             outbox_name = settings.SENTRY_OUTBOX_MODELS["REGION"][0]
 
         assert outbox_name, "Could not determine outbox name"
-        outbox_model: type[RegionOutboxBase] = RegionOutboxBase.from_outbox_name(outbox_name)
+        outbox_model: type[CellOutboxBase] = CellOutboxBase.from_outbox_name(outbox_name)
 
         process_outbox_batch(outbox_identifier_hi, outbox_identifier_low, outbox_model)
     except Exception:
@@ -166,12 +156,9 @@ def drain_outbox_shards(
 
 @instrumented_task(
     name="sentry.tasks.drain_outbox_shards_control",
-    queue="outbox.control",
+    namespace=hybridcloud_control_tasks,
+    processing_deadline_duration=90,
     silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(
-        namespace=hybridcloud_control_tasks,
-        processing_deadline_duration=90,
-    ),
 )
 def drain_outbox_shards_control(
     outbox_identifier_low: int = 0,

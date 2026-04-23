@@ -1,12 +1,14 @@
 import {useState} from 'react';
+import {Outlet} from 'react-router-dom';
 
 import {ProfileHeader} from 'sentry/components/profiling/profileHeader';
 import type {RequestState} from 'sentry/types/core';
 import type {EventTransaction} from 'sentry/types/event';
 import {isSchema, isSentrySampledProfile} from 'sentry/utils/profiling/guards/profile';
 import {useSentryEvent} from 'sentry/utils/profiling/hooks/useSentryEvent';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
+import {LayoutPageWithHiddenFooter} from 'sentry/views/profiling/layoutPageWithHiddenFooter';
 
 import {ProfileTransactionContext, TransactionProfileProvider} from './profilesProvider';
 
@@ -20,13 +22,7 @@ function getTransactionId(input: Profiling.ProfileInput): string | null {
   return null;
 }
 
-interface FlamegraphViewProps {
-  children: React.ReactNode;
-}
-
-export default function ProfileAndTransactionProvider(
-  props: FlamegraphViewProps
-): React.ReactElement {
+export default function ProfileAndTransactionProvider(): React.ReactElement {
   const organization = useOrganization();
   const params = useParams();
 
@@ -51,14 +47,16 @@ export default function ProfileAndTransactionProvider(
       setProfile={setProfile}
     >
       <ProfileTransactionContext value={profileTransaction}>
-        <ProfileHeader
-          eventId={params.eventId!}
-          projectId={projectSlug}
-          transaction={
-            profileTransaction.type === 'resolved' ? profileTransaction.data : null
-          }
-        />
-        {props.children}
+        <LayoutPageWithHiddenFooter flex={1}>
+          <ProfileHeader
+            eventId={params.eventId!}
+            projectId={projectSlug}
+            transaction={
+              profileTransaction.type === 'resolved' ? profileTransaction.data : null
+            }
+          />
+          <Outlet />
+        </LayoutPageWithHiddenFooter>
       </ProfileTransactionContext>
     </TransactionProfileProvider>
   );

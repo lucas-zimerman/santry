@@ -1,14 +1,10 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
+import {PageFiltersFixture} from 'sentry-fixture/pageFilters';
 
 import {render, screen, waitForElementToBeRemoved} from 'sentry-test/reactTestingLibrary';
 
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
 import {WebVitalsDetailPanel} from 'sentry/views/insights/browser/webVitals/components/webVitalsDetailPanel';
-
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/usePageFilters');
 
 describe('WebVitalsDetailPanel', () => {
   const organization = OrganizationFixture();
@@ -16,17 +12,7 @@ describe('WebVitalsDetailPanel', () => {
   let eventsStatsMock: jest.Mock;
 
   beforeEach(() => {
-    jest.mocked(useLocation).mockReturnValue({
-      pathname: '',
-      search: '',
-      query: {},
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
-    });
-
-    jest.mocked(usePageFilters).mockReturnValue(PageFilterStateFixture());
+    PageFiltersStore.onInitializeUrlState(PageFiltersFixture());
 
     eventsMock = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/events/`,
@@ -35,12 +21,9 @@ describe('WebVitalsDetailPanel', () => {
       },
     });
     eventsStatsMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       body: {
-        data: [
-          [1543449600, [20, 12]],
-          [1543449601, [10, 5]],
-        ],
+        timeSeries: [],
       },
     });
   });
@@ -70,7 +53,7 @@ describe('WebVitalsDetailPanel', () => {
             'count()',
           ],
           query:
-            'span.op:[ui.interaction.click,ui.interaction.hover,ui.interaction.drag,ui.interaction.press,ui.webvital.cls,ui.webvital.lcp,pageload,""] !transaction:"<< unparameterized >>"',
+            'span.op:[ui.interaction.click,ui.interaction.hover,ui.interaction.drag,ui.interaction.press,ui.webvital.cls,ui.webvital.lcp,pageload,""]',
         }),
       })
     );
@@ -85,13 +68,13 @@ describe('WebVitalsDetailPanel', () => {
             'performance_score(measurements.score.lcp)',
             'performance_score(measurements.score.fcp)',
             'performance_score(measurements.score.cls)',
-            `performance_score(measurements.score.inp)`,
+            'performance_score(measurements.score.inp)',
             'performance_score(measurements.score.ttfb)',
             'performance_score(measurements.score.total)',
             'avg(measurements.score.weight.lcp)',
             'avg(measurements.score.weight.fcp)',
             'avg(measurements.score.weight.cls)',
-            `avg(measurements.score.weight.inp)`,
+            'avg(measurements.score.weight.inp)',
             'avg(measurements.score.weight.ttfb)',
             'count()',
             'count_scores(measurements.score.total)',
@@ -103,7 +86,7 @@ describe('WebVitalsDetailPanel', () => {
             'sum(measurements.score.weight.lcp)',
           ],
           query:
-            'span.op:[ui.interaction.click,ui.interaction.hover,ui.interaction.drag,ui.interaction.press,ui.webvital.cls,ui.webvital.lcp,pageload,""] !transaction:"<< unparameterized >>"',
+            'span.op:[ui.interaction.click,ui.interaction.hover,ui.interaction.drag,ui.interaction.press,ui.webvital.cls,ui.webvital.lcp,pageload,""]',
         }),
       })
     );
@@ -136,7 +119,7 @@ describe('WebVitalsDetailPanel', () => {
             'opportunity_score(measurements.score.total)',
           ],
           query:
-            'span.op:[ui.interaction.click,ui.interaction.hover,ui.interaction.drag,ui.interaction.press,ui.webvital.cls,ui.webvital.lcp,pageload,\"\"] !transaction:\"<< unparameterized >>\" avg(measurements.score.total):>=0 count_scores(measurements.score.lcp):>0',
+            'span.op:[ui.interaction.click,ui.interaction.hover,ui.interaction.drag,ui.interaction.press,ui.webvital.cls,ui.webvital.lcp,pageload,""] avg(measurements.score.total):>=0 count_scores(measurements.score.lcp):>0',
         }),
       })
     );

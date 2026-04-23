@@ -1,8 +1,8 @@
-import {useRef} from 'react';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
+import {mockGetBoundingClientRect} from 'sentry/utils/fixtures/virtualization';
 import {OurLogKnownFieldKey} from 'sentry/views/explore/logs/types';
 import {
   TraceViewLogsDataProvider,
@@ -12,25 +12,16 @@ import {
 const TRACE_SLUG = '00000000000000000000000000000000';
 
 function Component({traceSlug}: {traceSlug: string}) {
-  const ref = useRef(null);
   return (
     <TraceViewLogsDataProvider traceSlug={traceSlug}>
-      <TraceViewLogsSection scrollContainer={ref} />
+      <TraceViewLogsSection />
     </TraceViewLogsDataProvider>
   );
 }
 
+beforeEach(mockGetBoundingClientRect);
+
 describe('TraceViewLogsSection', () => {
-  beforeEach(() => {
-    // the search query combobox is firing updates and causing console.errors
-    jest.spyOn(console, 'error').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    jest.clearAllMocks();
-    MockApiClient.clearMockResponses();
-  });
-
   it('renders empty logs', async () => {
     const organization = OrganizationFixture({features: ['ourlogs-enabled']});
     const mockRequest = MockApiClient.addMockResponse({
@@ -44,17 +35,8 @@ describe('TraceViewLogsSection', () => {
 
     expect(screen.getByTestId('loading-indicator')).toBeInTheDocument();
 
+    expect(await screen.findByText(/No logs found/)).toBeInTheDocument();
     expect(mockRequest).toHaveBeenCalledTimes(1);
-
-    // without waiting a few ticks, the test fails just before the
-    // promise corresponding to the request resolves
-    // by adding some ticks, it forces the test to wait a little longer
-    // until the promise is resolved
-    for (let i = 0; i < 10; i++) {
-      await tick();
-    }
-
-    expect(screen.getByText(/No logs found/)).toBeInTheDocument();
   });
 
   it('renders some logs', async () => {
@@ -82,16 +64,7 @@ describe('TraceViewLogsSection', () => {
 
     expect(screen.getByTestId('loading-indicator')).toBeInTheDocument();
 
+    expect(await screen.findByText(/i am a log/)).toBeInTheDocument();
     expect(mockRequest).toHaveBeenCalledTimes(1);
-
-    // without waiting a few ticks, the test fails just before the
-    // promise corresponding to the request resolves
-    // by adding some ticks, it forces the test to wait a little longer
-    // until the promise is resolved
-    for (let i = 0; i < 10; i++) {
-      await tick();
-    }
-
-    expect(screen.getByText(/i am a log/)).toBeInTheDocument();
   });
 });

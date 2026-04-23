@@ -9,6 +9,7 @@ import responses
 from django.conf import settings
 from django.core import mail
 from django.core.mail.message import EmailMultiAlternatives
+from django.db.models import F
 from django.utils import timezone
 from sentry_relay.processing import parse_release
 from slack_sdk.web import SlackResponse
@@ -20,7 +21,7 @@ from sentry.mail.analytics import EmailNotificationSent
 from sentry.models.activity import Activity
 from sentry.models.group import Group, GroupStatus
 from sentry.models.groupassignee import GroupAssignee
-from sentry.models.rule import Rule
+from sentry.models.organization import Organization
 from sentry.notifications.models.notificationsettingoption import NotificationSettingOption
 from sentry.notifications.notifications.activity.assigned import AssignedActivityNotification
 from sentry.notifications.notifications.activity.regression import RegressionActivityNotification
@@ -131,8 +132,8 @@ class ActivityNotificationTest(APITestCase):
         """
 
         # leave a comment
-        url = f"/api/0/issues/{self.group.id}/comments/"
-        with assume_test_silo_mode(SiloMode.REGION):
+        url = f"/api/0/organizations/{self.organization.slug}/issues/{self.group.id}/comments/"
+        with assume_test_silo_mode(SiloMode.CELL):
             with self.tasks():
                 response = self.client.post(url, format="json", data={"text": "blah blah"})
             assert response.status_code == 201, response.content
@@ -169,8 +170,8 @@ class ActivityNotificationTest(APITestCase):
         Test that an email AND Slack notification are sent with
         the expected values when an issue is unassigned.
         """
-        url = f"/api/0/issues/{self.group.id}/"
-        with assume_test_silo_mode(SiloMode.REGION):
+        url = f"/api/0/organizations/{self.organization.slug}/issues/{self.group.id}/"
+        with assume_test_silo_mode(SiloMode.CELL):
             GroupAssignee.objects.create(
                 group=self.group,
                 project=self.project,
@@ -190,12 +191,13 @@ class ActivityNotificationTest(APITestCase):
         assert f"{self.user.username}</strong> unassigned" in msg.alternatives[0][0]
 
         blocks = orjson.loads(mock_post.call_args.kwargs["blocks"])
+        block = blocks[1]["text"]["text"]
         footer = blocks[3]["elements"][0]["text"]
         text = mock_post.call_args.kwargs["text"]
 
         assert text == f"Issue unassigned by {self.name}"
-        assert self.group.title in blocks[1]["elements"][0]["elements"][-1]["text"]
-        title_link = blocks[1]["elements"][0]["elements"][-1]["url"]
+        assert self.group.title in block
+        title_link = block[13:][1:-1]  # removes emoji and <>
         notification_uuid = get_notification_uuid(title_link)
         assert (
             footer
@@ -237,8 +239,8 @@ class ActivityNotificationTest(APITestCase):
         Test that an email AND Slack notification are sent with
         the expected values when an issue is resolved.
         """
-        url = f"/api/0/issues/{self.group.id}/"
-        with assume_test_silo_mode(SiloMode.REGION):
+        url = f"/api/0/organizations/{self.organization.slug}/issues/{self.group.id}/"
+        with assume_test_silo_mode(SiloMode.CELL):
             with self.tasks():
                 response = self.client.put(url, format="json", data={"status": "resolved"})
             assert response.status_code == 200, response.content
@@ -252,11 +254,12 @@ class ActivityNotificationTest(APITestCase):
         assert f"{self.short_id}</a> as resolved</p>" in msg.alternatives[0][0]
 
         blocks = orjson.loads(mock_post.call_args.kwargs["blocks"])
+        block = blocks[1]["text"]["text"]
         footer = blocks[3]["elements"][0]["text"]
         text = mock_post.call_args.kwargs["text"]
 
-        assert self.group.title in blocks[1]["elements"][0]["elements"][-1]["text"]
-        title_link = blocks[1]["elements"][0]["elements"][-1]["url"]
+        assert self.group.title in block
+        title_link = block[13:][1:-1]  # removes emoji and <>
         notification_uuid = get_notification_uuid(title_link)
         assert (
             text
@@ -290,7 +293,7 @@ class ActivityNotificationTest(APITestCase):
                 actor_type="User",
                 category="",
             ),
-            exclude_fields=["category", "project_id", "actor_id", "actor_type"],
+            exclude_fields=["category", "id", "project_id", "actor_id", "actor_type"],
         )
 
     @patch("sentry.analytics.record")
@@ -304,7 +307,7 @@ class ActivityNotificationTest(APITestCase):
 
         release = self.create_release()
         version_parsed = self.version_parsed = parse_release(release.version)["description"]
-        with assume_test_silo_mode(SiloMode.REGION):
+        with assume_test_silo_mode(SiloMode.CELL):
             url = (
                 f"/api/0/organizations/{self.organization.slug}/releases/{release.version}/deploys/"
             )
@@ -365,7 +368,7 @@ class ActivityNotificationTest(APITestCase):
                 actor_type="User",
                 category="",
             ),
-            exclude_fields=["category", "project_id", "actor_id", "actor_type"],
+            exclude_fields=["category", "id", "project_id", "actor_id", "actor_type"],
         )
 
     @patch("sentry.analytics.record")
@@ -378,7 +381,7 @@ class ActivityNotificationTest(APITestCase):
         """
         # resolve and unresolve the issue
         ts = time() - 300
-        with assume_test_silo_mode(SiloMode.REGION):
+        with assume_test_silo_mode(SiloMode.CELL):
             manager = EventManager(make_event(event_id="a" * 32, checksum="a" * 32, timestamp=ts))
             with self.tasks():
                 event = manager.save(self.project.id)
@@ -409,11 +412,12 @@ class ActivityNotificationTest(APITestCase):
         assert f"{group.qualified_short_id}</a> as a regression</p>" in msg.alternatives[0][0]
 
         blocks = orjson.loads(mock_post.call_args.kwargs["blocks"])
+        block = blocks[1]["text"]["text"]
         footer = blocks[3]["elements"][0]["text"]
         text = mock_post.call_args.kwargs["text"]
 
         assert text == "Issue marked as regression"
-        title_link = blocks[1]["elements"][0]["elements"][-1]["url"]
+        title_link = block[13:][1:-1]  # removes emoji and <>
         notification_uuid = get_notification_uuid(title_link)
         assert (
             footer
@@ -442,8 +446,72 @@ class ActivityNotificationTest(APITestCase):
                 actor_type="User",
                 category="",
             ),
-            exclude_fields=["category", "project_id", "actor_id", "actor_type"],
+            exclude_fields=["category", "id", "project_id", "actor_id", "actor_type"],
         )
+
+    def test_regression_enhanced_privacy_context(self, mock_post: MagicMock) -> None:
+        with assume_test_silo_mode(SiloMode.CELL):
+            self.organization.update(flags=F("flags").bitor(Organization.flags.enhanced_privacy))
+            self.organization.refresh_from_db()
+
+            activity = Activity.objects.create(
+                project=self.project,
+                group=self.group,
+                type=ActivityType.SET_REGRESSION.value,
+                user_id=self.user.id,
+                data={"version": "1.0.0"},
+            )
+            notification = RegressionActivityNotification(activity)
+            context = notification.get_context()
+            assert context["enhanced_privacy"]
+
+    def test_regression_enhanced_privacy_subject(self, mock_post: MagicMock) -> None:
+        with assume_test_silo_mode(SiloMode.CELL):
+            self.organization.update(flags=F("flags").bitor(Organization.flags.enhanced_privacy))
+            self.organization.refresh_from_db()
+
+            activity = Activity.objects.create(
+                project=self.project,
+                group=self.group,
+                type=ActivityType.SET_REGRESSION.value,
+                user_id=self.user.id,
+                data={"version": "1.0.0"},
+            )
+            notification = RegressionActivityNotification(activity)
+            subject = notification.get_subject()
+            assert subject == self.group.qualified_short_id
+            assert self.group.title not in subject
+
+    def test_regression_enhanced_privacy_email(self, mock_post: MagicMock) -> None:
+        with assume_test_silo_mode(SiloMode.CELL):
+            self.organization.update(flags=F("flags").bitor(Organization.flags.enhanced_privacy))
+            self.organization.refresh_from_db()
+
+            activity = Activity.objects.create(
+                project=self.project,
+                group=self.group,
+                type=ActivityType.SET_REGRESSION.value,
+                user_id=self.user.id,
+                data={"version": "1.0.0"},
+            )
+            notification = RegressionActivityNotification(activity)
+            with self.tasks():
+                notification.send()
+
+            assert len(mail.outbox) >= 1
+            msg = mail.outbox[0]
+            assert isinstance(msg, EmailMultiAlternatives)
+
+            assert self.group.title not in msg.body
+            assert "regression" in msg.body
+            assert "enhanced privacy" in msg.body
+
+            html_content = msg.alternatives[0][0]
+            assert isinstance(html_content, str)
+            assert "enhanced privacy" in html_content
+
+            assert self.group.title not in msg.subject
+            assert self.group.qualified_short_id in msg.subject
 
     @patch("sentry.analytics.record")
     def test_sends_resolved_in_release_notification(
@@ -454,8 +522,8 @@ class ActivityNotificationTest(APITestCase):
         the expected values when an issue is resolved by a release.
         """
         release = self.create_release()
-        with assume_test_silo_mode(SiloMode.REGION):
-            url = f"/api/0/issues/{self.group.id}/"
+        with assume_test_silo_mode(SiloMode.CELL):
+            url = f"/api/0/organizations/{self.organization.slug}/issues/{self.group.id}/"
             with self.tasks():
                 response = self.client.put(
                     url,
@@ -479,12 +547,13 @@ class ActivityNotificationTest(APITestCase):
         )
 
         blocks = orjson.loads(mock_post.call_args.kwargs["blocks"])
+        block = blocks[1]["text"]["text"]
         footer = blocks[3]["elements"][0]["text"]
         text = mock_post.call_args.kwargs["text"]
 
         assert text == f"Issue marked as resolved in {parsed_version} by {self.name}"
-        assert self.group.title in blocks[1]["elements"][0]["elements"][-1]["text"]
-        title_link = blocks[1]["elements"][0]["elements"][-1]["url"]
+        assert self.group.title in block
+        title_link = block[13:][1:-1]  # removes emoji and <>
         notification_uuid = get_notification_uuid(title_link)
         assert (
             footer
@@ -513,7 +582,7 @@ class ActivityNotificationTest(APITestCase):
                 actor_type="User",
                 category="",
             ),
-            exclude_fields=["category", "project_id", "actor_id", "actor_type"],
+            exclude_fields=["category", "id", "project_id", "actor_id", "actor_type"],
         )
 
     def test_sends_processing_issue_notification(self, mock_post: MagicMock) -> None:
@@ -536,14 +605,10 @@ class ActivityNotificationTest(APITestCase):
             "targetType": "Member",
             "targetIdentifier": str(self.user.id),
         }
-        with assume_test_silo_mode(SiloMode.REGION):
-            Rule.objects.create(
-                project=self.project,
-                label="a rule",
-                data={
-                    "match": "all",
-                    "actions": [action_data],
-                },
+        with assume_test_silo_mode(SiloMode.CELL):
+            self.create_project_rule(
+                name="a rule",
+                action_data=[action_data],
             )
             min_ago = before_now(minutes=1).isoformat()
             event = self.store_event(
@@ -574,10 +639,11 @@ class ActivityNotificationTest(APITestCase):
         assert "Hello world</pre>" in msg.alternatives[0][0]
 
         blocks = orjson.loads(mock_post.call_args_list[0].kwargs["blocks"])
+        block = blocks[1]["text"]["text"]
         footer = blocks[4]["elements"][0]["text"]
 
-        assert "Hello world" in blocks[1]["elements"][0]["elements"][-1]["text"]
-        title_link = blocks[1]["elements"][0]["elements"][-1]["url"]
+        assert "Hello world" in block
+        title_link = block[13:][1:-1]  # removes emoji and <>
         notification_uuid = get_notification_uuid(title_link)
         assert (
             footer
@@ -606,5 +672,5 @@ class ActivityNotificationTest(APITestCase):
                 actor_type="User",
                 category="",
             ),
-            exclude_fields=["category", "project_id", "actor_id", "actor_type"],
+            exclude_fields=["category", "id", "project_id", "actor_id", "actor_type"],
         )

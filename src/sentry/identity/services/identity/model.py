@@ -4,6 +4,8 @@
 # defined, because we want to reflect on type annotations and avoid forward references.
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from pydantic import Field
+
 from sentry.hybridcloud.rpc import RpcModel
 
 if TYPE_CHECKING:
@@ -21,7 +23,7 @@ class RpcIdentity(RpcModel):
     idp_id: int  # IdentityProvider id
     user_id: int
     external_id: str
-    data: dict[str, Any]
+    data: dict[str, Any] = Field(repr=False)
 
     def get_identity(self) -> "Provider":
         from sentry.identity import get
@@ -38,6 +40,7 @@ class IdentityFilterArgs(TypedDict, total=False):
     id: int
     user_id: int
     identity_ext_id: str
+    identity_ext_ids: list[str]
     provider_id: int
     provider_ext_id: str
     provider_type: str

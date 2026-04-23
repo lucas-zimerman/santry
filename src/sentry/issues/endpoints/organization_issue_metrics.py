@@ -13,7 +13,7 @@ from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.helpers.environments import get_environments
 from sentry.api.utils import get_date_range_from_params
@@ -23,10 +23,10 @@ from sentry.models.organization import Organization
 from sentry.models.project import Project
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationIssueMetricsEndpoint(OrganizationEndpoint):
-    owner = ApiOwner.REPLAY
     publish_status = {"GET": ApiPublishStatus.PRIVATE}
+    owner = ApiOwner.DATA_BROWSING
 
     def get(self, request: Request, organization: Organization) -> Response:
         """Stats bucketed by time."""
@@ -267,7 +267,7 @@ def make_timeseries_result(
         "axis": axis,
         "groupBy": group,
         "meta": {
-            "interval": interval.seconds * 1000,
+            "interval": interval.total_seconds() * 1000,
             "isOther": is_other,
             "order": order,
             "valueType": "integer",

@@ -1,29 +1,31 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
+import {Button} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+import {ExternalLink} from '@sentry/scraps/link';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {hasEveryAccess} from 'sentry/components/acl/access';
-import Confirm from 'sentry/components/confirm';
-import {Button} from 'sentry/components/core/button';
-import {ExternalLink} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import EmptyMessage from 'sentry/components/emptyMessage';
-import TextField from 'sentry/components/forms/fields/textField';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {Confirm} from 'sentry/components/confirm';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
+import {TextField} from 'sentry/components/forms/fields/textField';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {IconDelete} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {ExternalTeam, Integration} from 'sentry/types/integrations';
 import type {Team} from 'sentry/types/organization';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {useApiQuery} from 'sentry/utils/queryClient';
 import {toTitleCase} from 'sentry/utils/string/toTitleCase';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
 import {ProjectPermissionAlert} from 'sentry/views/settings/project/projectPermissionAlert';
 
@@ -100,7 +102,7 @@ function TeamNotificationSettingsPanel({
   );
 
   return filteredExternalTeams.map(externalTeam => (
-    <FormFieldWrapper key={externalTeam.id}>
+    <Flex key={externalTeam.id} align="center" justify="start">
       <StyledFormField
         disabled
         label={
@@ -140,11 +142,11 @@ function TeamNotificationSettingsPanel({
           </Confirm>
         </Tooltip>
       </DeleteButtonWrapper>
-    </FormFieldWrapper>
+    </Flex>
   ));
 }
 
-function TeamNotificationSettings() {
+export default function TeamNotificationSettings() {
   const api = useApi();
   const params = useParams<{teamId: string}>();
   const organization = useOrganization();
@@ -156,7 +158,9 @@ function TeamNotificationSettings() {
     refetch: refetchTeam,
   } = useApiQuery<Team>(
     [
-      `/teams/${organization.slug}/${params.teamId}/`,
+      getApiUrl('/teams/$organizationIdOrSlug/$teamIdOrSlug/', {
+        path: {organizationIdOrSlug: organization.slug, teamIdOrSlug: params.teamId},
+      }),
       {
         query: {expand: ['externalTeams']},
       },
@@ -173,7 +177,9 @@ function TeamNotificationSettings() {
     refetch: refetchIntegrations,
   } = useApiQuery<Integration[]>(
     [
-      `/organizations/${organization.slug}/integrations/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/integrations/', {
+        path: {organizationIdOrSlug: organization.slug},
+      }),
       {
         query: {includeConfig: '0'},
       },
@@ -235,26 +241,19 @@ function TeamNotificationSettings() {
   );
 }
 
-export default TeamNotificationSettings;
-
 const NotDisabledText = styled('div')`
-  color: ${p => p.theme.textColor};
-  line-height: ${space(2)};
+  color: ${p => p.theme.tokens.content.primary};
+  line-height: ${p => p.theme.space.xl};
 `;
 const NotDisabledSubText = styled('div')`
-  color: ${p => p.theme.subText};
-  font-size: ${p => p.theme.fontSizeRelativeSmall};
+  color: ${p => p.theme.tokens.content.secondary};
+  font-size: ${p => p.theme.font.size.sm};
   line-height: 1.4;
-  margin-top: ${space(1)};
-`;
-const FormFieldWrapper = styled('div')`
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
+  margin-top: ${p => p.theme.space.md};
 `;
 const StyledFormField = styled(TextField)`
   flex: 1;
 `;
 const DeleteButtonWrapper = styled('div')`
-  margin-right: ${space(2)};
+  margin-right: ${p => p.theme.space.xl};
 `;

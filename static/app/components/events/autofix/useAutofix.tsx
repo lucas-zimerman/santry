@@ -1,22 +1,33 @@
 import {useCallback, useMemo, useState} from 'react';
+import {useMutation, useQueryClient} from '@tanstack/react-query';
 
+import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
+import {openModal} from 'sentry/actionCreators/modal';
+import {AutofixCursorGithubAccessModal} from 'sentry/components/events/autofix/autofixCursorGithubAccessModal';
+import {AutofixGithubAppPermissionsModal} from 'sentry/components/events/autofix/autofixGithubAppPermissionsModal';
+import {AutofixGithubCopilotPurchaseModal} from 'sentry/components/events/autofix/autofixGithubCopilotPurchaseModal';
 import {
   AutofixStatus,
   AutofixStepType,
+  AutofixStoppingPoint,
+  CodingAgentStatus,
   type AutofixData,
   type GroupWithAutofix,
 } from 'sentry/components/events/autofix/types';
+import {t} from 'sentry/locale';
 import type {Event} from 'sentry/types/event';
+import type {Organization} from 'sentry/types/organization';
+import {apiOptions} from 'sentry/utils/api/apiOptions';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {
+  fetchMutation,
   setApiQueryData,
   useApiQuery,
-  useQueryClient,
   type ApiQueryKey,
-  type UseApiQueryOptions,
 } from 'sentry/utils/queryClient';
-import type RequestError from 'sentry/utils/requestError/requestError';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
+import type {RequestError} from 'sentry/utils/requestError/requestError';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 export type AutofixResponse = {
   autofix: AutofixData | null;
@@ -29,8 +40,13 @@ export const makeAutofixQueryKey = (
   groupId: string,
   isUserWatching = false
 ): ApiQueryKey => [
-  `/organizations/${orgSlug}/issues/${groupId}/autofix/`,
-  {query: {isUserWatching: isUserWatching ? true : false}},
+  getApiUrl('/organizations/$organizationIdOrSlug/issues/$issueId/autofix/', {
+    path: {
+      organizationIdOrSlug: orgSlug,
+      issueId: groupId,
+    },
+  }),
+  {query: {isUserWatching: isUserWatching ? true : false, mode: 'legacy'}},
 ];
 
 const makeInitialAutofixData = (): AutofixResponse => ({
@@ -118,7 +134,9 @@ const isPolling = (
 
   if (
     !hasSolutionStep &&
-    ![AutofixStatus.ERROR, AutofixStatus.CANCELLED].includes(autofixData.status)
+    ![AutofixStatus.ERROR, AutofixStatus.CANCELLED, AutofixStatus.COMPLETED].includes(
+      autofixData.status
+    )
   ) {
     // we want to keep polling until we have a solution step because that's a stopping point
     // we need this explicit check in case we get a state for a fraction of a second where the root cause is complete and there is no step after it started
@@ -127,6 +145,18 @@ const isPolling = (
 
   // Continue polling if there's an active comment thread, even if the run is completed
   if (!isSidebar && hasActiveCommentThread) {
+    return true;
+  }
+
+  // Poll while coding agent state is pending or running
+  if (
+    autofixData.coding_agents &&
+    Object.values(autofixData.coding_agents).some(
+      agent =>
+        agent.status === CodingAgentStatus.PENDING ||
+        agent.status === CodingAgentStatus.RUNNING
+    )
+  ) {
     return true;
   }
 
@@ -215,11 +245,11 @@ export const useAiAutofix = (
         return false;
       },
       refetchOnWindowFocus: 'always',
-    } as UseApiQueryOptions<AutofixResponse, RequestError>
+    }
   );
 
   const triggerAutofix = useCallback(
-    async (instruction: string) => {
+    async (instruction: string, stoppingPoint?: AutofixStoppingPoint) => {
       setIsReset(false);
       setCurrentRunId(null);
       setWaitingForNextRun(true);
@@ -234,9 +264,11 @@ export const useAiAutofix = (
           `/organizations/${orgSlug}/issues/${group.id}/autofix/`,
           {
             method: 'POST',
+            query: {mode: 'legacy'},
             data: {
               event_id: event.id,
               instruction,
+              ...(stoppingPoint && {stopping_point: stoppingPoint}),
             },
           }
         );
@@ -287,3 +319,161 @@ export const useAiAutofix = (
     reset,
   };
 };
+
+export type CodingAgentIntegration = {
+  id: string | null;
+  name: string;
+  provider: string;
+  has_identity?: boolean;
+  requires_identity?: boolean;
+};
+
+export function organizationIntegrationsCodingAgents(organization: Organization) {
+  return apiOptions.as<{
+    integrations: CodingAgentIntegration[];
+  }>()('/organizations/$organizationIdOrSlug/integrations/coding-agents/', {
+    path: {organizationIdOrSlug: organization.slug},
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+interface LaunchCodingAgentParams {
+  agentName: string;
+  integrationId: string | null;
+  provider: string;
+  instruction?: string;
+  triggerSource?: 'root_cause' | 'solution';
+}
+
+interface LaunchCodingAgentResponse {
+  failed_count: number;
+  launched_count: number;
+  success: boolean;
+  failures?: Array<{
+    error_message: string;
+    repo_name: string;
+    failure_type?: string;
+    github_installation_id?: string;
+  }>;
+}
+
+function getErrorMessage(error: RequestError, agentName: string): string {
+  const detail = error.responseJSON?.detail;
+
+  if (detail && typeof detail === 'string') {
+    return detail;
+  }
+
+  return t('Failed to launch %s', agentName);
+}
+
+export function needsGitHubAuth(error: RequestError): boolean {
+  const detail = error.responseJSON?.detail;
+  return (
+    typeof detail === 'string' &&
+    detail.toLowerCase().includes('github') &&
+    detail.toLowerCase().includes('authorization')
+  );
+}
+
+export function useLaunchCodingAgent(groupId: string, runId: string) {
+  const organization = useOrganization();
+  const queryClient = useQueryClient();
+
+  return useMutation<LaunchCodingAgentResponse, RequestError, LaunchCodingAgentParams>({
+    mutationFn: (params: LaunchCodingAgentParams) => {
+      const data: Record<string, string | number | undefined> = {
+        run_id: parseInt(runId, 10),
+        trigger_source: params.triggerSource,
+        instruction: params.instruction,
+      };
+
+      if (params.integrationId === null) {
+        data.provider = params.provider;
+      } else {
+        data.integration_id = parseInt(params.integrationId, 10);
+      }
+
+      return fetchMutation({
+        url: `/organizations/${organization.slug}/integrations/coding-agents/`,
+        method: 'POST',
+        data,
+      });
+    },
+    onSuccess: (data, params) => {
+      if (data.failures && data.failures.length > 0) {
+        const permissionFailures = data.failures.filter(
+          f => f.failure_type === 'github_app_permissions'
+        );
+        const copilotLicenseFailures = data.failures.filter(
+          f => f.failure_type === 'github_copilot_not_licensed'
+        );
+        const cursorGithubAccessFailures = data.failures.filter(
+          f => f.failure_type === 'cursor_github_access'
+        );
+        const otherFailures = data.failures.filter(
+          f =>
+            f.failure_type !== 'github_app_permissions' &&
+            f.failure_type !== 'github_copilot_not_licensed' &&
+            f.failure_type !== 'cursor_github_access'
+        );
+
+        if (permissionFailures.length > 0) {
+          const installationId = permissionFailures[0]?.github_installation_id;
+          const installationUrl = installationId
+            ? `https://github.com/settings/installations/${installationId}`
+            : undefined;
+          openModal(deps => (
+            <AutofixGithubAppPermissionsModal
+              {...deps}
+              installationUrl={installationUrl}
+            />
+          ));
+        }
+
+        if (copilotLicenseFailures.length > 0) {
+          openModal(deps => <AutofixGithubCopilotPurchaseModal {...deps} />);
+        }
+
+        if (cursorGithubAccessFailures.length > 0) {
+          openModal(deps => <AutofixCursorGithubAccessModal {...deps} />);
+        }
+
+        otherFailures.forEach(failure => {
+          addErrorMessage(t('%s: %s', failure.repo_name, failure.error_message));
+        });
+
+        if (data.launched_count > 0) {
+          const successRepoText =
+            data.launched_count === 1
+              ? t('%s launched for 1 repository', params.agentName)
+              : t(
+                  '%s launched for %s repositories',
+                  params.agentName,
+                  data.launched_count
+                );
+          addSuccessMessage(successRepoText);
+        }
+      } else {
+        addSuccessMessage(t('%s launched successfully', params.agentName));
+      }
+
+      queryClient.invalidateQueries({
+        queryKey: makeAutofixQueryKey(organization.slug, groupId, false),
+      });
+      queryClient.invalidateQueries({
+        queryKey: makeAutofixQueryKey(organization.slug, groupId, true),
+      });
+    },
+    onError: (error, params) => {
+      if (needsGitHubAuth(error)) {
+        const currentUrl = window.location.href;
+        const oauthUrl = `/remote/github-copilot/oauth/?next=${encodeURIComponent(currentUrl)}`;
+        window.location.href = oauthUrl;
+        return;
+      }
+      const message = getErrorMessage(error, params.agentName);
+      addErrorMessage(message);
+    },
+  });
+}

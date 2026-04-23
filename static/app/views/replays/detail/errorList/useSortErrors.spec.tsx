@@ -1,25 +1,10 @@
 import {RawReplayErrorFixture} from 'sentry-fixture/replay/error';
 import {ReplayRecordFixture} from 'sentry-fixture/replayRecord';
 
-import {act, renderHook} from 'sentry-test/reactTestingLibrary';
+import {act, renderHookWithProviders} from 'sentry-test/reactTestingLibrary';
 
-import hydrateErrors from 'sentry/utils/replays/hydrateErrors';
-import useSortErrors from 'sentry/views/replays/detail/errorList/useSortErrors';
-
-jest.mock('sentry/utils/url/useUrlParams', () => {
-  const map = new Map();
-  return (name: any, dflt: any) => {
-    if (!map.has(name)) {
-      map.set(name, dflt);
-    }
-    return {
-      getParamValue: () => map.get(name),
-      setParamValue: (value: any) => {
-        map.set(name, value);
-      },
-    };
-  };
-});
+import {hydrateErrors} from 'sentry/utils/replays/hydrateErrors';
+import {useSortErrors} from 'sentry/views/replays/detail/errorList/useSortErrors';
 
 const {
   errorFrames: [ERROR_1_JS_RANGEERROR, ERROR_2_NEXTJS_TYPEERROR, ERROR_3_JS_UNDEFINED],
@@ -42,7 +27,7 @@ const {
       id: 'ac43b19f1886bb41ddab96415ecb5c85',
       'issue.id': 22,
       issue: 'NEXTJS-TYPE',
-      title: `undefined is not an object (evaluating 'e.apply').`,
+      title: "undefined is not an object (evaluating 'e.apply').",
       level: 'error',
       'project.name': 'next-js',
     }),
@@ -52,7 +37,7 @@ const {
       id: '9f1886bb41ddab96415ecb5c85ac43b1',
       'issue.id': 22,
       issue: 'JAVASCRIPT-UNDEF',
-      title: `Maximum update depth exceeded`,
+      title: 'Maximum update depth exceeded',
       level: 'error',
       'project.name': 'javascript',
     }),
@@ -67,7 +52,7 @@ describe('useSortErrors', () => {
   ];
 
   it('should the list by timestamp by default', () => {
-    const {result} = renderHook(useSortErrors, {
+    const {result} = renderHookWithProviders(useSortErrors, {
       initialProps: {items},
     });
 
@@ -84,7 +69,7 @@ describe('useSortErrors', () => {
   });
 
   it('should reverse the sort order', () => {
-    const {result, rerender} = renderHook(useSortErrors, {
+    const {result, rerender} = renderHookWithProviders(useSortErrors, {
       initialProps: {items},
     });
 
@@ -107,7 +92,7 @@ describe('useSortErrors', () => {
   });
 
   it('should sort by the title field', () => {
-    const {result, rerender} = renderHook(useSortErrors, {
+    const {result, rerender} = renderHookWithProviders(useSortErrors, {
       initialProps: {items},
     });
 
@@ -135,7 +120,7 @@ describe('useSortErrors', () => {
       ERROR_2_NEXTJS_TYPEERROR!,
       ERROR_1_JS_RANGEERROR!,
     ];
-    const {result, rerender} = renderHook(useSortErrors, {
+    const {result, rerender} = renderHookWithProviders(useSortErrors, {
       initialProps: {items: mixedItems},
     });
 

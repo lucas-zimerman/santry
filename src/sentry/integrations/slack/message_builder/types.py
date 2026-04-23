@@ -20,6 +20,15 @@ class SlackAction(StrEnum):
     RESOLVE_DIALOG = "resolve_dialog"
     ARCHIVE_DIALOG = "archive_dialog"
     ASSIGN = "assign"
+    # Older, /sentry link workflows send a hyperlink. Newer ones use a button block.
+    LINK_IDENTITY = "link_identity"
+    # Hyperlinks to specific sentry pages
+    LINK_TO_INTEGRATION = "link_to_integration"
+    LINK_TO_SEER = "link_to_seer"
+
+    SEER_AUTOFIX_START = "seer_autofix_start"
+    SEER_AUTOFIX_VIEW_IN_SENTRY = "seer_autofix_view_in_sentry"
+    SEER_AUTOFIX_VIEW_PR = "seer_autofix_view_pr"
 
 
 INCIDENT_COLOR_MAPPING = {
@@ -31,24 +40,24 @@ INCIDENT_COLOR_MAPPING = {
 SLACK_URL_FORMAT = "<{url}|{text}>"
 
 LEVEL_TO_EMOJI = {
-    "_incident_resolved": ["green_circle"],
-    "debug": ["bug"],
-    "error": ["red_circle"],
-    "fatal": ["red_circle"],
-    "info": ["large_blue_circle"],
-    "warning": ["large_yellow_circle"],
+    "_incident_resolved": [":green_circle:"],
+    "debug": [":bug:"],
+    "error": [":red_circle:"],
+    "fatal": [":red_circle:"],
+    "info": [":large_blue_circle:"],
+    "warning": [":large_yellow_circle:"],
 }
 
-ACTION_EMOJI = ["white_circle"]
+ACTION_EMOJI = [":white_circle:"]
 
 CATEGORY_TO_EMOJI = {
-    GroupCategory.PERFORMANCE: ["large_blue_circle", "chart_with_upwards_trend"],
-    GroupCategory.FEEDBACK: ["large_blue_circle", "busts_in_silhouette"],
-    GroupCategory.CRON: ["large_yellow_circle", "spiral_calendar_pad"],
+    GroupCategory.PERFORMANCE: [":large_blue_circle:", ":chart_with_upwards_trend:"],
+    GroupCategory.FEEDBACK: [":large_blue_circle:", ":busts_in_silhouette:"],
+    GroupCategory.CRON: [":large_yellow_circle:", ":spiral_calendar_pad:"],
 }
 
 ACTIONED_CATEGORY_TO_EMOJI: dict[GroupCategory, list[str]] = {
-    GroupCategory.PERFORMANCE: [ACTION_EMOJI[0], "chart_with_upwards_trend"],
-    GroupCategory.FEEDBACK: [ACTION_EMOJI[0], "busts_in_silhouette"],
-    GroupCategory.CRON: [ACTION_EMOJI[0], "spiral_calendar_pad"],
+    GroupCategory.PERFORMANCE: [ACTION_EMOJI[0], ":chart_with_upwards_trend:"],
+    GroupCategory.FEEDBACK: [ACTION_EMOJI[0], ":busts_in_silhouette:"],
+    GroupCategory.CRON: [ACTION_EMOJI[0], ":spiral_calendar_pad:"],
 }

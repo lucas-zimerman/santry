@@ -1,4 +1,3 @@
-import type {Theme} from '@emotion/react';
 import type {FocusTrap} from 'focus-trap';
 
 import type {ApiResult} from 'sentry/api';
@@ -68,10 +67,6 @@ declare global {
      */
     __openAllTooltips: () => void;
     /**
-     * Pipeline
-     */
-    __pipelineInitialData: PipelineInitialData;
-    /**
      * Assets public location
      */
     __sentryGlobalStaticPrefix: string;
@@ -127,6 +122,12 @@ declare global {
      */
     superUserCookieName?: string;
   }
+  interface FocusOptions {
+    /**
+     * https://developer.mozilla.org/en-US/docs/Web/API/HTMLElement/focus#focusvisible
+     */
+    focusVisible?: boolean;
+  }
 }
 
 export interface Region {
@@ -173,7 +174,11 @@ export interface Config {
   /**
    * This comes from django (django.contrib.messages)
    */
-  messages: Array<{level: keyof Theme['alert']; message: string}>;
+  messages: Array<{
+    // Default django message level tags. See client config in ./src/sentry/web/client_config.py
+    level: 'debug' | 'info' | 'success' | 'warning' | 'error';
+    message: string;
+  }>;
   needsUpgrade: boolean;
   privacyUrl: string | null;
   // The list of regions the user has has access to.
@@ -216,6 +221,7 @@ export interface Config {
     latest: string;
     upgradeAvailable: boolean;
   };
+  intercomAppId?: string;
   partnershipAgreementPrompt?: {
     agreements: ParntershipAgreementType[];
     partnerDisplayName: string;
@@ -229,11 +235,6 @@ export interface Config {
     id: string;
   };
 }
-
-export type PipelineInitialData = {
-  name: string;
-  props: Record<string, any>;
-};
 
 export interface Broadcast {
   dateCreated: string;
@@ -369,10 +370,6 @@ interface StatusPageAffectedComponent {
 
 export interface StatusPageIncidentUpdate {
   /**
-   * Components affected by the update
-   */
-  affected_components: StatusPageAffectedComponent[];
-  /**
    * Message to display for this update
    */
   body: string;
@@ -400,6 +397,10 @@ export interface StatusPageIncidentUpdate {
    * ISO Update update time
    */
   updated_at: string;
+  /**
+   * Components affected by the update
+   */
+  affected_components?: StatusPageAffectedComponent[];
 }
 
 // See: https://doers.statuspage.io/api/v2/incidents/

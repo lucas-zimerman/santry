@@ -1,26 +1,34 @@
+import React from 'react';
+import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import type {Location} from 'history';
 import pick from 'lodash/pick';
 
+import {Badge, FeatureBadge} from '@sentry/scraps/badge';
+import {Flex} from '@sentry/scraps/layout';
+import {ExternalLink} from '@sentry/scraps/link';
+import {TabList} from '@sentry/scraps/tabs';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {Breadcrumbs} from 'sentry/components/breadcrumbs';
 import {CopyToClipboardButton} from 'sentry/components/copyToClipboardButton';
-import {Badge} from 'sentry/components/core/badge';
-import {ExternalLink} from 'sentry/components/core/link';
-import {TabList} from 'sentry/components/core/tabs';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import IdBadge from 'sentry/components/idBadge';
+import {FeedbackButton} from 'sentry/components/feedbackButton/feedbackButton';
+import {IdBadge} from 'sentry/components/idBadge';
 import * as Layout from 'sentry/components/layouts/thirds';
-import Version from 'sentry/components/version';
-import {URL_PARAM} from 'sentry/constants/pageFilters';
+import {URL_PARAM} from 'sentry/components/pageFilters/constants';
+import {Version} from 'sentry/components/version';
 import {IconOpen} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import type {Release, ReleaseMeta, ReleaseProject} from 'sentry/types/release';
 import {formatAbbreviatedNumber} from 'sentry/utils/formatters';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
+import {isMobileRelease} from 'sentry/views/releases/utils';
 import {makeReleasesPathname} from 'sentry/views/releases/utils/pathnames';
 
-import ReleaseActions from './releaseActions';
+import {ReleaseActions, releaseFeedbackOptions} from './releaseActions';
 
 type Props = {
   location: Location;
@@ -31,7 +39,7 @@ type Props = {
   releaseMeta: ReleaseMeta;
 };
 
-function ReleaseHeader({
+export function ReleaseHeader({
   location,
   organization,
   release,
@@ -39,8 +47,33 @@ function ReleaseHeader({
   releaseMeta,
   refetchData,
 }: Props) {
+  const hasPageFrameFeature = useHasPageFrameFeature();
   const {version, url} = release;
   const {commitCount, commitFilesChanged} = releaseMeta;
+
+  const titleContent = (
+    <React.Fragment>
+      <IdBadge project={project} avatarSize={16} hideName />
+      <Version version={version} anchor={false} truncate />
+      <CopyToClipboardButton
+        className="release-copy-button"
+        priority="transparent"
+        size="zero"
+        text={version}
+        tooltipProps={{title: version}}
+        aria-label={t('Copy release version to clipboard')}
+      />
+      {!!url && (
+        <IconWrapper>
+          <Tooltip title={url}>
+            <ExternalLink href={url}>
+              <IconOpen />
+            </ExternalLink>
+          </Tooltip>
+        </IconWrapper>
+      )}
+    </React.Fragment>
+  );
 
   const releasePath = makeReleasesPathname({
     organization,
@@ -52,37 +85,53 @@ function ReleaseHeader({
     {
       title: tct('Commits [count]', {
         count: (
-          <NavTabsBadge type="default">
+          <NavTabsBadge variant="muted">
             {formatAbbreviatedNumber(commitCount)}
           </NavTabsBadge>
         ),
       }),
-      to: `commits/`,
+      textValue: t('Commits %s', formatAbbreviatedNumber(commitCount)),
+      to: 'commits/',
     },
     {
       title: tct('Files Changed [count]', {
         count: (
-          <NavTabsBadge type="default">
+          <NavTabsBadge variant="muted">
             {formatAbbreviatedNumber(commitFilesChanged)}
           </NavTabsBadge>
         ),
       }),
-      to: `files-changed/`,
+      textValue: t('Files Changed %s', formatAbbreviatedNumber(commitFilesChanged)),
+      to: 'files-changed/',
     },
   ];
 
   const numberOfMobileBuilds = releaseMeta.preprodBuildCount;
-  if (numberOfMobileBuilds) {
-    tabs.push({
-      title: tct('Builds [count]', {
-        count: (
-          <NavTabsBadge type="default">
-            {formatAbbreviatedNumber(numberOfMobileBuilds)}
-          </NavTabsBadge>
+
+  const buildsTab = {
+    title: tct('Mobile Builds [count]', {
+      count:
+        numberOfMobileBuilds === 0 ? (
+          <BadgeWrapper>
+            <FeatureBadge type="new" />
+          </BadgeWrapper>
+        ) : (
+          <React.Fragment>
+            <NavTabsBadge variant="muted">
+              {formatAbbreviatedNumber(numberOfMobileBuilds)}
+            </NavTabsBadge>
+            <BadgeWrapper>
+              <FeatureBadge type="new" />
+            </BadgeWrapper>
+          </React.Fragment>
         ),
-      }),
-      to: `builds/`,
-    });
+    }),
+    textValue: t('Mobile Builds %s', numberOfMobileBuilds),
+    to: 'builds/',
+  };
+
+  if (numberOfMobileBuilds || isMobileRelease(project.platform, false)) {
+    tabs.push(buildsTab);
   }
 
   const getTabUrl = (path: string) =>
@@ -106,57 +155,77 @@ function ReleaseHeader({
   return (
     <Layout.Header>
       <Layout.HeaderContent>
-        <Breadcrumbs
-          crumbs={[
-            {
-              to: makeReleasesPathname({
-                organization,
-                path: '/',
-              }),
-              label: t('Releases'),
-              preservePageFilters: true,
-            },
-            {label: t('Release Details')},
-          ]}
-        />
-        <Layout.Title>
-          <IdBadge project={project} avatarSize={28} hideName />
-          <Version version={version} anchor={false} truncate />
-          <IconWrapper>
-            <CopyToClipboardButton
-              borderless
-              size="zero"
-              text={version}
-              title={version}
+        {hasPageFrameFeature ? (
+          <TopBar.Slot name="title">
+            <Breadcrumbs
+              crumbs={[
+                {
+                  to: makeReleasesPathname({organization, path: '/'}),
+                  label: t('Releases'),
+                  preservePageFilters: true,
+                },
+                {
+                  label: (
+                    <Flex align="center" gap="md" minWidth={0} css={titleWrapperStyles}>
+                      {titleContent}
+                    </Flex>
+                  ),
+                },
+              ]}
             />
-          </IconWrapper>
-          {!!url && (
-            <IconWrapper>
-              <Tooltip title={url}>
-                <ExternalLink href={url}>
-                  <IconOpen />
-                </ExternalLink>
-              </Tooltip>
-            </IconWrapper>
-          )}
-        </Layout.Title>
+          </TopBar.Slot>
+        ) : (
+          <React.Fragment>
+            <Breadcrumbs
+              crumbs={[
+                {
+                  to: makeReleasesPathname({organization, path: '/'}),
+                  label: t('Releases'),
+                  preservePageFilters: true,
+                },
+                {label: t('Release Details')},
+              ]}
+            />
+            <Layout.Title>{titleContent}</Layout.Title>
+          </React.Fragment>
+        )}
       </Layout.HeaderContent>
 
-      <Layout.HeaderActions>
-        <ReleaseActions
-          organization={organization}
-          projectSlug={project.slug}
-          release={release}
-          releaseMeta={releaseMeta}
-          refetchData={refetchData}
-          location={location}
-        />
-      </Layout.HeaderActions>
+      {hasPageFrameFeature ? (
+        <React.Fragment>
+          <TopBar.Slot name="actions">
+            <ReleaseActions
+              projectSlug={project.slug}
+              release={release}
+              releaseMeta={releaseMeta}
+              refetchData={refetchData}
+              showFeedbackButton={false}
+            />
+          </TopBar.Slot>
+          <TopBar.Slot name="feedback">
+            <FeedbackButton
+              feedbackOptions={releaseFeedbackOptions}
+              aria-label={t('Give Feedback')}
+            >
+              {null}
+            </FeedbackButton>
+          </TopBar.Slot>
+        </React.Fragment>
+      ) : (
+        <Layout.HeaderActions>
+          <ReleaseActions
+            projectSlug={project.slug}
+            release={release}
+            releaseMeta={releaseMeta}
+            refetchData={refetchData}
+          />
+        </Layout.HeaderActions>
+      )}
 
       <Layout.HeaderTabs value={getActiveTabTo()}>
-        <TabList hideBorder>
+        <TabList>
           {tabs.map(tab => (
-            <TabList.Item key={tab.to} to={getTabUrl(tab.to)}>
+            <TabList.Item key={tab.to} to={getTabUrl(tab.to)} textValue={tab.textValue}>
               {tab.title}
             </TabList.Item>
           ))}
@@ -166,16 +235,28 @@ function ReleaseHeader({
   );
 }
 
+const titleWrapperStyles = css`
+  line-height: 1;
+
+  .release-copy-button {
+    display: none;
+  }
+
+  &:hover .release-copy-button {
+    display: inline-flex;
+  }
+`;
+
 const IconWrapper = styled('span')`
   transition: color 0.3s ease-in-out;
 
   &,
   a {
-    color: ${p => p.theme.subText};
+    color: ${p => p.theme.tokens.content.secondary};
     display: flex;
     &:hover {
       cursor: pointer;
-      color: ${p => p.theme.textColor};
+      color: ${p => p.theme.tokens.content.primary};
     }
   }
 `;
@@ -186,4 +267,6 @@ const NavTabsBadge = styled(Badge)`
   }
 `;
 
-export default ReleaseHeader;
+const BadgeWrapper = styled('div')`
+  margin-left: 0;
+`;

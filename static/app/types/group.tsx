@@ -1,7 +1,7 @@
 import type {LocationDescriptor} from 'history';
 
-import type {SearchGroup} from 'sentry/components/deprecatedSmartSearchBar/types';
-import type {TitledPlugin} from 'sentry/components/group/pluginActions';
+import type {TitledPlugin} from 'sentry/components/group/pluginActionsModal';
+import type {SearchGroup} from 'sentry/components/searchBar/types';
 import {t} from 'sentry/locale';
 import type {FieldKind} from 'sentry/utils/fields';
 
@@ -62,6 +62,9 @@ export enum SavedSearchType {
   ERROR = 6,
   TRANSACTION = 7,
   LOG = 8,
+  TRACEMETRIC = 9,
+  PREPROD_APP_SIZE = 10,
+  // This and src/sentry/models/search_common.py must be updated together.
 }
 
 export enum IssueCategory {
@@ -95,19 +98,28 @@ export enum IssueCategory {
    */
   METRIC_ALERT = 'metric_alert',
 
-  // New issue categories (under the issue-taxonomy flag)
   OUTAGE = 'outage',
   METRIC = 'metric',
   FRONTEND = 'frontend',
   HTTP_CLIENT = 'http_client',
   DB_QUERY = 'db_query',
   MOBILE = 'mobile',
+
+  AI_DETECTED = 'ai_detected',
+
+  PREPROD = 'preprod',
+
+  INSTRUMENTATION = 'instrumentation',
+
+  CONFIGURATION = 'configuration',
 }
 
 /**
- * Valid issue categories for the new issue-taxonomy flag
+ * These are issue categories that are generally filterable in the UI.
+ * Do not include deprecated or test categories.
  */
-export const VALID_ISSUE_CATEGORIES_V2 = [
+
+export const VALID_ISSUE_CATEGORIES = [
   IssueCategory.ERROR,
   IssueCategory.OUTAGE,
   IssueCategory.METRIC,
@@ -116,6 +128,8 @@ export const VALID_ISSUE_CATEGORIES_V2 = [
   IssueCategory.FRONTEND,
   IssueCategory.MOBILE,
   IssueCategory.FEEDBACK,
+  IssueCategory.PREPROD,
+  IssueCategory.CONFIGURATION,
 ];
 
 export const ISSUE_CATEGORY_TO_DESCRIPTION: Record<IssueCategory, string> = {
@@ -132,6 +146,14 @@ export const ISSUE_CATEGORY_TO_DESCRIPTION: Record<IssueCategory, string> = {
   [IssueCategory.CRON]: '',
   [IssueCategory.REPLAY]: '',
   [IssueCategory.UPTIME]: '',
+  [IssueCategory.AI_DETECTED]: t('AI detected issues.'),
+  [IssueCategory.PREPROD]: t('Problems detected via static analysis.'),
+  [IssueCategory.INSTRUMENTATION]: t(
+    'Improvements to your instrumentation and SDK usage.'
+  ),
+  [IssueCategory.CONFIGURATION]: t(
+    'Issues detected from SDK/tooling configuration problems.'
+  ),
 };
 
 export enum IssueType {
@@ -178,10 +200,50 @@ export enum IssueType {
 
   // Insights Web Vitals
   WEB_VITALS = 'web_vitals',
+
+  LLM_DETECTED_EXPERIMENTAL = 'llm_detected_experimental',
+  LLM_DETECTED_EXPERIMENTAL_V2 = 'llm_detected_experimental_v2',
+  AI_DETECTED_HTTP = 'ai_detected_http',
+  AI_DETECTED_DB = 'ai_detected_db',
+  AI_DETECTED_RUNTIME_PERFORMANCE = 'ai_detected_runtime_performance',
+  AI_DETECTED_SECURITY = 'ai_detected_security',
+  AI_DETECTED_CODE_HEALTH = 'ai_detected_code_health',
+  AI_DETECTED_GENERAL = 'ai_detected_general',
+
+  // Preprod
+  PREPROD_STATIC = 'preprod_static',
+  PREPROD_DELTA = 'preprod_delta',
+  PREPROD_SIZE_ANALYSIS = 'preprod_size_analysis',
+
+  // Configuration Issues
+  SOURCEMAP_CONFIGURATION = 'sourcemap_configuration',
 }
 
+// Issue types that should not be visible to users anywhere in the UI
 // Update this if adding an issue type that you don't want to show up in search!
-export const VISIBLE_ISSUE_TYPES = Object.values(IssueType);
+const HIDDEN_ISSUE_TYPES: IssueType[] = [
+  IssueType.LLM_DETECTED_EXPERIMENTAL,
+  IssueType.LLM_DETECTED_EXPERIMENTAL_V2,
+  IssueType.AI_DETECTED_HTTP,
+  IssueType.AI_DETECTED_DB,
+  IssueType.AI_DETECTED_RUNTIME_PERFORMANCE,
+  IssueType.AI_DETECTED_SECURITY,
+  IssueType.AI_DETECTED_CODE_HEALTH,
+  IssueType.AI_DETECTED_GENERAL,
+];
+
+export const AI_DETECTED_ISSUE_TYPES = new Set<IssueType>([
+  IssueType.AI_DETECTED_HTTP,
+  IssueType.AI_DETECTED_DB,
+  IssueType.AI_DETECTED_RUNTIME_PERFORMANCE,
+  IssueType.AI_DETECTED_SECURITY,
+  IssueType.AI_DETECTED_CODE_HEALTH,
+  IssueType.AI_DETECTED_GENERAL,
+]);
+
+export const VISIBLE_ISSUE_TYPES = Object.values(IssueType).filter(
+  type => !HIDDEN_ISSUE_TYPES.includes(type)
+);
 
 export enum IssueTitle {
   ERROR = 'Error',
@@ -196,7 +258,7 @@ export enum IssueTitle {
   PERFORMANCE_SLOW_DB_QUERY = 'Slow DB Query',
   PERFORMANCE_RENDER_BLOCKING_ASSET = 'Large Render Blocking Asset',
   PERFORMANCE_UNCOMPRESSED_ASSET = 'Uncompressed Asset',
-  PERFORMANCE_LARGE_HTTP_PAYLOAD = 'Large HTTP payload',
+  PERFORMANCE_LARGE_HTTP_PAYLOAD = 'Large HTTP Payload',
   PERFORMANCE_HTTP_OVERHEAD = 'HTTP/1.1 Overhead',
   PERFORMANCE_ENDPOINT_REGRESSION = 'Endpoint Regression',
 
@@ -225,6 +287,22 @@ export enum IssueTitle {
 
   // Insights Web Vitals
   WEB_VITALS = 'Web Vitals',
+
+  LLM_DETECTED_EXPERIMENTAL = 'LLM Detected Issue',
+  LLM_DETECTED_EXPERIMENTAL_V2 = 'LLM Detected Issue V2',
+  AI_DETECTED_HTTP = 'AI Detected HTTP Issue',
+  AI_DETECTED_DB = 'AI Detected Database Issue',
+  AI_DETECTED_RUNTIME_PERFORMANCE = 'AI Detected Runtime Performance Issue',
+  AI_DETECTED_SECURITY = 'AI Detected Security Issue',
+  AI_DETECTED_CODE_HEALTH = 'AI Detected Code Health Issue',
+  AI_DETECTED_GENERAL = 'AI Detected Issue',
+
+  PREPROD_STATIC = 'Static Analysis',
+  PREPROD_DELTA = 'Static Analysis Delta',
+  PREPROD_SIZE_ANALYSIS = 'Size Analysis',
+
+  // Configuration Issues
+  SOURCEMAP_CONFIGURATION = 'Missing or Broken Source Maps',
 }
 
 export const ISSUE_TYPE_TO_ISSUE_TITLE = {
@@ -262,6 +340,21 @@ export const ISSUE_TYPE_TO_ISSUE_TITLE = {
   uptime_domain_failure: IssueTitle.UPTIME_DOMAIN_FAILURE,
 
   web_vitals: IssueTitle.WEB_VITALS,
+
+  llm_detected_experimental: IssueTitle.LLM_DETECTED_EXPERIMENTAL,
+  llm_detected_experimental_v2: IssueTitle.LLM_DETECTED_EXPERIMENTAL_V2,
+  ai_detected_http: IssueTitle.AI_DETECTED_HTTP,
+  ai_detected_db: IssueTitle.AI_DETECTED_DB,
+  ai_detected_runtime_performance: IssueTitle.AI_DETECTED_RUNTIME_PERFORMANCE,
+  ai_detected_security: IssueTitle.AI_DETECTED_SECURITY,
+  ai_detected_code_health: IssueTitle.AI_DETECTED_CODE_HEALTH,
+  ai_detected_general: IssueTitle.AI_DETECTED_GENERAL,
+
+  preprod_static: IssueTitle.PREPROD_STATIC,
+  preprod_delta: IssueTitle.PREPROD_DELTA,
+  preprod_size_analysis: IssueTitle.PREPROD_SIZE_ANALYSIS,
+
+  sourcemap_configuration: IssueTitle.SOURCEMAP_CONFIGURATION,
 };
 
 export function getIssueTitleFromType(issueType: string): IssueTitle | undefined {
@@ -294,8 +387,27 @@ const OCCURRENCE_TYPE_TO_ISSUE_TYPE = {
   2007: IssueType.PROFILE_REGEX_MAIN_THREAD,
   2008: IssueType.PROFILE_FRAME_DROP,
   2010: IssueType.PROFILE_FUNCTION_REGRESSION,
+  3501: IssueType.LLM_DETECTED_EXPERIMENTAL,
+  3502: IssueType.LLM_DETECTED_EXPERIMENTAL_V2,
+  3503: IssueType.AI_DETECTED_HTTP,
+  3504: IssueType.AI_DETECTED_DB,
+  3505: IssueType.AI_DETECTED_RUNTIME_PERFORMANCE,
+  3506: IssueType.AI_DETECTED_SECURITY,
+  3507: IssueType.AI_DETECTED_CODE_HEALTH,
+  3508: IssueType.AI_DETECTED_GENERAL,
   10001: IssueType.WEB_VITALS,
+  11001: IssueType.PREPROD_STATIC,
+  11002: IssueType.PREPROD_DELTA,
+  11003: IssueType.PREPROD_SIZE_ANALYSIS,
 };
+
+// Occurrence type IDs for hidden issue types - used to filter API queries.
+// Note: This only works for issuePlatform events not discover/error events.
+export const HIDDEN_OCCURRENCE_TYPE_IDS: number[] = Object.entries(
+  OCCURRENCE_TYPE_TO_ISSUE_TYPE
+)
+  .filter(([_, issueType]) => HIDDEN_ISSUE_TYPES.includes(issueType))
+  .map(([id]) => Number(id));
 
 const PERFORMANCE_REGRESSION_TYPE_IDS = new Set([1017, 1018, 2010, 2011]);
 
@@ -325,7 +437,7 @@ export function isOccurrenceBased(typeId: number | undefined): boolean {
   return !PERFORMANCE_REGRESSION_TYPE_IDS.has(typeId);
 }
 
-// endpoint: /api/0/issues/:issueId/attachments/?limit=50
+// endpoint: /api/0/organizations/:orgSlug/issues/:issueId/attachments/?limit=50
 export type IssueAttachment = {
   dateCreated: string;
   event_id: string;
@@ -450,9 +562,18 @@ type SuggestedOwner = {
   type: SuggestedOwnerReason;
 };
 
+/**
+ * Mirrors OwnershipRuleOwnerResponse from the backend
+ */
+interface OwnershipRuleOwner {
+  name: string;
+  type: 'user' | 'team';
+  id?: string;
+}
+
 export interface ParsedOwnershipRule {
   matcher: {pattern: string; type: string};
-  owners: Actor[];
+  owners: OwnershipRuleOwner[];
 }
 
 export type IssueOwnership = {
@@ -616,12 +737,20 @@ interface GroupActivitySetByResolvedInNextSemverRelease extends GroupActivityBas
   data: {
     // Set for semver releases
     current_release_version: string;
+    inNextRelease?: boolean;
+    integration_id?: number;
+    provider?: string;
+    provider_key?: string;
   };
   type: GroupActivityType.SET_RESOLVED_IN_RELEASE;
 }
 
 interface GroupActivitySetByResolvedInRelease extends GroupActivityBase {
   data: {
+    inNextRelease?: boolean;
+    integration_id?: number;
+    provider?: string;
+    provider_key?: string;
     version?: string;
   };
   type: GroupActivityType.SET_RESOLVED_IN_RELEASE;
@@ -936,17 +1065,27 @@ export interface BaseGroup {
   integrationIssues?: ExternalIssue[];
   latestEvent?: Event;
   latestEventHasAttachments?: boolean;
-  openPeriods?: GroupOpenPeriod[] | null;
   owners?: SuggestedOwner[] | null;
   seerAutofixLastTriggered?: string | null;
+  seerExplorerAutofixLastTriggered?: string | null;
   seerFixabilityScore?: number | null;
   sentryAppIssues?: PlatformExternalIssue[];
   substatus?: GroupSubstatus | null;
 }
 
+export interface GroupOpenPeriodActivity {
+  dateCreated: string;
+  eventId: string | null;
+  id: string;
+  type: 'opened' | 'status_change' | 'closed';
+  value: 'high' | 'medium' | null;
+}
+
 export interface GroupOpenPeriod {
+  activities: GroupOpenPeriodActivity[];
   duration: string;
   end: string;
+  id: string;
   isOpen: boolean;
   lastChecked: string;
   start: string;

@@ -22,6 +22,7 @@ from sentry.auth.superuser import is_active_superuser
 from sentry.constants import ALL_ACCESS_PROJECT_ID, ALL_ACCESS_PROJECTS_SLUG, ObjectStatus
 from sentry.exceptions import InvalidParams
 from sentry.models.apikey import is_api_key_auth
+from sentry.models.apitoken import is_api_token_auth
 from sentry.models.environment import Environment
 from sentry.models.organization import Organization
 from sentry.models.orgauthtoken import is_org_auth_token_auth
@@ -33,7 +34,7 @@ from sentry.organizations.services.organization import (
     RpcUserOrganizationContext,
     organization_service,
 )
-from sentry.types.region import subdomain_is_region
+from sentry.types.cell import subdomain_is_locality
 from sentry.utils import auth
 from sentry.utils.hashlib import hash_values
 from sentry.utils.numbers import format_grouped_length
@@ -163,6 +164,13 @@ class OrganizationIntegrationsLoosePermission(OrganizationPermission):
     }
 
 
+class OrganizationCodeMappingsBulkPermission(OrganizationPermission):
+    scope_map = {
+        "GET": ["org:read", "org:write", "org:admin", "org:integrations", "org:ci"],
+        "POST": ["org:read", "org:write", "org:admin", "org:integrations", "org:ci"],
+    }
+
+
 class OrganizationAdminPermission(OrganizationPermission):
     scope_map = {
         "GET": ["org:admin"],
@@ -274,7 +282,7 @@ class ControlSiloOrganizationEndpoint(Endpoint):
         if not organization_id_or_slug:
             raise ResourceDoesNotExist
 
-        if not subdomain_is_region(request):
+        if not subdomain_is_locality(request):
             subdomain = getattr(request, "subdomain", None)
             if subdomain is not None and subdomain != organization_id_or_slug:
                 raise ResourceDoesNotExist
@@ -308,7 +316,7 @@ class ControlSiloOrganizationEndpoint(Endpoint):
         kwargs["organization"] = organization_context.organization
 
         # Used for API access logs
-        request._request.organization = organization_context.organization  # type: ignore[attr-defined]
+        request._request.organization = organization_context.organization
 
         return (args, kwargs)
 
@@ -377,12 +385,13 @@ class OrganizationEndpoint(Endpoint):
         permission checks. We should ideally standardize how this is used and remove this parameter.
         :param project_ids: Projects if they were passed via request data instead of get params
         :param project_slugs: Project slugs if they were passed via request  data instead of get params
-        :return: A list of Project objects, or raises PermissionDenied.
+        :return: A list of Project objects, or raises PermissionDenied. When project_ids or project_slugs
+        are explicitly provided, the returned list is guaranteed non-empty (or PermissionDenied is raised).
 
         NOTE: If both project_ids and project_slugs are passed, we will default
         to fetching projects via project_id list.
         """
-        qs = Project.objects.filter(organization=organization, status=ObjectStatus.ACTIVE)
+        qs = Project.objects.filter(organization_id=organization.id, status=ObjectStatus.ACTIVE)
         if project_slugs and project_ids:
             raise ParseError(detail="Cannot query for both ids and slugs")
 
@@ -610,7 +619,7 @@ class OrganizationEndpoint(Endpoint):
         if not organization_id_or_slug:
             raise ResourceDoesNotExist
 
-        if not subdomain_is_region(request):
+        if not subdomain_is_locality(request):
             subdomain = getattr(request, "subdomain", None)
             if subdomain is not None and subdomain != organization_id_or_slug:
                 raise ResourceDoesNotExist
@@ -628,7 +637,7 @@ class OrganizationEndpoint(Endpoint):
 
         bind_organization_context(organization)
 
-        request._request.organization = organization  # type: ignore[attr-defined]
+        request._request.organization = organization
 
         # Track the 'active' organization when the request came from
         # a cookie based agent (react app)
@@ -669,6 +678,14 @@ class OrganizationReleasesBaseEndpoint(OrganizationEndpoint):
                 return []
             has_valid_api_key = request.auth.has_scope("org:ci")
 
+        # Check if authenticated via API token (used by Sentry CLI) with appropriate release scopes.
+        # This ensures consistency with the project releases endpoint which allows
+        # API tokens with project:releases scope to create releases even if the user
+        # is not a direct team member of the project.
+        has_valid_api_key = has_valid_api_key or (
+            is_api_token_auth(request.auth) and request.access.has_scope("project:releases")
+        )
+
         if not (
             has_valid_api_key or (getattr(request, "user", None) and request.user.is_authenticated)
         ):
@@ -689,14 +706,21 @@ class OrganizationReleasesBaseEndpoint(OrganizationEndpoint):
         organization: Organization | RpcOrganization,
         release: Release | None = None,
         project_ids: set[int] | None = None,
+        require_all_projects: bool = False,
     ) -> bool:
         """
         Does the given request have permission to access this release, based
         on the projects to which the release is attached?
 
-        If the given request has an actor (user or ApiKey), cache the results
-        for a minute on the unique combination of actor,org,release, and project
-        ids.
+        By default, access is granted if the user has access to *any* project
+        on the release (suitable for reads). When require_all_projects=True,
+        the user must have access to *all* projects on the release (use for
+        mutations). Without this, a user with access to one project on a
+        multi-project release could modify or delete it, affecting projects
+        they cannot access. The all-projects check respects Open Membership
+        via has_global_access.
+
+        Results are cached for 60s per actor/org/release/project-ids/mode.
         """
         actor_id = None
         has_perms = None
@@ -710,20 +734,23 @@ class OrganizationReleasesBaseEndpoint(OrganizationEndpoint):
             if requested_project_ids is None:
                 requested_project_ids = self.get_requested_project_ids_unchecked(request)
             key = "release_perms:1:%s" % hash_values(
-                [actor_id, organization.id, release.id if release is not None else 0]
+                [
+                    actor_id,
+                    organization.id,
+                    release.id if release is not None else 0,
+                    int(require_all_projects),
+                ]
                 + sorted(requested_project_ids)
             )
             has_perms = cache.get(key)
         if has_perms is None:
             projects = self.get_projects(request, organization, project_ids=project_ids)
-            # XXX(iambriccardo): The logic here is that you have access to this release if any of your projects
-            # associated with this release you have release permissions to.  This is a bit of
-            # a problem because anyone can add projects to a release, so this check is easy
-            # to defeat.
             if release is not None:
                 has_perms = ReleaseProject.objects.filter(
                     release=release, project__in=projects
                 ).exists()
+                if has_perms and require_all_projects:
+                    has_perms = request.access.has_projects_access(list(release.projects.all()))
             else:
                 has_perms = len(projects) > 0
 

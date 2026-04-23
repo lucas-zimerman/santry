@@ -1,7 +1,9 @@
+import styled from '@emotion/styled';
 import * as qs from 'query-string';
 
-import {Link} from 'sentry/components/core/link';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
+import {Link} from '@sentry/scraps/link';
+
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
 import {useLocation} from 'sentry/utils/useLocation';
 import {OverflowEllipsisTextContainer} from 'sentry/views/insights/common/components/textAlign';
 import {useModuleURL} from 'sentry/views/insights/common/utils/useModuleURL';
@@ -15,7 +17,7 @@ interface Props {
   moduleName: ModuleName.DB | ModuleName.RESOURCE;
   projectId: number;
   extraLinkQueryParams?: Record<string, string>;
-  group?: string;
+  group?: string | null;
   spanOp?: string;
 }
 
@@ -41,16 +43,21 @@ export function SpanGroupDetailsLink({
   return (
     <OverflowEllipsisTextContainer>
       {group ? (
-        <Link
+        <StyledLink
           to={normalizeUrl(
             `${moduleURL}/spans/span/${group}/?${qs.stringify(queryString)}`
           )}
         >
           {description}
-        </Link>
+        </StyledLink>
       ) : (
         description
       )}
     </OverflowEllipsisTextContainer>
   );
 }
+
+const StyledLink = styled(Link)`
+  display: inline-block;
+  min-width: ${p => p.theme.space['2xl']};
+`;

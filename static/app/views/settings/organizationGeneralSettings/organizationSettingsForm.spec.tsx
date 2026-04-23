@@ -1,23 +1,31 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
+import {UserFixture} from 'sentry-fixture/user';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
-import {act, render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
+import {
+  render,
+  renderGlobalModal,
+  screen,
+  userEvent,
+  waitFor,
+} from 'sentry-test/reactTestingLibrary';
 
-import * as formIndicatorActions from 'sentry/components/forms/formIndicators';
-import Indicators from 'sentry/components/indicators';
+import {MemberListStore} from 'sentry/stores/memberListStore';
+import {OrganizationStore} from 'sentry/stores/organizationStore';
 import * as RegionUtils from 'sentry/utils/regions';
-import OrganizationSettingsForm from 'sentry/views/settings/organizationGeneralSettings/organizationSettingsForm';
+import {OrganizationSettingsForm} from 'sentry/views/settings/organizationGeneralSettings/organizationSettingsForm';
 
-jest.mock('sentry/components/forms/formIndicators');
 jest.mock('sentry/utils/regions');
 
 describe('OrganizationSettingsForm', () => {
-  const {organization, routerProps} = initializeOrg();
+  const organization = OrganizationFixture();
   let putMock: jest.Mock;
   const onSave = jest.fn();
 
   beforeEach(() => {
+    jest.mocked(RegionUtils.getRegions).mockReturnValue([]);
     MockApiClient.clearMockResponses();
+    OrganizationStore.onUpdate(organization, {replace: true});
+    jest.mocked(RegionUtils.getRegions).mockReturnValue([]);
     MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/auth-provider/`,
       method: 'GET',
@@ -29,6 +37,10 @@ describe('OrganizationSettingsForm', () => {
         providers: [{canAdd: true}],
       },
     });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/members/',
+      body: [],
+    });
     onSave.mockReset();
   });
 
@@ -36,73 +48,52 @@ describe('OrganizationSettingsForm', () => {
     putMock = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/`,
       method: 'PUT',
-      body: organization,
+      body: {...organization, name: 'New Name'},
     });
 
     render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture()}
-        onSave={onSave}
-      />
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />
     );
-
-    render(<Indicators />);
 
     const input = screen.getByRole('textbox', {name: 'Display Name'});
-
-    const undoableFormChangeMessage = jest.spyOn(
-      formIndicatorActions,
-      'addUndoableFormChangeMessage'
-    );
 
     await userEvent.clear(input);
     await userEvent.type(input, 'New Name');
     await userEvent.tab();
 
-    expect(putMock).toHaveBeenCalledWith(
-      `/organizations/${organization.slug}/`,
-      expect.objectContaining({
-        method: 'PUT',
-        data: {
-          name: 'New Name',
-        },
-      })
+    await waitFor(() => {
+      expect(putMock).toHaveBeenCalledWith(
+        `/organizations/${organization.slug}/`,
+        expect.objectContaining({
+          method: 'PUT',
+          data: {
+            name: 'New Name',
+          },
+        })
+      );
+    });
+  });
+
+  it('hides slug alert and save/cancel until slug is modified', async () => {
+    render(
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />
     );
 
-    expect(undoableFormChangeMessage).toHaveBeenCalledWith(
-      {
-        new: 'New Name',
-        old: 'Organization Name',
-      },
-      expect.anything(),
-      'name'
-    );
+    expect(screen.queryByRole('button', {name: 'Save'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Cancel'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', {name: 'Learn more'})).not.toBeInTheDocument();
 
-    const model = undoableFormChangeMessage.mock.calls[0]![1];
+    const input = screen.getByRole('textbox', {name: 'Organization Slug'});
+    await userEvent.type(input, '-changed');
 
-    // Test "undo" call undo directly
-    expect(model.getValue('name')).toBe('New Name');
-    act(() => {
-      model.undo();
-    });
-    expect(model.getValue('name')).toBe('Organization Name');
+    expect(screen.getByRole('button', {name: 'Save'})).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Cancel'})).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: 'Learn more'})).toBeInTheDocument();
 
-    // `addUndoableFormChangeMessage` saves the new field, so reimplement this
-    act(() => {
-      model.saveField('name', 'Organization Name');
-    });
+    await userEvent.click(screen.getByRole('button', {name: 'Cancel'}));
 
-    // Initial data should be updated to original name
-    await waitFor(() => expect(model.initialData.name).toBe('Organization Name'));
-
-    putMock.mockReset();
-
-    // Blurring the name field again should NOT trigger a save
-    await userEvent.click(input);
-    await userEvent.tab();
-
-    expect(putMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', {name: 'Save'})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: 'Cancel'})).not.toBeInTheDocument();
   });
 
   it('can change slug', async () => {
@@ -113,11 +104,7 @@ describe('OrganizationSettingsForm', () => {
     });
 
     render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture()}
-        onSave={onSave}
-      />
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />
     );
 
     const input = screen.getByRole('textbox', {name: 'Organization Slug'});
@@ -140,6 +127,59 @@ describe('OrganizationSettingsForm', () => {
     );
   });
 
+  it('hides Save/Cancel after successful slug change', async () => {
+    putMock = MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/`,
+      method: 'PUT',
+      body: {...organization, slug: 'new-slug'},
+    });
+
+    render(
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />
+    );
+
+    const input = screen.getByRole('textbox', {name: 'Organization Slug'});
+    await userEvent.clear(input);
+    await userEvent.type(input, 'new-slug');
+
+    expect(screen.getByRole('button', {name: 'Save'})).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Cancel'})).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', {name: 'Save'}));
+
+    await waitFor(() => {
+      expect(putMock).toHaveBeenCalled();
+    });
+
+    // After successful save, form.reset() syncs defaults so the form is pristine again
+    await waitFor(() => {
+      expect(screen.queryByRole('button', {name: 'Save'})).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', {name: 'Cancel'})).not.toBeInTheDocument();
+  });
+
+  it('shows field error when slug is already taken', async () => {
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/`,
+      method: 'PUT',
+      statusCode: 400,
+      body: {slug: ['The slug "taken" is in use by another organization.']},
+    });
+
+    render(
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />
+    );
+
+    const input = screen.getByRole('textbox', {name: 'Organization Slug'});
+    await userEvent.clear(input);
+    await userEvent.type(input, 'taken');
+    await userEvent.click(screen.getByRole('button', {name: 'Save'}));
+
+    expect(
+      await screen.findByText('The slug "taken" is in use by another organization.')
+    ).toBeInTheDocument();
+  });
+
   it('can enable codecov', async () => {
     putMock = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/`,
@@ -149,7 +189,6 @@ describe('OrganizationSettingsForm', () => {
 
     render(
       <OrganizationSettingsForm
-        {...routerProps}
         initialData={OrganizationFixture({codecovAccess: false})}
         onSave={onSave}
       />,
@@ -175,16 +214,11 @@ describe('OrganizationSettingsForm', () => {
     );
   });
 
-  it('can toggle "Show Generative AI Features"', async () => {
-    // Default org fixture has hideAiFeatures: false, so Seer is enabled by default
-    const hiddenAiOrg = OrganizationFixture({hideAiFeatures: true});
+  it('can enable "Show Generative AI Features"', async () => {
+    // initialData.hideAiFeatures = false (default) → switch starts OFF
     render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture()}
-        onSave={onSave}
-      />,
-      {organization: hiddenAiOrg}
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+      {organization: {...organization, features: ['gen-ai-features']}}
     );
     const mock = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/`,
@@ -195,10 +229,9 @@ describe('OrganizationSettingsForm', () => {
       name: 'Show Generative AI Features',
     });
 
-    // Inverted from hideAiFeatures
     expect(checkbox).not.toBeChecked();
 
-    // Click to uncheck (disable Seer -> hideAiFeatures = true)
+    // Click to enable: form value → true, API receives hideAiFeatures: !true = false
     await userEvent.click(checkbox);
 
     await waitFor(() => {
@@ -209,10 +242,29 @@ describe('OrganizationSettingsForm', () => {
         })
       );
     });
+  });
 
-    // Inverted from hideAiFeatures
+  it('can disable "Show Generative AI Features"', async () => {
+    // initialData.hideAiFeatures = true → switch starts ON
+    render(
+      <OrganizationSettingsForm
+        initialData={OrganizationFixture({hideAiFeatures: true})}
+        onSave={onSave}
+      />,
+      {organization: {...organization, features: ['gen-ai-features']}}
+    );
+    const mock = MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/`,
+      method: 'PUT',
+    });
+
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Show Generative AI Features',
+    });
+
     expect(checkbox).toBeChecked();
 
+    // Click to disable: form value → false, API receives hideAiFeatures: !false = true
     await userEvent.click(checkbox);
 
     await waitFor(() => {
@@ -223,7 +275,7 @@ describe('OrganizationSettingsForm', () => {
     });
   });
 
-  it('shows hideAiFeatures togglefor DE region', () => {
+  it('shows hideAiFeatures toggle for DE region', () => {
     // Mock the region util to return DE region
     jest.mocked(RegionUtils.getRegionDataFromOrganization).mockImplementation(() => ({
       name: 'de',
@@ -232,15 +284,11 @@ describe('OrganizationSettingsForm', () => {
     }));
 
     render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture()}
-        onSave={onSave}
-      />,
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
       {
         organization: {
           ...organization,
-          features: ['autofix'],
+          features: ['autofix', 'gen-ai-features'],
         },
       }
     );
@@ -249,90 +297,180 @@ describe('OrganizationSettingsForm', () => {
     expect(toggle).toBeEnabled();
   });
 
-  it('renders Prevent AI field', () => {
+  it('disables "Show Generative AI Features" toggle when feature flag is off', () => {
     render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture({hideAiFeatures: true})}
-        onSave={onSave}
-      />
+      <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+      {
+        organization: {
+          ...organization,
+          features: [], // No gen-ai-features flag
+        },
+      }
     );
 
-    expect(screen.getByText('Enable Prevent AI')).toBeInTheDocument();
-
-    expect(screen.getByText('beta')).toBeInTheDocument();
-
-    expect(
-      screen.getByText('Use AI to review, find bugs, and generate tests in pull requests')
-    ).toBeInTheDocument();
-
-    const learnMoreLink = screen.getByRole('link', {name: 'Learn more'});
-    expect(learnMoreLink).toBeInTheDocument();
-    expect(learnMoreLink).toHaveAttribute(
-      'href',
-      'https://docs.sentry.io/product/ai-in-sentry/sentry-prevent-ai/'
-    );
-  });
-
-  it('hides Prevent AI field when AI features are disabled', () => {
-    render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        // This logic is inverted from the variable name
-        initialData={OrganizationFixture({hideAiFeatures: false})}
-        onSave={onSave}
-      />
-    );
-
-    expect(screen.queryByText('Enable Prevent AI')).not.toBeInTheDocument();
-    expect(
-      screen.queryByText(
-        'Use AI to review, find bugs, and generate tests in pull requests'
-      )
-    ).not.toBeInTheDocument();
-  });
-
-  it('shows PR Review and Test Generation field when AI features are enabled', () => {
-    render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture({hideAiFeatures: true})}
-        onSave={onSave}
-      />
-    );
-
-    expect(screen.getByText('Enable Prevent AI')).toBeInTheDocument();
-    expect(
-      screen.getByText('Use AI to review, find bugs, and generate tests in pull requests')
-    ).toBeInTheDocument();
-  });
-
-  it('shows/hides PR Review field when toggling AI features', async () => {
-    render(
-      <OrganizationSettingsForm
-        {...routerProps}
-        initialData={OrganizationFixture({hideAiFeatures: false})}
-        onSave={onSave}
-      />
-    );
-
-    MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/`,
-      method: 'PUT',
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Show Generative AI Features',
     });
 
-    // Initially AI features are disabled, so PR Review field should be hidden
-    expect(screen.queryByText('Enable Prevent AI')).not.toBeInTheDocument();
+    expect(checkbox).toBeDisabled();
+    expect(checkbox).not.toBeChecked();
+  });
 
-    const aiToggle = screen.getByRole('checkbox', {name: 'Show Generative AI Features'});
-    await userEvent.click(aiToggle);
+  describe('Replay access', () => {
+    it('renders restrict replay access toggle', () => {
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />
+      );
+      expect(
+        screen.getByRole('checkbox', {name: 'Restrict Replay Access'})
+      ).toBeInTheDocument();
+    });
 
-    // PR Review field should now be visible
-    expect(screen.getByText('Enable Prevent AI')).toBeInTheDocument();
+    it('does not render replay access members field when hasGranularReplayPermissions is false', () => {
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+        {
+          organization: {
+            ...organization,
 
-    await userEvent.click(aiToggle);
+            hasGranularReplayPermissions: false,
+          },
+        }
+      );
+      expect(
+        screen.getByRole('checkbox', {name: 'Restrict Replay Access'})
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole('textbox', {name: 'Replay Access Members'})
+      ).not.toBeInTheDocument();
+    });
 
-    // PR Review field should be hidden again
-    expect(screen.queryByText('Enable Prevent AI')).not.toBeInTheDocument();
+    it('renders replay access members field when hasGranularReplayPermissions is true', () => {
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+        {
+          organization: {
+            ...organization,
+
+            hasGranularReplayPermissions: true,
+          },
+        }
+      );
+      expect(
+        screen.getByRole('textbox', {name: 'Replay Access Members'})
+      ).toBeInTheDocument();
+    });
+
+    it('disables replay access members field if user does not have org:write access', () => {
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+        {
+          organization: {
+            ...organization,
+            access: [],
+
+            hasGranularReplayPermissions: true,
+          },
+        }
+      );
+      expect(screen.getByRole('textbox', {name: 'Replay Access Members'})).toBeDisabled();
+    });
+
+    it('saves when Restrict Replay Access toggle is enabled', async () => {
+      const replayPutMock = MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/`,
+        method: 'PUT',
+        body: {...organization, hasGranularReplayPermissions: true},
+      });
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+        {
+          organization: {
+            ...organization,
+
+            hasGranularReplayPermissions: false,
+          },
+        }
+      );
+
+      await userEvent.click(
+        screen.getByRole('checkbox', {name: 'Restrict Replay Access'})
+      );
+
+      await waitFor(() => {
+        expect(replayPutMock).toHaveBeenCalledWith(
+          `/organizations/${organization.slug}/`,
+          expect.objectContaining({data: {hasGranularReplayPermissions: true}})
+        );
+      });
+    });
+
+    it('shows confirmation and saves when Restrict Replay Access toggle is disabled', async () => {
+      renderGlobalModal();
+      const replayPutMock = MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/`,
+        method: 'PUT',
+        body: {...organization, hasGranularReplayPermissions: false},
+      });
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+        {
+          organization: {
+            ...organization,
+
+            hasGranularReplayPermissions: true,
+          },
+        }
+      );
+
+      await userEvent.click(
+        screen.getByRole('checkbox', {name: 'Restrict Replay Access'})
+      );
+
+      await screen.findByText(
+        'This will allow all members of your organization to access replay data. Do you want to continue?'
+      );
+      await userEvent.click(screen.getByRole('button', {name: 'Confirm'}));
+
+      await waitFor(() => {
+        expect(replayPutMock).toHaveBeenCalledWith(
+          `/organizations/${organization.slug}/`,
+          expect.objectContaining({data: {hasGranularReplayPermissions: false}})
+        );
+      });
+    });
+
+    it('saves replayAccessMembers when a member is selected', async () => {
+      MemberListStore.loadInitialData([UserFixture()]);
+      const replayPutMock = MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/`,
+        method: 'PUT',
+        body: {...organization, replayAccessMembers: [1]},
+      });
+      render(
+        <OrganizationSettingsForm initialData={OrganizationFixture()} onSave={onSave} />,
+        {
+          organization: {
+            ...organization,
+
+            hasGranularReplayPermissions: true,
+          },
+        }
+      );
+
+      await userEvent.click(screen.getByRole('textbox', {name: 'Replay Access Members'}));
+      await userEvent.click(
+        await screen.findByRole('menuitemcheckbox', {name: 'Foo Bar'})
+      );
+      await userEvent.keyboard('{Escape}');
+      await userEvent.tab();
+
+      await waitFor(() => {
+        expect(replayPutMock).toHaveBeenCalledWith(
+          `/organizations/${organization.slug}/`,
+          expect.objectContaining({data: {replayAccessMembers: [1]}})
+        );
+      });
+    });
   });
 });

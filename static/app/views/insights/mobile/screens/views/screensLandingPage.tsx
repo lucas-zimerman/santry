@@ -1,38 +1,40 @@
-import {Fragment, useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 import styled from '@emotion/styled';
 import omit from 'lodash/omit';
 
-import ErrorBoundary from 'sentry/components/errorBoundary';
+import {Stack} from '@sentry/scraps/layout';
+
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
 import * as Layout from 'sentry/components/layouts/thirds';
 import {TabbedCodeSnippet} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCodeSnippet';
-import {DatePageFilter} from 'sentry/components/organizations/datePageFilter';
-import {EnvironmentPageFilter} from 'sentry/components/organizations/environmentPageFilter';
-import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
-import {PageHeadingQuestionTooltip} from 'sentry/components/pageHeadingQuestionTooltip';
+import {DatePageFilter} from 'sentry/components/pageFilters/date/datePageFilter';
+import {PageFilterBar} from 'sentry/components/pageFilters/pageFilterBar';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
+import {DataCategory} from 'sentry/types/core';
+import {defined} from 'sentry/utils';
 import {PageAlert, PageAlertProvider} from 'sentry/utils/performance/contexts/pageAlert';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
+import {useDatePageFilterProps} from 'sentry/utils/useDatePageFilterProps';
 import {useLocation} from 'sentry/utils/useLocation';
+import {useMaxPickableDays} from 'sentry/utils/useMaxPickableDays';
 import {useNavigate} from 'sentry/utils/useNavigate';
+import {InsightsEnvironmentSelector} from 'sentry/views/insights/common/components/enviornmentSelector';
 import {ModuleFeature} from 'sentry/views/insights/common/components/moduleFeature';
 import {ModulePageProviders} from 'sentry/views/insights/common/components/modulePageProviders';
 import {ModulesOnboarding} from 'sentry/views/insights/common/components/modulesOnboarding';
 import {InsightsProjectSelector} from 'sentry/views/insights/common/components/projectSelector';
+import {ReleaseSelector} from 'sentry/views/insights/common/components/releaseSelector';
+import {ToolRibbon} from 'sentry/views/insights/common/components/ribbon';
 import {useSpans} from 'sentry/views/insights/common/queries/useDiscover';
+import {useReleaseSelection} from 'sentry/views/insights/common/queries/useReleases';
+import {useHasPlatformizedInsights} from 'sentry/views/insights/common/utils/useHasPlatformizedInsights';
 import {useMobileVitalsDrawer} from 'sentry/views/insights/common/utils/useMobileVitalsDrawer';
-import useCrossPlatformProject from 'sentry/views/insights/mobile/common/queries/useCrossPlatformProject';
-import {PlatformSelector} from 'sentry/views/insights/mobile/screenload/components/platformSelector';
+import {useCrossPlatformProject} from 'sentry/views/insights/mobile/common/queries/useCrossPlatformProject';
 import {SETUP_CONTENT as TTFD_SETUP} from 'sentry/views/insights/mobile/screenload/data/setupContent';
 import {ScreensOverview} from 'sentry/views/insights/mobile/screens/components/screensOverview';
-import VitalCard from 'sentry/views/insights/mobile/screens/components/vitalCard';
+import {VitalCard} from 'sentry/views/insights/mobile/screens/components/vitalCard';
 import {VitalDetailPanel} from 'sentry/views/insights/mobile/screens/components/vitalDetailPanel';
 import {Referrer} from 'sentry/views/insights/mobile/screens/referrers';
-import {
-  MODULE_DESCRIPTION,
-  MODULE_DOC_LINK,
-  MODULE_TITLE,
-} from 'sentry/views/insights/mobile/screens/settings';
 import {
   getColdAppStartPerformance,
   getDefaultMetricPerformance,
@@ -42,21 +44,27 @@ import {
   type VitalItem,
   type VitalStatus,
 } from 'sentry/views/insights/mobile/screens/utils';
-import {MobileHeader} from 'sentry/views/insights/pages/mobile/mobilePageHeader';
+import {PlatformizedMobileVitalsOverview} from 'sentry/views/insights/mobile/screens/views/platformizedOverview';
 import {ModuleName} from 'sentry/views/insights/types';
 
 function ScreensLandingPage() {
+  const maxPickableDays = useMaxPickableDays({
+    dataCategories: [DataCategory.SPANS],
+  });
+  const datePageFilterProps = useDatePageFilterProps(maxPickableDays);
+
   const moduleName = ModuleName.MOBILE_VITALS;
   const navigate = useNavigate();
   const location = useLocation();
   const {isProjectCrossPlatform, selectedPlatform} = useCrossPlatformProject();
+  const {primaryRelease} = useReleaseSelection();
 
   const handleProjectChange = useCallback(() => {
     navigate(
       {
         ...location,
         query: {
-          ...omit(location.query, ['primaryRelease', 'secondaryRelease']),
+          ...omit(location.query, ['primaryRelease']),
         },
       },
       {replace: true}
@@ -117,7 +125,7 @@ function ScreensLandingPage() {
           'https://docs.sentry.io/platforms/android/tracing/instrumentation/automatic-instrumentation/#slow-and-frozen-frames',
         iOS: 'https://docs.sentry.io/platforms/apple/guides/ios/tracing/instrumentation/automatic-instrumentation/#slow-and-frozen-frames',
       },
-      field: `division(mobile.slow_frames,mobile.total_frames)` as const,
+      field: 'division(mobile.slow_frames,mobile.total_frames)' as const,
       dataset: 'spansMetrics',
       getStatus: getDefaultMetricPerformance,
     },
@@ -134,7 +142,7 @@ function ScreensLandingPage() {
           'https://docs.sentry.io/platforms/android/tracing/instrumentation/automatic-instrumentation/#slow-and-frozen-frames',
         iOS: 'https://docs.sentry.io/platforms/apple/guides/ios/tracing/instrumentation/automatic-instrumentation/#slow-and-frozen-frames',
       },
-      field: `division(mobile.frozen_frames,mobile.total_frames)` as const,
+      field: 'division(mobile.frozen_frames,mobile.total_frames)' as const,
       dataset: 'spansMetrics',
       getStatus: getDefaultMetricPerformance,
     },
@@ -153,7 +161,7 @@ function ScreensLandingPage() {
           'https://docs.sentry.io/platforms/android/tracing/instrumentation/automatic-instrumentation/#slow-and-frozen-frames',
         iOS: 'https://docs.sentry.io/platforms/apple/guides/ios/tracing/instrumentation/automatic-instrumentation/#slow-and-frozen-frames',
       },
-      field: `avg(mobile.frames_delay)` as const,
+      field: 'avg(mobile.frames_delay)' as const,
       dataset: 'spansMetrics',
       getStatus: getDefaultMetricPerformance,
     },
@@ -171,7 +179,7 @@ function ScreensLandingPage() {
           'https://docs.sentry.io/platforms/android/tracing/instrumentation/automatic-instrumentation/#time-to-initial-display',
         iOS: 'https://docs.sentry.io/platforms/apple/features/experimental-features/',
       },
-      field: `avg(measurements.time_to_initial_display)` as const,
+      field: 'avg(measurements.time_to_initial_display)' as const,
       dataset: 'metrics',
       getStatus: getDefaultMetricPerformance,
     },
@@ -189,7 +197,7 @@ function ScreensLandingPage() {
           'https://docs.sentry.io/platforms/android/tracing/instrumentation/automatic-instrumentation/#time-to-full-display',
         iOS: 'https://docs.sentry.io/platforms/apple/features/experimental-features/',
       },
-      field: `avg(measurements.time_to_full_display)` as const,
+      field: 'avg(measurements.time_to_full_display)' as const,
       dataset: 'metrics',
       getStatus: getDefaultMetricPerformance,
     },
@@ -211,6 +219,9 @@ function ScreensLandingPage() {
   const query = new MutableSearch(['transaction.op:[ui.load,navigation]']);
   if (isProjectCrossPlatform) {
     query.addFilterValue('os.name', selectedPlatform);
+  }
+  if (defined(primaryRelease)) {
+    query.addFilterValue('release', primaryRelease);
   }
 
   // TODO: combine these two queries into one, see DAIN-780
@@ -251,31 +262,26 @@ function ScreensLandingPage() {
   });
 
   return (
-    <ModulePageProviders moduleName={ModuleName.MOBILE_VITALS}>
-      <Layout.Page>
+    <ModulePageProviders
+      moduleName={ModuleName.MOBILE_VITALS}
+      maxPickableDays={maxPickableDays.maxPickableDays}
+    >
+      <Stack flex={1}>
         <PageAlertProvider>
-          <MobileHeader
-            headerTitle={
-              <Fragment>
-                {MODULE_TITLE}
-                <PageHeadingQuestionTooltip
-                  docsUrl={MODULE_DOC_LINK}
-                  title={MODULE_DESCRIPTION}
-                />
-              </Fragment>
-            }
-            headerActions={isProjectCrossPlatform && <PlatformSelector />}
-            module={moduleName}
-          />
           <ModuleFeature moduleName={moduleName}>
             <Layout.Body>
-              <Layout.Main fullWidth>
+              <Layout.Main width="full">
                 <Container>
-                  <PageFilterBar condensed>
-                    <InsightsProjectSelector onChange={handleProjectChange} />
-                    <EnvironmentPageFilter />
-                    <DatePageFilter />
-                  </PageFilterBar>
+                  <ToolRibbon>
+                    <PageFilterBar condensed>
+                      <InsightsProjectSelector onChange={handleProjectChange} />
+                      <InsightsEnvironmentSelector />
+                      <DatePageFilter {...datePageFilterProps} />
+                    </PageFilterBar>
+                    <PageFilterBar condensed>
+                      <ReleaseSelector moduleName={moduleName} />
+                    </PageFilterBar>
+                  </ToolRibbon>
                 </Container>
                 <PageAlert />
                 <ModulesOnboarding moduleName={moduleName}>
@@ -319,13 +325,13 @@ function ScreensLandingPage() {
             </Layout.Body>
           </ModuleFeature>
         </PageAlertProvider>
-      </Layout.Page>
+      </Stack>
     </ModulePageProviders>
   );
 }
 
 const Container = styled('div')`
-  margin-bottom: ${space(1)};
+  margin-bottom: ${p => p.theme.space.md};
 `;
 
 const Flex = styled('div')<{gap?: number}>`
@@ -333,10 +339,18 @@ const Flex = styled('div')<{gap?: number}>`
   flex-direction: row;
   justify-content: center;
   width: 100%;
-  gap: ${p => (p.gap ? `${p.gap}px` : space(1))};
+  gap: ${p => (p.gap ? `${p.gap}px` : p.theme.space.md)};
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: ${space(1)};
+  margin-bottom: ${p => p.theme.space.md};
 `;
 
-export default ScreensLandingPage;
+function ScreensLandingPageWithPlatformization() {
+  const hasPlatformizedInsights = useHasPlatformizedInsights();
+  if (hasPlatformizedInsights) {
+    return <PlatformizedMobileVitalsOverview />;
+  }
+  return <ScreensLandingPage />;
+}
+
+export default ScreensLandingPageWithPlatformization;

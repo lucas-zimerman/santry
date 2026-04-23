@@ -4,10 +4,9 @@ import logging
 import uuid
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Literal, TypedDict
 
 import sentry_sdk
-from sentry_sdk import capture_exception
 
 from sentry import features, killswitches, options, quotas, utils
 from sentry.constants import (
@@ -16,9 +15,6 @@ from sentry.constants import (
     ObjectStatus,
 )
 from sentry.dynamic_sampling import generate_rules
-from sentry.dynamic_sampling.tasks.helpers.boost_low_volume_projects import (
-    get_boost_low_volume_projects_sample_rate,
-)
 from sentry.grouping.api import get_grouping_config_dict_for_project
 from sentry.ingest.inbound_filters import (
     FilterStatKeys,
@@ -28,6 +24,7 @@ from sentry.ingest.inbound_filters import (
     get_filter_key,
     get_generic_filters,
     get_log_messages_generic_filter,
+    get_trace_metric_names_generic_filter,
 )
 from sentry.ingest.transaction_clusterer import ClustererNamespace
 from sentry.ingest.transaction_clusterer.meta import get_clusterer_meta
@@ -39,6 +36,7 @@ from sentry.interfaces.security import DEFAULT_DISALLOWED_SOURCES
 from sentry.models.organization import Organization
 from sentry.models.project import Project
 from sentry.models.projectkey import ProjectKey
+from sentry.quotas.base import RETENTIONS_CONFIG_MAPPING
 from sentry.relay.config.experimental import TimeChecker, add_experimental_config
 from sentry.relay.config.metric_extraction import (
     get_metric_conditional_tagging_rules,
@@ -47,36 +45,33 @@ from sentry.relay.config.metric_extraction import (
 from sentry.relay.datascrubbing import get_datascrubbing_settings, get_pii_config
 from sentry.relay.types.generic_filters import GenericFilter
 from sentry.relay.utils import to_camel_case_name
-from sentry.sentry_metrics.use_case_id_registry import CARDINALITY_LIMIT_USE_CASES
 from sentry.utils import metrics
 from sentry.utils.http import get_origins
 from sentry.utils.options import sample_modulo
 
-from .measurements import CUSTOM_MEASUREMENT_LIMIT
-
 # These features will be listed in the project config.
 EXPOSABLE_FEATURES = [
     "organizations:continuous-profiling",
-    "organizations:device-class-synthesis",
-    "organizations:performance-queries-mongodb-extraction",
     "organizations:profiling",
     "organizations:session-replay-recording-scrubbing",
     "organizations:session-replay-video-disabled",
     "organizations:session-replay",
-    "organizations:standalone-span-ingestion",
     "projects:discard-transaction",
-    "projects:profiling-ingest-unsampled-profiles",
     "projects:span-metrics-extraction",
     "projects:span-metrics-extraction-addons",
     "organizations:indexed-spans-extraction",
-    "projects:relay-otel-endpoint",
     "organizations:relay-otlp-traces-endpoint",
     "organizations:relay-otel-logs-endpoint",
+    "organizations:relay-new-error-processing",
     "organizations:ourlogs-ingestion",
+    "organizations:tracemetrics-ingestion",
     "organizations:view-hierarchy-scrubbing",
     "organizations:performance-issues-spans",
     "organizations:relay-playstation-ingestion",
     "projects:span-v2-experimental-processing",
+    "projects:span-v2-attachment-processing",
+    "projects:trace-attachment-processing",
+    "projects:relay-upload-endpoint",
 ]
 
 EXTRACT_METRICS_VERSION = 1
@@ -163,6 +158,17 @@ def get_filter_settings(project: Project) -> Mapping[str, Any]:
                 if log_messages_filter:
                     base_generic_filters.append(log_messages_filter)
 
+        if features.has("organizations:tracemetrics-ingestion", project.organization):
+            trace_metric_names = (
+                project.get_option(f"sentry:{FilterTypes.TRACE_METRIC_NAMES}") or []
+            )
+            if trace_metric_names:
+                trace_metric_names_filter = get_trace_metric_names_generic_filter(
+                    trace_metric_names
+                )
+                if trace_metric_names_filter:
+                    base_generic_filters.append(trace_metric_names_filter)
+
     if error_messages:
         filter_settings["errorMessages"] = {"patterns": error_messages}
 
@@ -203,103 +209,6 @@ def get_quotas(project: Project, keys: Iterable[ProjectKey] | None = None) -> li
     else:
         metrics.incr("relay.config.get_quotas", tags={"success": True}, sample_rate=1.0)
         return computed_quotas
-
-
-class SlidingWindow(TypedDict):
-    windowSeconds: int
-    granularitySeconds: int
-
-
-class CardinalityLimit(TypedDict):
-    id: str
-    passive: NotRequired[bool]
-    window: SlidingWindow
-    limit: int
-    scope: Literal["organization", "project"]
-    namespace: str | None
-
-
-class CardinalityLimitOption(TypedDict):
-    rollout_rate: NotRequired[float]
-    limit: CardinalityLimit
-    projects: NotRequired[list[int]]
-
-
-def get_metrics_config(timeout: TimeChecker, project: Project) -> Mapping[str, Any] | None:
-    metrics_config = {}
-
-    if cardinality_limits := get_cardinality_limits(timeout, project):
-        metrics_config["cardinalityLimits"] = cardinality_limits
-
-    return metrics_config or None
-
-
-def get_cardinality_limits(timeout: TimeChecker, project: Project) -> list[CardinalityLimit] | None:
-    if options.get("relay.cardinality-limiter.mode") == "disabled":
-        return None
-
-    passive_limits = options.get("relay.cardinality-limiter.passive-limits-by-org").get(
-        str(project.organization.id), []
-    )
-
-    existing_ids: set[str] = set()
-    cardinality_limits: list[CardinalityLimit] = []
-    for namespace in CARDINALITY_LIMIT_USE_CASES:
-        timeout.check()
-        option = options.get(f"sentry-metrics.cardinality-limiter.limits.{namespace.value}.per-org")
-        if not option or not len(option) == 1:
-            # Multiple quotas are not supported
-            continue
-
-        quota = option[0]
-        id = namespace.value
-
-        limit: CardinalityLimit = {
-            "id": id,
-            "window": {
-                "windowSeconds": quota["window_seconds"],
-                "granularitySeconds": quota["granularity_seconds"],
-            },
-            "limit": quota["limit"],
-            "scope": "organization",
-            "namespace": namespace.value,
-        }
-        if id in passive_limits:
-            limit["passive"] = True
-        cardinality_limits.append(limit)
-        existing_ids.add(id)
-
-    project_limit_options: list[CardinalityLimitOption] = project.get_option(
-        "relay.cardinality-limiter.limits", []
-    )
-    organization_limit_options: list[CardinalityLimitOption] = project.organization.get_option(
-        "relay.cardinality-limiter.limits", []
-    )
-    option_limit_options: list[CardinalityLimitOption] = options.get(
-        "relay.cardinality-limiter.limits"
-    )
-
-    for clo in project_limit_options + organization_limit_options + option_limit_options:
-        rollout_rate = clo.get("rollout_rate", 1.0)
-        if (project.organization.id % 100000) / 100000 >= rollout_rate:
-            continue
-
-        projects = clo.get("projects")
-        if projects is not None and project.id not in projects:
-            # projects list is defined but the current project is not in the list
-            continue
-
-        try:
-            limit = clo["limit"]
-            if clo["limit"]["id"] in existing_ids:
-                # skip if a limit with the same id already exists
-                continue
-            cardinality_limits.append(limit)
-            existing_ids.add(clo["limit"]["id"])
-        except KeyError:
-            pass
-
-    return cardinality_limits
 
 
 def get_project_config(
@@ -972,73 +881,6 @@ def _get_default_browser_performance_profiles(
     ]
 
 
-def _get_mobile_performance_profiles(
-    organization: Organization,
-) -> list[dict[str, Any]]:
-    if not features.has(
-        "organizations:performance-calculate-mobile-perf-score-relay", organization
-    ):
-        return []
-
-    return [
-        {
-            "name": "Mobile",
-            "version": "mobile.alpha",
-            "scoreComponents": [
-                {
-                    "measurement": "time_to_initial_display",
-                    "weight": 0.25,
-                    "p10": 1800.0,
-                    "p50": 3000.0,
-                    "optional": True,
-                },
-                {
-                    "measurement": "time_to_full_display",
-                    "weight": 0.25,
-                    "p10": 2500.0,
-                    "p50": 4000.0,
-                    "optional": True,
-                },
-                {
-                    "measurement": "app_start_warm",
-                    "weight": 0.25,
-                    "p10": 200.0,
-                    "p50": 500.0,
-                    "optional": True,
-                },
-                {
-                    "measurement": "app_start_cold",
-                    "weight": 0.25,
-                    "p10": 200.0,
-                    "p50": 500.0,
-                    "optional": True,
-                },
-            ],
-            "condition": {
-                "op": "and",
-                "inner": [
-                    {
-                        "op": "or",
-                        "inner": [
-                            {
-                                "op": "eq",
-                                "name": "event.sdk.name",
-                                "value": "sentry.cocoa",
-                            },
-                            {
-                                "op": "eq",
-                                "name": "event.sdk.name",
-                                "value": "sentry.java.android",
-                            },
-                        ],
-                    },
-                    {"op": "eq", "name": "event.contexts.trace.op", "value": "ui.load"},
-                ],
-            },
-        }
-    ]
-
-
 def _get_project_config(
     project: Project, project_keys: Iterable[ProjectKey] | None = None
 ) -> ProjectConfig:
@@ -1100,17 +942,7 @@ def _get_project_config(
 
     config["breakdownsV2"] = project.get_option("sentry:breakdowns")
 
-    add_experimental_config(config, "metrics", get_metrics_config, project)
-
     if _should_extract_transaction_metrics(project):
-        add_experimental_config(
-            config,
-            "transactionMetrics",
-            get_transaction_metrics_settings,
-            project,
-            config.get("breakdownsV2"),
-        )
-
         # This config key is technically not specific to _transaction_ metrics,
         # is however currently both only applied to transaction metrics in
         # Relay, and only used to tag transaction metrics in Sentry.
@@ -1135,7 +967,6 @@ def _get_project_config(
     performance_score_profiles = [
         *_get_desktop_browser_performance_profiles(project.organization),
         *_get_mobile_browser_performance_profiles(project.organization),
-        *_get_mobile_performance_profiles(project.organization),
         *_get_default_browser_performance_profiles(project.organization),
     ]
     if performance_score_profiles:
@@ -1158,68 +989,24 @@ def _get_project_config(
         )
         if downsampled_event_retention is not None:
             config["downsampledEventRetention"] = downsampled_event_retention
+    with sentry_sdk.start_span(op="get_retentions"):
+        retentions = quotas.backend.get_retentions(project.organization)
+        retentions_config = {
+            RETENTIONS_CONFIG_MAPPING[c]: v.to_object()
+            for c, v in retentions.items()
+            if c in RETENTIONS_CONFIG_MAPPING
+        }
+        if retentions_config:
+            config["retentions"] = retentions_config
+
+    with sentry_sdk.start_span(op="get_trimming_configs"):
+        trimming_configs = quotas.backend.get_trimming_configs(project.organization)
+        if trimming_configs:
+            config["trimming"] = trimming_configs
+
     with sentry_sdk.start_span(op="get_all_quotas"):
         if quotas_config := get_quotas(project, keys=project_keys):
             config["quotas"] = quotas_config
-
-    if features.has("organizations:log-project-config", project.organization):
-        try:
-            logger.info(
-                "log-project-config - get_project_config: Logging sampling feature flags for project %s in org %s.",
-                project.id,
-                project.organization.id,
-                extra={
-                    "project_id": str(project.id),
-                    "org_id": str(project.organization.id),
-                    "sampling_rule_count": (
-                        len(config["sampling"]["rules"]) if "sampling" in config else None
-                    ),
-                    "dynamic_sampling_feature_flag": features.has(
-                        "organizations:dynamic-sampling", project.organization
-                    ),
-                    "dynamic_sampling_custom_feature_flag": features.has(
-                        "organizations:dynamic-sampling-custom", project.organization
-                    ),
-                    "dynamic_sampling_mode": project.organization.get_option(
-                        "sentry:sampling_mode", None
-                    ),
-                    "dynamic_sampling_org_target_rate": project.organization.get_option(
-                        "sentry:target_sample_rate", None
-                    ),
-                    "dynamic_sampling_biases": project.get_option(
-                        "sentry:dynamic_sampling_biases", None
-                    ),
-                    "low_volume_projects_sample_rate": get_boost_low_volume_projects_sample_rate(
-                        org_id=project.organization.id,
-                        project_id=project.id,
-                        error_sample_rate_fallback=None,
-                    ),
-                },
-            )
-            logger.info(
-                "log-project-config - get_project_config: Logging project sampling config for project %s in org %s.",
-                project.id,
-                project.organization.id,
-                extra={
-                    "project_sampling_config": config["sampling"] if "sampling" in config else None,
-                    "project_id": str(project.id),
-                    "org_id": str(project.organization.id),
-                    "dynamic_sampling_feature_flag": features.has(
-                        "organizations:dynamic-sampling", project.organization
-                    ),
-                    "dynamic_sampling_custom_feature_flag": features.has(
-                        "organizations:dynamic-sampling-custom", project.organization
-                    ),
-                    "dynamic_sampling_mode": project.organization.get_option(
-                        "sentry:sampling_mode", None
-                    ),
-                    "dynamic_sampling_org_target_rate": project.organization.get_option(
-                        "sentry:target_sample_rate", None
-                    ),
-                },
-            )
-        except Exception:
-            capture_exception()
 
     return ProjectConfig(project, **cfg)
 
@@ -1313,7 +1100,7 @@ class _ConfigBase:
 
     def __str__(self) -> str:
         try:
-            return utils.json.dumps(self.to_dict(), sort_keys=True)  # type: ignore[arg-type]
+            return utils.json.dumps(self.to_dict(), sort_keys=True)
         except Exception as e:
             return f"Content Error:{e}"
 
@@ -1358,8 +1145,8 @@ def _filter_option_to_config_setting(flt: _FilterSpec, setting: str) -> Mapping[
     """
     if setting is None:
         raise ValueError(
-            "Could not find filter state for filter {}."
-            " You need to register default filter state in projectoptions.defaults.".format(flt.id)
+            f"Could not find filter state for filter {flt.id}."
+            " You need to register default filter state in projectoptions.defaults."
         )
 
     is_enabled = setting != "0"
@@ -1384,67 +1171,9 @@ def _filter_option_to_config_setting(flt: _FilterSpec, setting: str) -> Mapping[
     return ret_val
 
 
-#: Version of the transaction metrics extraction.
-#: When you increment this version, outdated Relays will stop extracting
-#: transaction metrics.
-#: See https://github.com/getsentry/relay/blob/6181c6e80b9485ed394c40bc860586ae934704e2/relay-dynamic-config/src/metrics.rs#L85
-TRANSACTION_METRICS_EXTRACTION_VERSION = 6
-
-
-class CustomMeasurementSettings(TypedDict):
-    limit: int
-
-
-TransactionNameStrategy = Literal["strict", "clientBased"]
-
-
-class TransactionMetricsSettings(TypedDict):
-    version: int
-    extractCustomTags: list[str]
-    customMeasurements: CustomMeasurementSettings
-    acceptTransactionNames: TransactionNameStrategy
-
-
 def _should_extract_transaction_metrics(project: Project) -> bool:
     return features.has(
         "organizations:transaction-metrics-extraction", project.organization
     ) and not killswitches.killswitch_matches_context(
         "relay.drop-transaction-metrics", {"project_id": project.id}
     )
-
-
-def get_transaction_metrics_settings(
-    timeout: TimeChecker, project: Project, breakdowns_config: Mapping[str, Any] | None
-) -> TransactionMetricsSettings:
-    """This function assumes that the corresponding feature flag has been checked.
-    See _should_extract_transaction_metrics.
-    """
-    custom_tags: list[str] = []
-
-    if breakdowns_config is not None:
-        # we already have a breakdown configuration that tells relay which
-        # breakdowns to compute for an event. metrics extraction should
-        # probably be in sync with that, or at least not extract more metrics
-        # than there are breakdowns configured.
-        try:
-            for _, breakdown_config in breakdowns_config.items():
-                assert breakdown_config["type"] == "spanOperations"
-
-        except Exception:
-            capture_exception()
-
-    # Tells relay which user-defined tags to add to each extracted
-    # transaction metric.  This cannot include things such as `os.name`
-    # which are computed on the server, they have to come from the SDK as
-    # event tags.
-    try:
-        custom_tags.extend(project.get_option("sentry:transaction_metrics_custom_tags") or ())
-    except Exception:
-        capture_exception()
-
-    return {
-        "version": TRANSACTION_METRICS_EXTRACTION_VERSION,
-        "extractCustomTags": custom_tags,
-        "customMeasurements": {"limit": CUSTOM_MEASUREMENT_LIMIT},
-        "acceptTransactionNames": "clientBased",
-    }

@@ -3,10 +3,7 @@ import {initializeLogsTest} from 'sentry-fixture/log';
 import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
 import {LogsAnalyticsPageSource} from 'sentry/utils/analytics/logsAnalyticsEvent';
-import {
-  LOGS_QUERY_KEY,
-  LogsPageParamsProvider,
-} from 'sentry/views/explore/contexts/logs/logsPageParams';
+import {LOGS_QUERY_KEY} from 'sentry/views/explore/contexts/logs/logsPageParams';
 import {LOGS_SORT_BYS_KEY} from 'sentry/views/explore/contexts/logs/sortBys';
 import {QUERY_PAGE_LIMIT} from 'sentry/views/explore/logs/constants';
 import {LogsExportButton} from 'sentry/views/explore/logs/logsExport';
@@ -17,7 +14,7 @@ jest.mock('sentry/views/explore/logs/logsExportCsv');
 
 describe('LogsExportButton', () => {
   const {organization, setupPageFilters} = initializeLogsTest({
-    organization: {features: ['ourlogs-enabled', 'ourlogs-export', 'discover-query']},
+    organization: {features: ['ourlogs-enabled', 'discover-query']},
   });
   const initialRouterConfig = {
     location: {
@@ -32,12 +29,11 @@ describe('LogsExportButton', () => {
 
   function ProviderWrapper({children}: {children: React.ReactNode}) {
     return (
-      <LogsQueryParamsProvider source="location">
-        <LogsPageParamsProvider
-          analyticsPageSource={LogsAnalyticsPageSource.EXPLORE_LOGS}
-        >
-          {children}
-        </LogsPageParamsProvider>
+      <LogsQueryParamsProvider
+        analyticsPageSource={LogsAnalyticsPageSource.EXPLORE_LOGS}
+        source="location"
+      >
+        {children}
       </LogsQueryParamsProvider>
     );
   }
@@ -87,7 +83,9 @@ describe('LogsExportButton', () => {
   });
 
   it('should send correct payload for async export with all LogsQueryInfo parameters', async () => {
-    const largeTableData = new Array(QUERY_PAGE_LIMIT).fill(mockTableData[0]);
+    const largeTableData = Array.from<(typeof mockTableData)[number]>({
+      length: QUERY_PAGE_LIMIT,
+    }).fill(mockTableData[0]!);
 
     const exportMock = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/data-export/`,

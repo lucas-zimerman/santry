@@ -612,6 +612,84 @@ class SetCommitsTestCase(TestCase):
         assert commit.author is not None
         assert commit.author.email == truncatechars(commit_email, 75)
 
+    @receivers_raise_on_send()
+    def test_multiple_authors(self) -> None:
+        """Test that multiple unique authors are created and existing authors are reused."""
+        org = self.create_organization(owner=Factories.create_user())
+        project = self.create_project(organization=org, name="foo")
+        repo = Repository.objects.create(organization_id=org.id, name="test/repo")
+
+        # Pre-create one author to test reuse
+        existing_author = CommitAuthor.objects.create(
+            organization_id=org.id,
+            email="existing@example.com",
+            name="Old Name",
+        )
+
+        release = Release.objects.create(version="abcdabc", organization=org)
+        release.add_project(project)
+        release.set_commits(
+            [
+                {
+                    "id": "a" * 40,
+                    "repository": repo.name,
+                    "author_email": "author1@example.com",
+                    "author_name": "Author One",
+                    "message": "commit 1",
+                },
+                {
+                    "id": "b" * 40,
+                    "repository": repo.name,
+                    "author_email": "author2@example.com",
+                    "author_name": "Author Two",
+                    "message": "commit 2",
+                },
+                {
+                    "id": "c" * 40,
+                    "repository": repo.name,
+                    "author_email": "EXISTING@example.com",  # Test case-insensitive reuse
+                    "author_name": "New Name",  # Test name update
+                    "message": "commit 3",
+                },
+                {
+                    "id": "d" * 40,
+                    "repository": repo.name,
+                    # No author_email - should handle gracefully
+                    "message": "commit 4",
+                },
+            ]
+        )
+
+        # Verify new authors were created
+        assert CommitAuthor.objects.filter(
+            organization_id=org.id, email="author1@example.com"
+        ).exists()
+        assert CommitAuthor.objects.filter(
+            organization_id=org.id, email="author2@example.com"
+        ).exists()
+
+        # Verify existing author was reused (not duplicated) and name was updated
+        assert (
+            CommitAuthor.objects.filter(
+                organization_id=org.id, email="existing@example.com"
+            ).count()
+            == 1
+        )
+        existing_author.refresh_from_db()
+        assert existing_author.name == "New Name"
+
+        # Verify commits have correct authors
+        commit_a = Commit.objects.get(repository_id=repo.id, key="a" * 40)
+        assert commit_a.author is not None
+        assert commit_a.author.email == "author1@example.com"
+
+        commit_c = Commit.objects.get(repository_id=repo.id, key="c" * 40)
+        assert commit_c.author is not None
+        assert commit_c.author.id == existing_author.id
+
+        commit_d = Commit.objects.get(repository_id=repo.id, key="d" * 40)
+        assert commit_d.author is None
+
 
 class SetRefsTest(SetRefsTestCase):
     def setUp(self) -> None:
@@ -740,8 +818,7 @@ class SetRefsTest(SetRefsTestCase):
     # @staticmethod
     def test_invalid_chars_in_version(self) -> None:
         version = (
-            "\n> rfrontend@0.1.0 release:version\n> echo "
-            "'dev-19be1b7e-dirty'\n\ndev-19be1b7e-dirty"
+            "\n> rfrontend@0.1.0 release:version\n> echo 'dev-19be1b7e-dirty'\n\ndev-19be1b7e-dirty"
         )
         assert not Release.is_valid_version(version)
 
@@ -1401,16 +1478,91 @@ class ClearCommitsTestCase(TestCase):
             id=commit2.id, organization_id=org.id, repository_id=repo.id
         ).exists()
 
+    @receivers_raise_on_send()
+    def test_clear_commits_with_multiple_repositories(self) -> None:
+        """
+        Test that clear_commits works correctly when a release has commits
+        from multiple repositories, which creates multiple ReleaseHeadCommit objects.
+
+        This test would fail on master with .get() raising MultipleObjectsReturned,
+        but passes with the fix using .filter().
+        """
+        org = self.create_organization(owner=Factories.create_user())
+        project = self.create_project(organization=org, name="foo")
+
+        # Create multiple repositories
+        repo1 = Repository.objects.create(organization_id=org.id, name="test/repo1")
+        repo2 = Repository.objects.create(organization_id=org.id, name="test/repo2")
+
+        # Create commits in each repository
+        commit1 = Commit.objects.create(
+            organization_id=org.id,
+            repository_id=repo1.id,
+            key="commit1key",
+            message="First commit",
+        )
+        commit2 = Commit.objects.create(
+            organization_id=org.id,
+            repository_id=repo2.id,
+            key="commit2key",
+            message="Second commit",
+        )
+
+        release = Release.objects.create(version="multi-repo-release", organization=org)
+        release.add_project(project)
+
+        # Set commits from both repositories
+        release.set_commits(
+            [
+                {"id": commit1.key, "repository": repo1.name},
+                {"id": commit2.key, "repository": repo2.name},
+            ]
+        )
+
+        # Verify we have multiple ReleaseHeadCommit objects for this release
+        head_commits = ReleaseHeadCommit.objects.filter(organization_id=org.id, release=release)
+        assert head_commits.count() == 2
+        assert ReleaseHeadCommit.objects.filter(
+            release_id=release.id, commit_id=commit1.id, repository_id=repo1.id
+        ).exists()
+        assert ReleaseHeadCommit.objects.filter(
+            release_id=release.id, commit_id=commit2.id, repository_id=repo2.id
+        ).exists()
+
+        # Verify ReleaseCommit objects exist
+        assert ReleaseCommit.objects.filter(commit=commit1, release=release).exists()
+        assert ReleaseCommit.objects.filter(commit=commit2, release=release).exists()
+
+        # Now clear the commits - this would fail on master with .get()
+        release.clear_commits()
+
+        # Verify all ReleaseHeadCommit objects are deleted
+        assert (
+            ReleaseHeadCommit.objects.filter(organization_id=org.id, release=release).count() == 0
+        )
+
+        # Verify all ReleaseCommit objects are deleted
+        assert not ReleaseCommit.objects.filter(release=release).exists()
+
+        # Verify release fields are cleared
+        assert release.commit_count == 0
+        assert release.authors == []
+        assert not release.last_commit_id
+
+        # Commits should still exist in their repositories
+        assert Commit.objects.filter(id=commit1.id).exists()
+        assert Commit.objects.filter(id=commit2.id).exists()
+
 
 class ReleaseGetUnusedFilterTestCase(TestCase):
     """Test the Release.get_unused_filter() method logic"""
 
-    def setUp(self):
+    def setUp(self) -> None:
         self.organization = self.create_organization()
         self.project = self.create_project(organization=self.organization)
         self.cutoff_date = timezone.now() - timedelta(days=30)
 
-    def test_get_unused_filter_includes_old_releases_without_dependencies(self):
+    def test_get_unused_filter_includes_old_releases_without_dependencies(self) -> None:
         """Old releases with no dependencies should be included in unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1423,7 +1575,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release in unused_releases
 
-    def test_get_unused_filter_excludes_recently_added_releases(self):
+    def test_get_unused_filter_excludes_recently_added_releases(self) -> None:
         """Recently added releases should be excluded from unused filter"""
         recent_release = self.create_release(
             project=self.project,
@@ -1436,7 +1588,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert recent_release not in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_groups(self):
+    def test_get_unused_filter_excludes_releases_with_groups(self) -> None:
         """Releases referenced by groups should be excluded from unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1450,7 +1602,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_group_environments(self):
+    def test_get_unused_filter_excludes_releases_with_group_environments(self) -> None:
         """Releases referenced by GroupEnvironment should be excluded from unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1470,7 +1622,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_group_history(self):
+    def test_get_unused_filter_excludes_releases_with_group_history(self) -> None:
         """Releases referenced by GroupHistory should be excluded from unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1490,7 +1642,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_group_resolutions(self):
+    def test_get_unused_filter_excludes_releases_with_group_resolutions(self) -> None:
         """Releases referenced by GroupResolution should be excluded from unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1508,7 +1660,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_distributions(self):
+    def test_get_unused_filter_excludes_releases_with_distributions(self) -> None:
         """Releases with distributions should be excluded from unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1526,7 +1678,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_deploys(self):
+    def test_get_unused_filter_excludes_releases_with_deploys(self) -> None:
         """Releases with deploys should be excluded from unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1545,7 +1697,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_ignores_safe_child_relations(self):
+    def test_get_unused_filter_ignores_safe_child_relations(self) -> None:
         """Safe child relations should not prevent inclusion in unused filter"""
         old_release = self.create_release(
             project=self.project,
@@ -1578,7 +1730,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         # These relations should not prevent the release from being considered unused
         assert old_release in unused_releases
 
-    def test_get_unused_filter_multiple_releases_mixed_dependencies(self):
+    def test_get_unused_filter_multiple_releases_mixed_dependencies(self) -> None:
         """Test filter correctly handles multiple releases with different dependency patterns"""
         # Create various releases with different dependency patterns
         unused_old_release = self.create_release(
@@ -1621,7 +1773,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         assert release_with_group not in unused_releases
         assert release_with_deploy not in unused_releases
 
-    def test_get_unused_filter_with_latest_repo_release_environment(self):
+    def test_get_unused_filter_with_latest_repo_release_environment(self) -> None:
         """Test that LatestRepoReleaseEnvironment subquery works correctly"""
         old_release = self.create_release(
             project=self.project,
@@ -1647,7 +1799,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_with_recent_activity(self):
+    def test_get_unused_filter_with_recent_activity(self) -> None:
         """Test that ReleaseProjectEnvironment last_seen subquery works correctly"""
         old_release = self.create_release(
             project=self.project,
@@ -1673,7 +1825,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_excludes_release_that_is_first_release_of_group(self):
+    def test_get_unused_filter_excludes_release_that_is_first_release_of_group(self) -> None:
         """Test that a release is not considered unused if it is the first_release of any group"""
         old_release = self.create_release(
             project=self.project,
@@ -1699,7 +1851,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
 
         assert Group.objects.filter(first_release=old_release).exists() is True
 
-    def test_get_unused_filter_excludes_releases_with_recent_deploys(self):
+    def test_get_unused_filter_excludes_releases_with_recent_deploys(self) -> None:
         """Test that releases with recent deploys are not considered unused"""
         old_release = self.create_release(
             project=self.project,
@@ -1727,7 +1879,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_allows_cleanup_with_old_deploys(self):
+    def test_get_unused_filter_allows_cleanup_with_old_deploys(self) -> None:
         """Test that releases with old deploys can be cleaned up"""
         old_release = self.create_release(
             project=self.project,
@@ -1750,7 +1902,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_recent_distributions(self):
+    def test_get_unused_filter_excludes_releases_with_recent_distributions(self) -> None:
         """Test that releases with recent distributions are not considered unused"""
         old_release = self.create_release(
             project=self.project,
@@ -1777,7 +1929,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_allows_cleanup_with_old_distributions(self):
+    def test_get_unused_filter_allows_cleanup_with_old_distributions(self) -> None:
         """Test that releases with old distributions can be cleaned up"""
         old_release = self.create_release(
             project=self.project,
@@ -1799,7 +1951,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_recent_group_releases(self):
+    def test_get_unused_filter_excludes_releases_with_recent_group_releases(self) -> None:
         """Test that releases with recent group releases are not considered unused"""
         old_release = self.create_release(
             project=self.project,
@@ -1829,7 +1981,7 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release not in unused_releases
 
-    def test_get_unused_filter_allows_cleanup_with_old_group_releases(self):
+    def test_get_unused_filter_allows_cleanup_with_old_group_releases(self) -> None:
         """Test that releases with old group releases can be cleaned up"""
         old_release = self.create_release(
             project=self.project,
@@ -1855,51 +2007,22 @@ class ReleaseGetUnusedFilterTestCase(TestCase):
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release in unused_releases
 
-    def test_get_unused_filter_excludes_releases_with_recent_group_resolutions(self):
-        """Test that releases with recent group resolutions are not considered unused"""
+    def test_get_unused_filter_excludes_releases_with_old_group_resolutions(self) -> None:
+        """Test that releases with old GroupResolutions are still protected"""
         old_release = self.create_release(
             project=self.project,
             version="1.0.0",
             date_added=timezone.now() - timedelta(days=35),
         )
-
-        # Release should be unused initially
-        unused_filter = Release.get_unused_filter(self.cutoff_date)
-        unused_releases = Release.objects.filter(unused_filter)
-        assert old_release in unused_releases
-
-        # Create a recent group resolution (within cutoff) - should keep the release
-        from sentry.models.groupresolution import GroupResolution
-
         group = self.create_group(project=self.project)
+
+        # Even old GroupResolutions should protect the release
         GroupResolution.objects.create(
             group=group,
             release=old_release,
-            datetime=timezone.now() - timedelta(days=10),  # Recent group resolution
+            datetime=timezone.now() - timedelta(days=100),
         )
 
         unused_filter = Release.get_unused_filter(self.cutoff_date)
         unused_releases = Release.objects.filter(unused_filter)
         assert old_release not in unused_releases
-
-    def test_get_unused_filter_allows_cleanup_with_old_group_resolutions(self):
-        """Test that releases with old group resolutions can be cleaned up"""
-        old_release = self.create_release(
-            project=self.project,
-            version="1.0.0",
-            date_added=timezone.now() - timedelta(days=35),
-        )
-
-        # Create an old group resolution (before cutoff) - should allow cleanup
-        from sentry.models.groupresolution import GroupResolution
-
-        group = self.create_group(project=self.project)
-        GroupResolution.objects.create(
-            group=group,
-            release=old_release,
-            datetime=timezone.now() - timedelta(days=100),  # Old group resolution
-        )
-
-        unused_filter = Release.get_unused_filter(self.cutoff_date)
-        unused_releases = Release.objects.filter(unused_filter)
-        assert old_release in unused_releases

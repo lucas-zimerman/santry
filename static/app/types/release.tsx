@@ -108,18 +108,6 @@ interface ReleaseData {
   userAgent?: string;
 }
 
-export type CurrentRelease = {
-  environment: string;
-  firstSeen: string;
-  lastSeen: string;
-  release: Release;
-  stats: {
-    // 24h/30d is hardcoded in GroupReleaseWithStatsSerializer
-    '24h': TimeseriesValue[];
-    '30d': TimeseriesValue[];
-  };
-};
-
 export type ReleaseProject = {
   id: number;
   name: string;
@@ -182,11 +170,13 @@ export enum ReleaseComparisonChartType {
   HEALTHY_USERS = 'healthyUsers',
   ABNORMAL_USERS = 'abnormalUsers',
   ERRORED_USERS = 'erroredUsers',
+  UNHANDLED_USERS = 'unhandledUsers',
   CRASHED_USERS = 'crashedUsers',
   CRASH_FREE_SESSIONS = 'crashFreeSessions',
   HEALTHY_SESSIONS = 'healthySessions',
   ABNORMAL_SESSIONS = 'abnormalSessions',
   ERRORED_SESSIONS = 'erroredSessions',
+  UNHANDLED_SESSIONS = 'unhandledSessions',
   CRASHED_SESSIONS = 'crashedSessions',
   SESSION_COUNT = 'sessionCount',
   USER_COUNT = 'userCount',

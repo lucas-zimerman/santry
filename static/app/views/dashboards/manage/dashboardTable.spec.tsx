@@ -22,7 +22,7 @@ describe('Dashboards - DashboardTable', () => {
   let dashboardUpdateMock: jest.Mock;
   let createMock: jest.Mock;
   const organization = OrganizationFixture({
-    features: ['global-views', 'dashboards-basic', 'dashboards-edit', 'discover-query'],
+    features: ['dashboards-basic', 'dashboards-edit', 'discover-query'],
   });
 
   const {router} = initializeOrg();
@@ -155,19 +155,22 @@ describe('Dashboards - DashboardTable', () => {
     );
   });
 
-  it('persists global selection headers', async () => {
+  it('does not forward query params from the list page to dashboard links', async () => {
     render(
       <DashboardTable
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={dashboards}
-        location={{...LocationFixture(), query: {statsPeriod: '7d'}}}
+        location={{
+          ...LocationFixture(),
+          query: {sort: 'title', query: 'agent', statsPeriod: '7d'},
+        }}
       />
     );
 
     expect(await screen.findByRole('link', {name: 'Dashboard 1'})).toHaveAttribute(
       'href',
-      '/organizations/org-slug/dashboard/1/?statsPeriod=7d'
+      '/organizations/org-slug/dashboard/1/'
     );
   });
 
@@ -280,7 +283,7 @@ describe('Dashboards - DashboardTable', () => {
 
   it('renders access column', async () => {
     const organizationWithEditAccess = OrganizationFixture({
-      features: ['global-views', 'dashboards-basic', 'dashboards-edit', 'discover-query'],
+      features: ['dashboards-basic', 'dashboards-edit', 'discover-query'],
     });
 
     render(
@@ -294,7 +297,7 @@ describe('Dashboards - DashboardTable', () => {
 
     expect(await screen.findAllByTestId('grid-head-cell')).toHaveLength(5);
     expect(screen.getByText('Access')).toBeInTheDocument();
-    await userEvent.click((await screen.findAllByTestId('edit-access-dropdown'))[0]!);
+    await userEvent.click(screen.getByText('All'));
     expect(screen.getAllByPlaceholderText('Search Teams')[0]).toBeInTheDocument();
   });
 
@@ -306,7 +309,7 @@ describe('Dashboards - DashboardTable', () => {
     });
 
     const organizationWithFavorite = OrganizationFixture({
-      features: ['global-views', 'dashboards-basic', 'dashboards-edit', 'discover-query'],
+      features: ['dashboards-basic', 'dashboards-edit', 'discover-query'],
     });
 
     render(
@@ -321,11 +324,11 @@ describe('Dashboards - DashboardTable', () => {
       }
     );
 
-    expect(screen.getByLabelText('Favorite Column')).toBeInTheDocument();
-    expect(screen.queryAllByLabelText('Favorite')).toHaveLength(1);
-    expect(screen.queryAllByLabelText('UnFavorite')).toHaveLength(1);
+    expect(screen.getByLabelText('Star Column')).toBeInTheDocument();
+    expect(screen.queryAllByLabelText('Star')).toHaveLength(1);
+    expect(screen.queryAllByLabelText('Unstar')).toHaveLength(1);
 
-    await userEvent.click(screen.queryAllByLabelText('Favorite')[0]!);
-    expect(screen.queryAllByLabelText('UnFavorite')).toHaveLength(2);
+    await userEvent.click(screen.queryAllByLabelText('Star')[0]!);
+    expect(screen.queryAllByLabelText('Unstar')).toHaveLength(2);
   });
 });

@@ -1,18 +1,28 @@
 import {createLogFixtures, initializeLogsTest} from 'sentry-fixture/log';
 import {ProjectKeysFixture} from 'sentry-fixture/projectKeys';
 import {TeamFixture} from 'sentry-fixture/team';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
-import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
+import {
+  render,
+  screen,
+  userEvent,
+  waitFor,
+  within,
+} from 'sentry-test/reactTestingLibrary';
 
 import * as useRecentCreatedProjectHook from 'sentry/components/onboarding/useRecentCreatedProject';
-import ProjectsStore from 'sentry/stores/projectsStore';
-import TeamStore from 'sentry/stores/teamStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
+import {TeamStore} from 'sentry/stores/teamStore';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
+import {mockGetBoundingClientRect} from 'sentry/utils/fixtures/virtualization';
 import {LOGS_AUTO_REFRESH_KEY} from 'sentry/views/explore/contexts/logs/logsAutoRefreshContext';
 import type {OurLogsResponseItem} from 'sentry/views/explore/logs/types';
 
 import LogsPage from './content';
+
+beforeEach(mockGetBoundingClientRect);
 
 describe('LogsPage', () => {
   let organization: Organization;
@@ -20,7 +30,7 @@ describe('LogsPage', () => {
   let testDate: Date;
 
   let eventTableMock: jest.Mock;
-  let eventStatsMock: jest.Mock;
+  let eventsTimeSeriesMock: jest.Mock;
 
   beforeEach(() => {
     MockApiClient.clearMockResponses();
@@ -42,10 +52,12 @@ describe('LogsPage', () => {
 
     eventTableMock = setupEventsMock(baseFixtures.slice(0, 2));
 
-    eventStatsMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+    eventsTimeSeriesMock = MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       method: 'GET',
-      body: {},
+      body: {
+        timeSeries: [TimeSeriesFixture()],
+      },
     });
 
     MockApiClient.addMockResponse({
@@ -61,7 +73,7 @@ describe('LogsPage', () => {
     });
 
     MockApiClient.addMockResponse({
-      url: `/subscriptions/${organization.slug}/`,
+      url: `/customers/${organization.slug}/`,
       method: 'GET',
       body: {},
     });
@@ -71,13 +83,19 @@ describe('LogsPage', () => {
       method: 'GET',
       body: [],
     });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/stats_v2/`,
+      method: 'GET',
+      body: {},
+    });
   });
 
   it('should call APIs as expected', async () => {
     render(<LogsPage />, {
       organization,
       initialRouterConfig: {
-        location: `/organizations/${organization.slug}/explore/logs/`,
+        location: {pathname: `/organizations/${organization.slug}/explore/logs/`},
       },
     });
 
@@ -86,7 +104,7 @@ describe('LogsPage', () => {
     });
 
     await waitFor(() => {
-      expect(eventStatsMock).toHaveBeenCalled();
+      expect(eventsTimeSeriesMock).toHaveBeenCalled();
     });
 
     const table = screen.getByTestId('logs-table');
@@ -141,7 +159,7 @@ describe('LogsPage', () => {
     render(<LogsPage />, {
       organization,
       initialRouterConfig: {
-        location: `/organizations/${organization.slug}/explore/logs/`,
+        location: {pathname: `/organizations/${organization.slug}/explore/logs/`},
       },
     });
 
@@ -157,7 +175,7 @@ describe('LogsPage', () => {
     render(<LogsPage />, {
       organization,
       initialRouterConfig: {
-        location: `/organizations/${organization.slug}/explore/logs/`,
+        location: {pathname: `/organizations/${organization.slug}/explore/logs/`},
       },
     });
 
@@ -166,14 +184,16 @@ describe('LogsPage', () => {
     });
 
     await waitFor(() => {
-      expect(eventStatsMock).toHaveBeenCalled();
+      expect(eventsTimeSeriesMock).toHaveBeenCalled();
     });
 
     eventTableMock.mockClear();
-    eventStatsMock.mockClear();
+    eventsTimeSeriesMock.mockClear();
 
     await userEvent.click(screen.getByRole('button', {name: 'Expand sidebar'}));
-    await userEvent.click(screen.getByRole('button', {name: '\u2014'}));
+
+    const editorColumn = screen.getAllByTestId('editor-column')[0]!;
+    await userEvent.click(within(editorColumn).getByRole('button', {name: '\u2014'}));
     await userEvent.click(screen.getByRole('option', {name: 'severity'}));
     await userEvent.click(screen.getByRole('tab', {name: 'Aggregates'}));
 
@@ -193,17 +213,26 @@ describe('LogsPage', () => {
     });
 
     await waitFor(() => {
-      expect(eventStatsMock).toHaveBeenCalledWith(
-        `/organizations/${organization.slug}/events-stats/`,
+      expect(eventsTimeSeriesMock).toHaveBeenCalledWith(
+        `/organizations/${organization.slug}/events-timeseries/`,
         expect.objectContaining({
           query: expect.objectContaining({
-            environment: [],
-            statsPeriod: '24h',
+            caseInsensitive: undefined,
             dataset: 'ourlogs',
-            field: ['severity', 'count(message)'],
-            yAxis: 'count(message)',
-            orderby: '-count_message',
+            disableAggregateExtrapolation: '0',
+            environment: [],
+            excludeOther: 0,
+            groupBy: ['severity'],
             interval: '5m',
+            partial: 1,
+            project: [parseInt(project.id, 10)],
+            query: '',
+            referrer: 'api.explore.ourlogs-timeseries',
+            sampling: 'NORMAL',
+            sort: '-count_message',
+            statsPeriod: '24h',
+            topEvents: 5,
+            yAxis: ['count(message)'],
           }),
         })
       );
@@ -334,7 +363,12 @@ describe('LogsPage', () => {
       expect(switchInput).not.toBeChecked();
       expect(switchInput).toBeEnabled();
 
-      expect(eventTableMock).toHaveBeenCalledTimes(1);
+      // 3 calls total
+      // - one for the table
+      // - one for the normal sample mode count
+      // - one for the high accuracy sample mode count
+      expect(eventTableMock).toHaveBeenCalledTimes(3);
+
       eventTableMock.mockClear();
       eventTableMock = setupEventsMock(autorefreshBaseFixtures.slice(0, 5));
 

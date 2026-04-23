@@ -25,12 +25,14 @@ type CountScores = Pick<
 
 type TotalPerformanceScore = {'performance_score(measurements.score.total)': number};
 
+export type WebVitalScores = CountScores & PerformanceScores & TotalPerformanceScore;
+
 function getWebVitalScore(data: PerformanceScores, webVital: WebVitals): number {
   return data[`performance_score(measurements.score.${webVital})`] * 100;
 }
 
 function getTotalScore(data: TotalPerformanceScore): number {
-  return data[`performance_score(measurements.score.total)`] * 100;
+  return data['performance_score(measurements.score.total)'] * 100;
 }
 
 function getWebVitalScoreCount(data: CountScores, webVital: WebVitals | 'total'): number {
@@ -44,9 +46,7 @@ function hasWebVitalScore(data: CountScores, webVital: WebVitals): boolean {
   return false;
 }
 
-export function getWebVitalScoresFromTableDataRow(
-  data?: CountScores & PerformanceScores & TotalPerformanceScore
-): ProjectScore {
+export function getWebVitalScoresFromTableDataRow(data?: WebVitalScores): ProjectScore {
   if (!data) {
     return {};
   }

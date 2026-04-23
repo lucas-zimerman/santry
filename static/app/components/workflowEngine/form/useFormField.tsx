@@ -2,9 +2,11 @@ import {useCallback, useContext, useSyncExternalStore} from 'react';
 import noop from 'lodash/noop';
 import {observe} from 'mobx';
 
-import FormContext from 'sentry/components/forms/formContext';
+import {FormContext} from 'sentry/components/forms/formContext';
 import type {FieldValue} from 'sentry/components/forms/types';
+import {getFormFieldValue} from 'sentry/components/workflowEngine/form/getFormFieldValue';
 
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
 export function useFormField<Value extends FieldValue = FieldValue>(
   field: string
 ): Value | undefined {
@@ -42,8 +44,7 @@ export function useFormField<Value extends FieldValue = FieldValue>(
       return undefined;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-    return context.form.getValue(field) as Value;
+    return getFormFieldValue<Value>(context.form, field);
   }, [context.form, field]);
 
   return useSyncExternalStore(subscribe, getSnapshot);

@@ -1,5 +1,6 @@
 import {Fragment, useState} from 'react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 
 import waitingForEventImg from 'sentry-images/spot/waiting-for-event.svg';
 import devkitCrashesStep1 from 'sentry-images/tempest/devkit-crashes-step1.png';
@@ -9,35 +10,40 @@ import devkitCrashesStep4 from 'sentry-images/tempest/devkit-crashes-step4.jpg';
 import devkitCrashesStep5 from 'sentry-images/tempest/devkit-crashes-step5.jpg';
 import windowToolImg from 'sentry-images/tempest/windows-tool-devkit.png';
 
-import Accordion from 'sentry/components/container/accordion';
-import {Button} from 'sentry/components/core/button';
+import {Button} from '@sentry/scraps/button';
+import {Flex, Stack} from '@sentry/scraps/layout';
+
+import {Accordion} from 'sentry/components/container/accordion';
 import {GuidedSteps} from 'sentry/components/guidedSteps/guidedSteps';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {OnboardingCodeSnippet} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCodeSnippet';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
+import {projectKeysApiOptions} from 'sentry/utils/projectKeys';
 import {decodeInteger} from 'sentry/utils/queryString';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import {useProjectKeys} from 'sentry/utils/useProjectKeys';
 
 interface Props {
   organization: Organization;
   project: Project;
 }
 
-export default function DevKitSettings({organization, project}: Props) {
+export function DevKitSettings({organization, project}: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const [expandedAccordionIndex, setExpandedAccordionIndex] = useState<number>(-1);
 
-  const {data: projectKeys, isPending: isLoadingKeys} = useProjectKeys({
-    orgSlug: organization.slug,
-    projSlug: project.slug,
+  const {data: projectKeys, isPending: isLoadingKeys} = useQuery({
+    ...projectKeysApiOptions({
+      orgSlug: organization.slug,
+      projSlug: project.slug,
+    }),
+    staleTime: Infinity,
+    retry: false,
   });
 
   if (isLoadingKeys) {
@@ -66,7 +72,6 @@ export default function DevKitSettings({organization, project}: Props) {
                   initialStep={decodeInteger(location.query.guidedStep)}
                   onStepChange={step => {
                     navigate({
-                      pathname: location.pathname,
                       query: {
                         ...location.query,
                         guidedStep: step,
@@ -113,21 +118,21 @@ export default function DevKitSettings({organization, project}: Props) {
                             ),
                             content: (
                               <AccordionContentWrapper>
-                                <StepContentColumn>
-                                  <StepTextSection>
+                                <Stack gap="2xl" width="100%">
+                                  <Stack gap="md">
                                     <p>
                                       {t(
-                                        `Using the Windows tool enter the URL as the 'Request Check URL' and 'Upload URL'.`
+                                        "Using the Windows tool enter the URL as the 'Request Check URL' and 'Upload URL'."
                                       )}
                                     </p>
-                                  </StepTextSection>
-                                  <StepImageSection>
+                                  </Stack>
+                                  <Flex justify="center" align="center" width="100%">
                                     <CardIllustration
                                       src={windowToolImg}
                                       alt="Setup Configuration"
                                     />
-                                  </StepImageSection>
-                                </StepContentColumn>
+                                  </Flex>
+                                </Stack>
                               </AccordionContentWrapper>
                             ),
                           },
@@ -139,45 +144,45 @@ export default function DevKitSettings({organization, project}: Props) {
                             ),
                             content: (
                               <AccordionContentWrapper>
-                                <StepContentColumn>
-                                  <StepTextSection>
+                                <Stack gap="2xl" width="100%">
+                                  <Stack gap="md">
                                     <p>
                                       {t(
-                                        `If you haven't done it via the Windows tool, you can set up the 'Upload URL' and 'Request Check URL' directly in the DevKit. This can be done under 'Debug Settings' > 'Core Dump' > 'Upload' > 'Upload URL' and 'Debug Settings' > 'Core Dump' > 'Data Request' > 'Request Check URL' respectively.`
+                                        "If you haven't done it via the Windows tool, you can set up the 'Upload URL' and 'Request Check URL' directly in the DevKit. This can be done under 'Debug Settings' > 'Core Dump' > 'Upload' > 'Upload URL' and 'Debug Settings' > 'Core Dump' > 'Data Request' > 'Request Check URL' respectively."
                                       )}
                                     </p>
-                                  </StepTextSection>
-                                  <StepImageSection>
+                                  </Stack>
+                                  <Flex justify="center" align="center" width="100%">
                                     <CardIllustration
                                       src={devkitCrashesStep1}
                                       alt="Setup Configuration"
                                     />
-                                  </StepImageSection>
-                                  <StepImageSection>
+                                  </Flex>
+                                  <Flex justify="center" align="center" width="100%">
                                     <CardIllustration
                                       src={devkitCrashesStep2}
                                       alt="Setup Configuration"
                                     />
-                                  </StepImageSection>
-                                  <StepImageSection>
+                                  </Flex>
+                                  <Flex justify="center" align="center" width="100%">
                                     <CardIllustration
                                       src={devkitCrashesStep3}
                                       alt="Setup Configuration"
                                     />
-                                  </StepImageSection>
-                                  <StepImageSection>
+                                  </Flex>
+                                  <Flex justify="center" align="center" width="100%">
                                     <CardIllustration
                                       src={devkitCrashesStep4}
                                       alt="Setup Configuration"
                                     />
-                                  </StepImageSection>
-                                  <StepImageSection>
+                                  </Flex>
+                                  <Flex justify="center" align="center" width="100%">
                                     <CardIllustration
                                       src={devkitCrashesStep5}
                                       alt="Setup Configuration"
                                     />
-                                  </StepImageSection>
-                                </StepContentColumn>
+                                  </Flex>
+                                </Stack>
                               </AccordionContentWrapper>
                             ),
                           },
@@ -230,24 +235,24 @@ export default function DevKitSettings({organization, project}: Props) {
 
 const Title = styled('div')`
   font-size: 26px;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
 `;
 
 const Description = styled('div')``;
 
 const HeaderWrapper = styled('div')`
-  border-radius: ${p => p.theme.borderRadius};
-  padding: ${space(4)};
+  border-radius: ${p => p.theme.radius.md};
+  padding: ${p => p.theme.space['3xl']};
 `;
 
 const BodyTitle = styled('div')`
-  font-size: ${p => p.theme.fontSize.xl};
-  font-weight: ${p => p.theme.fontWeight.bold};
-  margin-bottom: ${space(1)};
+  font-size: ${p => p.theme.font.size.xl};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
+  margin-bottom: ${p => p.theme.space.md};
 `;
 
 const Setup = styled('div')`
-  padding: ${space(4)};
+  padding: ${p => p.theme.space['3xl']};
 `;
 
 const Body = styled('div')``;
@@ -269,39 +274,20 @@ const Image = styled('img')`
 const Divider = styled('hr')`
   height: 1px;
   width: 95%;
-  background: ${p => p.theme.border};
+  /* eslint-disable-next-line @sentry/scraps/use-semantic-token */
+  background: ${p => p.theme.tokens.border.primary};
   border: none;
   margin-top: 0;
   margin-bottom: 0;
 `;
 
 const CodeSnippetWrapper = styled('div')`
-  margin-bottom: ${space(2)};
-  margin-top: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
+  margin-top: ${p => p.theme.space.xl};
 `;
 
 const DescriptionWrapper = styled('div')`
-  margin-bottom: ${space(1)};
-`;
-
-const StepContentColumn = styled('div')`
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  gap: ${space(3)};
-`;
-
-const StepTextSection = styled('div')`
-  display: flex;
-  flex-direction: column;
-  gap: ${space(1)};
-`;
-
-const StepImageSection = styled('div')`
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 100%;
+  margin-bottom: ${p => p.theme.space.md};
 `;
 
 const CardIllustration = styled('img')`
@@ -309,19 +295,19 @@ const CardIllustration = styled('img')`
   max-width: 600px;
   height: auto;
   object-fit: contain;
-  border: 1px solid ${p => p.theme.border};
-  border-radius: ${p => p.theme.borderRadius};
-  box-shadow: ${p => p.theme.dropShadowLight};
+  border: 1px solid ${p => p.theme.tokens.border.primary};
+  border-radius: ${p => p.theme.radius.md};
+  box-shadow: ${p => p.theme.shadow.low};
 `;
 
 const IntroText = styled('p')`
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
 `;
 
 const AccordionHeader = styled('span')`
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
 `;
 
 const AccordionContentWrapper = styled('div')`
-  padding: ${space(2)};
+  padding: ${p => p.theme.space.xl};
 `;

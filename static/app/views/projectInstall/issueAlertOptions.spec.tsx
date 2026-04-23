@@ -4,14 +4,18 @@ import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
 import type {IssueAlertNotificationProps} from 'sentry/views/projectInstall/issueAlertNotificationOptions';
 import type {IssueAlertOptionsProps} from 'sentry/views/projectInstall/issueAlertOptions';
-import IssueAlertOptions, {
+import {
+  IssueAlertOptions,
   RuleAction,
 } from 'sentry/views/projectInstall/issueAlertOptions';
 
 describe('IssueAlertOptions', () => {
   const notificationProps: IssueAlertNotificationProps = {
     actions: [],
-    channel: 'channel',
+    channel: {
+      label: 'channel',
+      value: 'channel',
+    },
     integration: OrganizationIntegrationsFixture(),
     provider: 'slack',
     providersToIntegrations: {},

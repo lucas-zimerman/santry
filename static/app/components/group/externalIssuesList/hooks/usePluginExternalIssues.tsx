@@ -1,14 +1,14 @@
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {openPluginActionModal} from 'sentry/components/group/pluginActions';
+import {openPluginActionModal} from 'sentry/components/group/pluginActionsModal';
 import {t} from 'sentry/locale';
-import plugins from 'sentry/plugins';
-import GroupStore from 'sentry/stores/groupStore';
+import {plugins} from 'sentry/plugins';
+import {GroupStore} from 'sentry/stores/groupStore';
 import type {Group} from 'sentry/types/group';
 import type {Project} from 'sentry/types/project';
 import {uniqueId} from 'sentry/utils/guid';
 import {getIntegrationIcon} from 'sentry/utils/integrationUtil';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 import type {GroupIntegrationIssueResult} from './types';
 
@@ -40,7 +40,7 @@ export function usePluginExternalIssues({
     const displayName = plugin.name || plugin.title;
     if (plugin.issue) {
       result.linkedIssues.push({
-        key: plugin.id,
+        key: `plugin-linked-${plugin.id}`,
         displayName: `${displayName} Issue`,
         displayIcon,
         title: plugin.issue.issue_id,
@@ -72,7 +72,7 @@ export function usePluginExternalIssues({
       });
     } else {
       result.integrations.push({
-        key: plugin.id,
+        key: `plugin-${plugin.id}`,
         displayName,
         displayIcon,
         actions: [
@@ -120,7 +120,7 @@ export function usePluginExternalIssues({
 
   for (const [title, action] of group.pluginActions) {
     result.integrations.push({
-      key: `${title}-${action}`,
+      key: `plugin-action-${title}-${action}`,
       displayName: title,
       displayIcon: getIntegrationIcon(title, 'sm'),
       actions: [

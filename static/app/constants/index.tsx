@@ -4,7 +4,7 @@ import {t} from 'sentry/locale';
 import type {DataCategoryInfo, Scope} from 'sentry/types/core';
 import {DataCategory, DataCategoryExact} from 'sentry/types/core';
 import type {PermissionResource} from 'sentry/types/integrations';
-import type {OrgRole} from 'sentry/types/organization';
+import type {Organization, OrgRole} from 'sentry/types/organization';
 
 /**
  * Common constants here
@@ -20,6 +20,10 @@ export const CUSTOMER_DOMAIN =
   typeof window === 'undefined'
     ? undefined
     : window?.__initialData?.customerDomain?.subdomain;
+
+// Constant used for tracking referrer in session storage rather than
+// ?referrer=foo get parameter:
+export const CUSTOM_REFERRER_KEY = 'customReferrer';
 
 // This is considered the "default" route/view that users should be taken
 // to when the application does not have any further context
@@ -43,6 +47,7 @@ export const API_ACCESS_SCOPES = [
   'org:read',
   'org:write',
   'project:admin',
+  'project:distribution',
   'project:read',
   'project:releases',
   'project:write',
@@ -68,6 +73,7 @@ export const ALLOWED_SCOPES = [
   'org:superuser', // not an assignable API access scope
   'org:write',
   'project:admin',
+  'project:distribution',
   'project:read',
   'project:releases',
   'project:write',
@@ -119,7 +125,7 @@ type PermissionChoice = {
   scopes: Scope[];
 };
 
-type PermissionObj = {
+export type PermissionObj = {
   choices: {
     'no-access': PermissionChoice;
     admin?: PermissionChoice;
@@ -132,6 +138,15 @@ type PermissionObj = {
 };
 
 export const RELEASE_ADOPTION_STAGES = ['low_adoption', 'adopted', 'replaced'];
+
+export const DISTRIBUTION_SENTRY_APP_PERMISSION: PermissionObj = {
+  resource: 'Distribution',
+  help: 'Pre-release app distribution for trusted testers.',
+  choices: {
+    'no-access': {label: 'No Access', scopes: []},
+    read: {label: 'Read', scopes: ['project:distribution']},
+  },
+};
 
 // We expose permissions for Sentry Apps in a more resource-centric way.
 // All of the API_ACCESS_SCOPES from above should be represented in a more
@@ -165,6 +180,7 @@ export const SENTRY_APP_PERMISSIONS: PermissionObj[] = [
       admin: {label: 'Admin', scopes: ['project:releases']},
     },
   },
+  DISTRIBUTION_SENTRY_APP_PERMISSION,
   {
     resource: 'Event',
     label: 'Issue & Event',
@@ -237,10 +253,47 @@ export const DEFAULT_RELATIVE_PERIODS = {
 const DEFAULT_STATS_INFO = {
   showExternalStats: false,
   showInternalStats: true,
-  yAxisMinInterval: 100,
+  yAxisMinInterval: 10,
 };
 const GIGABYTE = 10 ** 9;
 const KILOBYTE = 10 ** 3;
+const MILLISECONDS_IN_HOUR = 3_600_000;
+
+/**
+ * Default formatting configuration for count-based categories.
+ * Most categories use this configuration.
+ */
+const DEFAULT_COUNT_FORMATTING = {
+  unitType: 'count' as const,
+  reservedMultiplier: 1,
+  bigNumUnit: 0 as const,
+  priceFormatting: {minFractionDigits: 5, maxFractionDigits: 7},
+  projectedAbbreviated: true,
+};
+
+/**
+ * Formatting configuration for byte-based categories (attachments, logs).
+ * Reserved values are in GB, raw values are in bytes.
+ */
+const BYTES_FORMATTING = {
+  unitType: 'bytes' as const,
+  reservedMultiplier: GIGABYTE,
+  bigNumUnit: 1 as const,
+  priceFormatting: {minFractionDigits: 2, maxFractionDigits: 2},
+  projectedAbbreviated: true,
+};
+
+/**
+ * Formatting configuration for duration-based categories (continuous profiling).
+ * Reserved values are in hours, raw values are in milliseconds.
+ */
+const DURATION_HOURS_FORMATTING = {
+  unitType: 'durationHours' as const,
+  reservedMultiplier: MILLISECONDS_IN_HOUR,
+  bigNumUnit: 0 as const,
+  priceFormatting: {minFractionDigits: 5, maxFractionDigits: 7},
+  projectedAbbreviated: true,
+};
 
 // https://github.com/getsentry/relay/blob/master/relay-base-schema/src/data_category.rs
 export const DATA_CATEGORY_INFO = {
@@ -258,6 +311,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.TRANSACTION]: {
     name: DataCategoryExact.TRANSACTION,
@@ -273,6 +327,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.ATTACHMENT]: {
     name: DataCategoryExact.ATTACHMENT,
@@ -289,6 +344,7 @@ export const DATA_CATEGORY_INFO = {
       showExternalStats: true,
       yAxisMinInterval: 0.5 * GIGABYTE,
     },
+    formatting: {...BYTES_FORMATTING, projectedAbbreviated: false},
   },
   [DataCategoryExact.PROFILE]: {
     name: DataCategoryExact.PROFILE,
@@ -304,6 +360,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.PROFILE_INDEXED]: {
     name: DataCategoryExact.PROFILE_INDEXED,
@@ -315,6 +372,7 @@ export const DATA_CATEGORY_INFO = {
     uid: 11,
     isBilledCategory: false,
     statsInfo: DEFAULT_STATS_INFO,
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.REPLAY]: {
     name: DataCategoryExact.REPLAY,
@@ -330,6 +388,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.USER_REPORT_V2]: {
     name: DataCategoryExact.USER_REPORT_V2,
@@ -345,6 +404,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.TRANSACTION_PROCESSED]: {
     name: DataCategoryExact.TRANSACTION_PROCESSED,
@@ -359,6 +419,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showInternalStats: false,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.TRANSACTION_INDEXED]: {
     name: DataCategoryExact.TRANSACTION_INDEXED,
@@ -370,13 +431,14 @@ export const DATA_CATEGORY_INFO = {
     uid: 9,
     isBilledCategory: false,
     statsInfo: DEFAULT_STATS_INFO,
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.MONITOR]: {
     name: DataCategoryExact.MONITOR,
     plural: DataCategory.MONITOR,
     singular: 'monitor',
-    displayName: 'monitor check-in',
-    titleName: t('Monitor Check-Ins'),
+    displayName: 'cron check-in',
+    titleName: t('Cron Check-Ins'),
     productName: t('Cron Monitoring'),
     uid: 10,
     isBilledCategory: false,
@@ -384,6 +446,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.SPAN]: {
     name: DataCategoryExact.SPAN,
@@ -399,6 +462,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.MONITOR_SEAT]: {
     name: DataCategoryExact.MONITOR_SEAT,
@@ -414,6 +478,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showInternalStats: false,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.SPAN_INDEXED]: {
     name: DataCategoryExact.SPAN_INDEXED,
@@ -426,6 +491,7 @@ export const DATA_CATEGORY_INFO = {
     isBilledCategory: false,
     docsUrl: 'https://docs.sentry.io/product/performance/',
     statsInfo: DEFAULT_STATS_INFO,
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.PROFILE_DURATION]: {
     name: DataCategoryExact.PROFILE_DURATION,
@@ -442,6 +508,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DURATION_HOURS_FORMATTING,
   },
   [DataCategoryExact.PROFILE_CHUNK]: {
     name: DataCategoryExact.PROFILE_CHUNK,
@@ -453,6 +520,7 @@ export const DATA_CATEGORY_INFO = {
     uid: 18,
     isBilledCategory: false,
     statsInfo: DEFAULT_STATS_INFO,
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.PROFILE_DURATION_UI]: {
     name: DataCategoryExact.PROFILE_DURATION_UI,
@@ -469,6 +537,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DURATION_HOURS_FORMATTING,
   },
   [DataCategoryExact.PROFILE_CHUNK_UI]: {
     name: DataCategoryExact.PROFILE_CHUNK_UI,
@@ -480,6 +549,7 @@ export const DATA_CATEGORY_INFO = {
     uid: 26,
     isBilledCategory: false,
     statsInfo: DEFAULT_STATS_INFO,
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
 
   [DataCategoryExact.UPTIME]: {
@@ -496,6 +566,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showInternalStats: false,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.LOG_ITEM]: {
     name: DataCategoryExact.LOG_ITEM,
@@ -510,6 +581,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.LOG_BYTE]: {
     name: DataCategoryExact.LOG_BYTE,
@@ -526,6 +598,7 @@ export const DATA_CATEGORY_INFO = {
       showExternalStats: true,
       yAxisMinInterval: 1 * KILOBYTE,
     },
+    formatting: BYTES_FORMATTING,
   },
   [DataCategoryExact.SEER_AUTOFIX]: {
     name: DataCategoryExact.SEER_AUTOFIX,
@@ -540,6 +613,7 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
   [DataCategoryExact.SEER_SCANNER]: {
     name: DataCategoryExact.SEER_SCANNER,
@@ -554,50 +628,91 @@ export const DATA_CATEGORY_INFO = {
       ...DEFAULT_STATS_INFO,
       showExternalStats: true,
     },
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
-  [DataCategoryExact.PREVENT_USER]: {
-    name: DataCategoryExact.PREVENT_USER,
-    plural: DataCategory.PREVENT_USER,
-    singular: 'preventUser',
-    displayName: 'Prevent user',
-    titleName: t('Prevent Users'),
-    productName: t('Prevent Users'),
-    uid: 29,
+  [DataCategoryExact.TRACE_METRIC]: {
+    name: DataCategoryExact.TRACE_METRIC,
+    plural: DataCategory.TRACE_METRICS,
+    singular: 'applicationMetric',
+    displayName: 'application metric',
+    titleName: t('Application Metric Counts'), // Only currently visible internally, this name should change if we expose this to users.
+    productName: t('Application Metrics'),
+    uid: 33,
+    isBilledCategory: false,
+    statsInfo: {
+      ...DEFAULT_STATS_INFO,
+      showExternalStats: true,
+    },
+    formatting: DEFAULT_COUNT_FORMATTING,
+  },
+  [DataCategoryExact.TRACE_METRIC_BYTE]: {
+    name: DataCategoryExact.TRACE_METRIC_BYTE,
+    plural: DataCategory.TRACE_METRIC_BYTE,
+    singular: 'applicationMetricByte',
+    displayName: 'application metric byte',
+    titleName: t('Application Metrics'),
+    productName: t('Application Metrics'),
+    uid: 37,
     isBilledCategory: true,
     statsInfo: {
       ...DEFAULT_STATS_INFO,
-      showExternalStats: false, // TODO(prevent): add external stats when ready
+      showExternalStats: true,
+      yAxisMinInterval: 1 * KILOBYTE,
     },
+    formatting: BYTES_FORMATTING,
   },
-  [DataCategoryExact.PREVENT_REVIEW]: {
-    name: DataCategoryExact.PREVENT_REVIEW,
-    plural: DataCategory.PREVENT_REVIEW,
-    singular: 'preventReview',
-    displayName: 'Prevent review',
-    titleName: t('Prevent Reviews'),
-    productName: t('Prevent Reviews'),
-    uid: 30,
+  [DataCategoryExact.SEER_USER]: {
+    name: DataCategoryExact.SEER_USER,
+    plural: DataCategory.SEER_USER,
+    singular: 'seerUser',
+    displayName: 'active contributor',
+    titleName: t('Active Contributors'),
+    productName: t('Seer'),
+    uid: 34,
     isBilledCategory: true,
     statsInfo: {
       ...DEFAULT_STATS_INFO,
-      showExternalStats: false, // TODO(prevent): add external stats when ready
+      showExternalStats: false, // TODO(seer): add external stats when ready
     },
+    getProductLink: (organization: Organization) =>
+      `/settings/${organization.slug}/seer/`,
+    formatting: DEFAULT_COUNT_FORMATTING,
+  },
+  [DataCategoryExact.SIZE_ANALYSIS]: {
+    name: DataCategoryExact.SIZE_ANALYSIS,
+    plural: DataCategory.SIZE_ANALYSIS,
+    singular: 'sizeAnalysis',
+    displayName: 'size analysis build',
+    titleName: t('Size Analysis Builds'),
+    productName: t('Size Analysis Build'),
+    uid: 35,
+    isBilledCategory: true,
+    statsInfo: {...DEFAULT_STATS_INFO, showExternalStats: true},
+    formatting: DEFAULT_COUNT_FORMATTING,
+  },
+  [DataCategoryExact.INSTALLABLE_BUILD]: {
+    name: DataCategoryExact.INSTALLABLE_BUILD,
+    plural: DataCategory.INSTALLABLE_BUILD,
+    singular: 'installableBuild',
+    displayName: 'build distribution',
+    titleName: t('Build Distributions'),
+    productName: t('Build Distribution'),
+    uid: 36,
+    isBilledCategory: false,
+    statsInfo: {...DEFAULT_STATS_INFO, showExternalStats: true},
+    formatting: DEFAULT_COUNT_FORMATTING,
   },
 } as const satisfies Record<DataCategoryExact, DataCategoryInfo>;
 
-// Special Search characters
-export const NEGATION_OPERATOR = '!';
-export const SEARCH_WILDCARD = '*';
-
 // SmartSearchBar settings
 export const MAX_AUTOCOMPLETE_RECENT_SEARCHES = 3;
-export const MAX_AUTOCOMPLETE_RELEASES = 5;
 
 export const DEFAULT_PER_PAGE = 50;
 
 // Webpack configures DEPLOY_PREVIEW_CONFIG for deploy preview builds.
 export const DEPLOY_PREVIEW_CONFIG = process.env.DEPLOY_PREVIEW_CONFIG as unknown as
   | undefined
+  | false
   | {
       branch: string;
       commitSha: string;
@@ -632,7 +747,7 @@ export const NODE_ENV = process.env.NODE_ENV;
 export const SPA_DSN = process.env.SPA_DSN;
 export const SENTRY_RELEASE_VERSION = process.env.SENTRY_RELEASE_VERSION;
 export const UI_DEV_ENABLE_PROFILING = process.env.UI_DEV_ENABLE_PROFILING;
-export const USE_REACT_QUERY_DEVTOOL = process.env.USE_REACT_QUERY_DEVTOOL;
+export const USE_TANSTACK_DEVTOOL = process.env.USE_TANSTACK_DEVTOOL;
 
 export const DEFAULT_ERROR_JSON = {
   detail: t('Unknown error. Please try again.'),

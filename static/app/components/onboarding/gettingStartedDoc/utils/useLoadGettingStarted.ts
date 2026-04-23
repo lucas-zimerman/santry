@@ -1,5 +1,6 @@
 import {useEffect, useState} from 'react';
 import * as Sentry from '@sentry/react';
+import {useQuery} from '@tanstack/react-query';
 
 import type {Docs} from 'sentry/components/onboarding/gettingStartedDoc/types';
 import {
@@ -7,17 +8,23 @@ import {
   feedbackOnboardingPlatforms,
   replayPlatforms,
   withLoggingOnboarding,
+  withMetricsOnboarding,
   withPerformanceOnboarding,
 } from 'sentry/data/platformCategories';
 import type {Organization} from 'sentry/types/organization';
 import type {PlatformIntegration, Project, ProjectKey} from 'sentry/types/project';
-import {getPlatformPath} from 'sentry/utils/gettingStartedDocs/getPlatformPath';
-import {useProjectKeys} from 'sentry/utils/useProjectKeys';
+import {projectKeysApiOptions} from 'sentry/utils/projectKeys';
 
 type Props = {
   orgSlug: Organization['slug'];
   platform: PlatformIntegration;
-  productType?: 'feedback' | 'replay' | 'performance' | 'featureFlags' | 'logs';
+  productType?:
+    | 'feedback'
+    | 'replay'
+    | 'performance'
+    | 'featureFlags'
+    | 'logs'
+    | 'metrics';
   projSlug?: Project['slug'];
 };
 
@@ -34,26 +41,27 @@ export function useLoadGettingStarted({
   projectKeyId: Project['id'] | undefined;
   refetch: () => void;
 } {
-  const [module, setModule] = useState<undefined | 'none' | {default: Docs<any>}>(
-    undefined
-  );
+  const [module, setModule] = useState<undefined | 'none' | {docs: Docs<any>}>(undefined);
 
-  const projectKeys = useProjectKeys({orgSlug, projSlug});
-
-  const platformPath = getPlatformPath(platform);
+  const projectKeys = useQuery({
+    ...projectKeysApiOptions({orgSlug, projSlug}),
+    staleTime: Infinity,
+    retry: false,
+  });
 
   useEffect(() => {
     async function getGettingStartedDoc() {
       if (
+        platform.deprecated ||
         platform.id === 'other' ||
-        !platformPath ||
         (productType === 'replay' && !replayPlatforms.includes(platform.id)) ||
         (productType === 'performance' && !withPerformanceOnboarding.has(platform.id)) ||
         (productType === 'logs' && !withLoggingOnboarding.has(platform.id)) ||
         (productType === 'feedback' &&
           !feedbackOnboardingPlatforms.includes(platform.id)) ||
         (productType === 'featureFlags' &&
-          !featureFlagOnboardingPlatforms.includes(platform.id))
+          !featureFlagOnboardingPlatforms.includes(platform.id)) ||
+        (productType === 'metrics' && !withMetricsOnboarding.has(platform.id))
       ) {
         setModule('none');
         return;
@@ -62,11 +70,11 @@ export function useLoadGettingStarted({
       try {
         const mod = await import(
           /* webpackExclude: /.spec/ */
-          `sentry/gettingStartedDocs/${platformPath}`
+          `sentry/gettingStartedDocs/${platform.id}`
         );
         setModule(mod);
       } catch (err) {
-        setModule(undefined);
+        setModule('none');
         Sentry.captureException(err);
       }
     }
@@ -76,13 +84,13 @@ export function useLoadGettingStarted({
     return () => {
       setModule(undefined);
     };
-  }, [platformPath, platform.id, productType]);
+  }, [platform.id, platform.deprecated, productType]);
 
   return {
     refetch: projectKeys.refetch,
     isLoading: projectKeys.isPending || module === undefined,
     isError: projectKeys.isError,
-    docs: module === 'none' ? null : (module?.default ?? null),
+    docs: module === 'none' ? null : (module?.docs ?? null),
     dsn: projectKeys.data?.[0]?.dsn,
     projectKeyId: projectKeys.data?.[0]?.id,
   };

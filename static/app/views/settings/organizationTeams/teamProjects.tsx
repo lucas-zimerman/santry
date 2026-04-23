@@ -1,77 +1,73 @@
 import {Fragment, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
+
+import {ProjectAvatar} from '@sentry/scraps/avatar';
+import {Button} from '@sentry/scraps/button';
+import {CompactSelect, type SelectOption} from '@sentry/scraps/compactSelect';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {hasEveryAccess} from 'sentry/components/acl/access';
-import {ProjectAvatar} from 'sentry/components/core/avatar/projectAvatar';
-import {Button} from 'sentry/components/core/button';
-import {CompactSelect, type SelectOption} from 'sentry/components/core/compactSelect';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import EmptyMessage from 'sentry/components/emptyMessage';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Pagination from 'sentry/components/pagination';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import PanelItem from 'sentry/components/panels/panelItem';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Pagination} from 'sentry/components/pagination';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
+import {PanelItem} from 'sentry/components/panels/panelItem';
 import {IconFlag, IconSubtract} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import ProjectsStore from 'sentry/stores/projectsStore';
-import {space} from 'sentry/styles/space';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
-import type {Team} from 'sentry/types/organization';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import type {Project} from 'sentry/types/project';
+import {apiOptions, selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {sortProjects} from 'sentry/utils/project/sortProjects';
-import {useApiQuery} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
-import ProjectListItem from 'sentry/views/settings/components/settingsProjectItem';
-import TextBlock from 'sentry/views/settings/components/text/textBlock';
+import {useApi} from 'sentry/utils/useApi';
+import {useLocation} from 'sentry/utils/useLocation';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {ProjectItem as ProjectListItem} from 'sentry/views/settings/components/settingsProjectItem';
+import {TextBlock} from 'sentry/views/settings/components/text/textBlock';
+import {useTeamDetailsOutlet} from 'sentry/views/settings/organizationTeams/teamDetails';
 
-interface TeamProjectsProps extends RouteComponentProps<{teamId: string}> {
-  team: Team;
-}
-
-function TeamProjects({team, location, params}: TeamProjectsProps) {
+export default function TeamProjects() {
+  const location = useLocation();
   const organization = useOrganization();
   const api = useApi({persistInFlight: true});
   const [query, setQuery] = useState<string>('');
-  const teamId = params.teamId;
+  const {team} = useTeamDetailsOutlet();
   const {
-    data: linkedProjects,
+    data: linkedProjectsResponse,
     isError: linkedProjectsError,
     isPending: linkedProjectsLoading,
-    getResponseHeader: linkedProjectsHeaders,
     refetch: refetchLinkedProjects,
-  } = useApiQuery<Project[]>(
-    [
-      `/organizations/${organization.slug}/projects/`,
-      {
-        query: {
-          query: `team:${teamId}`,
-          cursor: location.query.cursor,
-        },
+  } = useQuery({
+    ...apiOptions.as<Project[]>()('/organizations/$organizationIdOrSlug/projects/', {
+      path: {organizationIdOrSlug: organization.slug},
+      query: {
+        query: `team:${team.slug}`,
+        cursor: location.query.cursor,
       },
-    ],
-    {staleTime: 0}
-  );
+      staleTime: 0,
+    }),
+    select: selectJsonWithHeaders,
+  });
+  const linkedProjects = linkedProjectsResponse?.json;
   const {
     data: unlinkedProjects = [],
     isPending: loadingUnlinkedProjects,
     refetch: refetchUnlinkedProjects,
-  } = useApiQuery<Project[]>(
-    [
-      `/organizations/${organization.slug}/projects/`,
-      {
-        query: {query: query ? `!team:${teamId} ${query}` : `!team:${teamId}`},
-      },
-    ],
-    {staleTime: 0}
+  } = useQuery(
+    apiOptions.as<Project[]>()('/organizations/$organizationIdOrSlug/projects/', {
+      path: {organizationIdOrSlug: organization.slug},
+      query: {query: query ? `!team:${team.slug} ${query}` : `!team:${team.slug}`},
+      staleTime: 0,
+    })
   );
 
   const handleLinkProject = (project: Project, action: string) => {
-    api.request(`/projects/${organization.slug}/${project.slug}/teams/${teamId}/`, {
+    api.request(`/projects/${organization.slug}/${project.slug}/teams/${team.slug}/`, {
       method: action === 'add' ? 'POST' : 'DELETE',
       success: resp => {
         refetchLinkedProjects();
@@ -89,7 +85,7 @@ function TeamProjects({team, location, params}: TeamProjectsProps) {
     });
   };
 
-  const linkedProjectsPageLinks = linkedProjectsHeaders?.('Link');
+  const linkedProjectsPageLinks = linkedProjectsResponse?.headers.Link;
   const hasWriteAccess = hasEveryAccess(['team:write'], {organization, team});
   const otherProjects = useMemo(() => {
     return unlinkedProjects
@@ -127,13 +123,18 @@ function TeamProjects({team, location, params}: TeamProjectsProps) {
                 }
               }}
               menuTitle={t('Projects')}
-              triggerLabel={t('Add Project')}
-              searchPlaceholder={t('Search Projects')}
+              trigger={triggerProps => (
+                <OverlayTrigger.Button {...triggerProps}>
+                  {t('Add Project')}
+                </OverlayTrigger.Button>
+              )}
+              search={{
+                placeholder: t('Search Projects'),
+                filter: false,
+                onChange: setQuery,
+              }}
               emptyMessage={t('No projects')}
               loading={loadingUnlinkedProjects}
-              searchable
-              disableSearchFilter
-              onSearch={setQuery}
             />
           </div>
         </PanelHeader>
@@ -156,7 +157,7 @@ function TeamProjects({team, location, params}: TeamProjectsProps) {
                   <Button
                     size="sm"
                     disabled={!hasWriteAccess}
-                    icon={<IconSubtract isCircled />}
+                    icon={<IconSubtract />}
                     aria-label={t('Remove')}
                     onClick={() => {
                       handleLinkProject(project, 'remove');
@@ -168,7 +169,7 @@ function TeamProjects({team, location, params}: TeamProjectsProps) {
               </StyledPanelItem>
             ))
           ) : linkedProjectsLoading ? null : (
-            <EmptyMessage size="large" icon={<IconFlag size="xl" />}>
+            <EmptyMessage size="lg" icon={<IconFlag />}>
               {t("This team doesn't have access to any projects.")}
             </EmptyMessage>
           )}
@@ -183,8 +184,6 @@ const StyledPanelItem = styled(PanelItem)`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: ${space(2)};
+  padding: ${p => p.theme.space.xl};
   max-width: 100%;
 `;
-
-export default TeamProjects;

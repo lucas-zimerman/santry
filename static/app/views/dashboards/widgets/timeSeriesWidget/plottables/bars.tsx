@@ -1,8 +1,8 @@
-import * as Sentry from '@sentry/react';
-import Color from 'color';
+// eslint-disable-next-line no-restricted-imports
+import color from 'color';
 import type {BarSeriesOption, LineSeriesOption} from 'echarts';
 
-import BarSeries from 'sentry/components/charts/series/barSeries';
+import {BarSeries} from 'sentry/components/charts/series/barSeries';
 import {timeSeriesItemToEChartsDataPoint} from 'sentry/utils/timeSeries/timeSeriesItemToEChartsDataPoint';
 
 import {
@@ -11,8 +11,6 @@ import {
   type ContinuousTimeSeriesPlottingOptions,
 } from './continuousTimeSeries';
 import type {Plottable} from './plottable';
-
-const {error} = Sentry.logger;
 
 interface BarsConfig extends ContinuousTimeSeriesConfig {
   /**
@@ -27,9 +25,6 @@ export class Bars extends ContinuousTimeSeries<BarsConfig> implements Plottable 
     const datum = this.timeSeries.values.at(dataIndex);
 
     if (!datum) {
-      error('`Bars` plottable `onHighlight` out-of-range error', {
-        seriesDataIndex: dataIndex,
-      });
       return;
     }
 
@@ -41,8 +36,8 @@ export class Bars extends ContinuousTimeSeries<BarsConfig> implements Plottable 
   ): Array<BarSeriesOption | LineSeriesOption> {
     const {config = {}} = this;
 
-    const color = plottingOptions.color ?? config.color ?? undefined;
-    const colorObject = Color(color);
+    const colorValue = plottingOptions.color ?? config.color ?? undefined;
+    const colorObject = color(colorValue);
     const scaledTimeSeries = this.scaleToUnit(plottingOptions.unit);
 
     return [
@@ -50,7 +45,7 @@ export class Bars extends ContinuousTimeSeries<BarsConfig> implements Plottable 
         name: this.name,
         stack: config.stack,
         yAxisIndex: plottingOptions.yAxisPosition === 'left' ? 0 : 1,
-        color,
+        color: colorValue,
         emphasis: {
           itemStyle: {
             color:
@@ -64,7 +59,7 @@ export class Bars extends ContinuousTimeSeries<BarsConfig> implements Plottable 
           color: params => {
             const datum = scaledTimeSeries.values[params.dataIndex]!;
 
-            return datum.incomplete ? colorObject.alpha(0.5).string() : color;
+            return datum.incomplete ? colorObject.alpha(0.5).string() : colorValue;
           },
           opacity: 1.0,
         },

@@ -9,14 +9,14 @@ import React, {
 import styled from '@emotion/styled';
 import {mergeRefs} from '@react-aria/utils';
 
-import {Disclosure} from 'sentry/components/core/disclosure';
-import {Separator} from 'sentry/components/core/separator';
-import {Text} from 'sentry/components/core/text';
-import ErrorBoundary from 'sentry/components/errorBoundary';
+import {Disclosure} from '@sentry/scraps/disclosure';
+import {Separator, type SeparatorProps} from '@sentry/scraps/separator';
+import {Text} from '@sentry/scraps/text';
+
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useSyncedLocalStorageState} from 'sentry/utils/useSyncedLocalStorageState';
 import type {SectionKey} from 'sentry/views/issueDetails/streamline/context';
 import {useIssueDetails} from 'sentry/views/issueDetails/streamline/context';
@@ -157,6 +157,16 @@ export function FoldSection({
     }
   }, [sectionData, dispatch, sectionKey, initialCollapse, preventCollapse]);
 
+  // Unregister section when component unmounts
+  useLayoutEffect(() => {
+    return () => {
+      dispatch({
+        type: 'REMOVE_EVENT_SECTION',
+        key: sectionKey,
+      });
+    };
+  }, [dispatch, sectionKey]);
+
   const onExpandedChange = useCallback(() => {
     if (preventCollapse) {
       return;
@@ -204,17 +214,25 @@ export function FoldSection({
   );
 }
 
-export const SectionDivider = styled(Separator)`
+export const SectionDivider = styled(
+  ({orientation, margin, ...props}: SeparatorProps) => (
+    <Separator
+      orientation={orientation || 'horizontal'}
+      margin={margin || 'lg 0'}
+      {...props}
+    />
+  )
+)`
   &:last-child {
     display: none;
   }
 `;
 
 export const SidebarFoldSection = styled(FoldSection)`
-  font-size: ${p => p.theme.fontSize.md};
-  margin: -${space(1)};
+  font-size: ${p => p.theme.font.size.md};
+  margin: -${p => p.theme.space.md};
 `;
 
 const DisclosureWithScrollMargin = styled(Disclosure)<{scrollMargin: number}>`
-  scroll-margin-top: calc(${space(1)} + ${p => p.scrollMargin ?? 0}px);
+  scroll-margin-top: calc(${p => p.theme.space.md} + ${p => p.scrollMargin ?? 0}px);
 `;

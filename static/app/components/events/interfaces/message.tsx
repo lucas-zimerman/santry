@@ -1,7 +1,7 @@
 import styled from '@emotion/styled';
 
 import {renderLinksInText} from 'sentry/components/events/interfaces/crashContent/exception/utils';
-import KeyValueList from 'sentry/components/events/interfaces/keyValueList';
+import {KeyValueList} from 'sentry/components/events/interfaces/keyValueList';
 import {AnnotatedText} from 'sentry/components/events/meta/annotatedText';
 import {t} from 'sentry/locale';
 import type {Event} from 'sentry/types/event';
@@ -75,5 +75,6 @@ const PlainPre = styled('pre')`
   border: 0;
   margin-bottom: 0;
   white-space: pre-wrap;
+  overflow-x: unset;
   word-break: break-all;
 `;

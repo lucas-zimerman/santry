@@ -1,27 +1,31 @@
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 import type {Location} from 'history';
 import pick from 'lodash/pick';
 
+import {AlertBadge} from '@sentry/scraps/badge';
+import {Link} from '@sentry/scraps/link';
+
 import {SectionHeading} from 'sentry/components/charts/styles';
-import {AlertBadge} from 'sentry/components/core/badge/alertBadge';
-import {Link} from 'sentry/components/core/link';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import LoadingError from 'sentry/components/loadingError';
-import Placeholder from 'sentry/components/placeholder';
-import TimeSince from 'sentry/components/timeSince';
-import {URL_PARAM} from 'sentry/constants/pageFilters';
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
+import {LoadingError} from 'sentry/components/loadingError';
+import {URL_PARAM} from 'sentry/components/pageFilters/constants';
+import {extractSelectionParameters} from 'sentry/components/pageFilters/parse';
+import {Placeholder} from 'sentry/components/placeholder';
+import {TimeSince} from 'sentry/components/timeSince';
 import {IconCheckmark, IconExclamation, IconFire, IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
+import {apiOptions} from 'sentry/utils/api/apiOptions';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {useApiQuery} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {makeAlertsPathname} from 'sentry/views/alerts/pathnames';
 import type {Incident} from 'sentry/views/alerts/types';
 import {IncidentStatus} from 'sentry/views/alerts/types';
 
-import MissingAlertsButtons from './missingFeatureButtons/missingAlertsButtons';
-import {SectionHeadingLink, SectionHeadingWrapper, SidebarSection} from './styles';
+import {MissingAlertsButtons} from './missingFeatureButtons/missingAlertsButtons';
+import {SectionHeadingWrapper, SidebarSection} from './styles';
 
 const PLACEHOLDER_AND_EMPTY_HEIGHT = '172px';
 
@@ -61,7 +65,9 @@ function AlertRow({alert}: AlertRowProps) {
           ) : (
             <TimeSince
               date={dateStarted}
-              tooltipUnderlineColor={getStatusColor(statusProps)}
+              tooltipUnderlineColor={
+                isResolved ? 'success' : isWarning ? 'warning' : 'danger'
+              }
             />
           )}
         </AlertDate>
@@ -77,7 +83,7 @@ interface ProjectLatestAlertsProps {
   projectSlug: string;
 }
 
-function ProjectLatestAlerts({
+export function ProjectLatestAlerts({
   location,
   organization,
   isProjectStabilized,
@@ -93,7 +99,9 @@ function ProjectLatestAlerts({
     isError: unresolvedAlertsIsError,
   } = useApiQuery<Incident[]>(
     [
-      `/organizations/${organization.slug}/incidents/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/incidents/', {
+        path: {organizationIdOrSlug: organization.slug},
+      }),
       {query: {...query, status: 'open'}},
     ],
     {staleTime: 0, enabled: isProjectStabilized}
@@ -104,7 +112,9 @@ function ProjectLatestAlerts({
     isError: resolvedAlertsIsError,
   } = useApiQuery<Incident[]>(
     [
-      `/organizations/${organization.slug}/incidents/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/incidents/', {
+        path: {organizationIdOrSlug: organization.slug},
+      }),
       {query: {...query, status: 'closed'}},
     ],
     {staleTime: 0, enabled: isProjectStabilized}
@@ -116,23 +126,20 @@ function ProjectLatestAlerts({
     !unresolvedAlertsIsLoading &&
     !resolvedAlertsIsLoading;
   // This is only used to determine if we should show the "Create Alert" button
-  const {data: alertRules = [], isPending: alertRulesLoading} = useApiQuery<any[]>(
-    [
-      `/organizations/${organization.slug}/alert-rules/`,
-      {
-        query: {
-          ...pick(location.query, Object.values(URL_PARAM)),
-          // Sort by name
-          asc: 1,
-          per_page: 1,
-        },
-      },
-    ],
-    {
+  const {data: hasAlertRules, isPending: alertRulesLoading} = useQuery({
+    ...apiOptions.as<unknown[]>()('/organizations/$organizationIdOrSlug/alert-rules/', {
+      path: {organizationIdOrSlug: organization.slug},
       staleTime: 0,
-      enabled: shouldLoadAlertRules,
-    }
-  );
+      query: {
+        ...pick(location.query, Object.values(URL_PARAM)),
+        // Sort by name
+        asc: 1,
+        per_page: 1,
+      },
+    }),
+    enabled: shouldLoadAlertRules,
+    select: data => data.json.length > 0,
+  });
 
   function renderAlertRules() {
     if (unresolvedAlertsIsError || resolvedAlertsIsError) {
@@ -144,7 +151,7 @@ function ProjectLatestAlerts({
       return <Placeholder height={PLACEHOLDER_AND_EMPTY_HEIGHT} />;
     }
 
-    const hasAlertRule = alertsUnresolvedAndResolved.length > 0 || alertRules?.length > 0;
+    const hasAlertRule = alertsUnresolvedAndResolved.length > 0 || hasAlertRules;
     if (!hasAlertRule) {
       return (
         <MissingAlertsButtons organization={organization} projectSlug={projectSlug} />
@@ -167,13 +174,14 @@ function ProjectLatestAlerts({
       <SectionHeadingWrapper>
         <SectionHeading>{t('Latest Alerts')}</SectionHeading>
         {/* as this is a link to latest alerts, we want to only preserve project and environment */}
-        <SectionHeadingLink
+        <StyledIconLink
           to={{
             pathname: makeAlertsPathname({
-              path: `/`,
+              path: '/',
               organization,
             }),
             query: {
+              ...extractSelectionParameters(location.query),
               statsPeriod: undefined,
               start: undefined,
               end: undefined,
@@ -182,7 +190,7 @@ function ProjectLatestAlerts({
           }}
         >
           <IconOpen aria-label={t('Metric Alert History')} />
-        </SectionHeadingLink>
+        </StyledIconLink>
       </SectionHeadingWrapper>
 
       <div>{renderAlertRules()}</div>
@@ -190,19 +198,23 @@ function ProjectLatestAlerts({
   );
 }
 
+const StyledIconLink = styled(Link)`
+  display: flex;
+`;
+
 const AlertRowLink = styled(Link)`
   display: flex;
   align-items: center;
   height: 40px;
-  margin-bottom: ${space(3)};
-  margin-left: ${space(0.5)};
+  margin-bottom: ${p => p.theme.space['2xl']};
+  margin-left: ${p => p.theme.space.xs};
   &,
   &:hover,
   &:focus {
     color: inherit;
   }
   &:first-child {
-    margin-top: ${space(1)};
+    margin-top: ${p => p.theme.space.md};
   }
 `;
 
@@ -210,9 +222,6 @@ type StatusColorProps = {
   isResolved: boolean;
   isWarning: boolean;
 };
-
-const getStatusColor = ({isResolved, isWarning}: StatusColorProps) =>
-  isResolved ? 'successText' : isWarning ? 'warningText' : 'errorText';
 
 const AlertBadgeWrapper = styled('div')<{icon: typeof IconExclamation}>`
   display: flex;
@@ -224,25 +233,32 @@ const AlertBadgeWrapper = styled('div')<{icon: typeof IconExclamation}>`
 `;
 
 const AlertDetails = styled('div')`
-  font-size: ${p => p.theme.fontSize.md};
-  margin-left: ${space(1.5)};
-  ${p => p.theme.overflowEllipsis}
+  font-size: ${p => p.theme.font.size.md};
+  margin-left: ${p => p.theme.space.lg};
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   line-height: 1.35;
 `;
 
 const AlertTitle = styled('div')`
-  font-weight: ${p => p.theme.fontWeight.normal};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
   overflow: hidden;
   text-overflow: ellipsis;
 `;
 
 const AlertDate = styled('span')<StatusColorProps>`
-  color: ${p => p.theme[getStatusColor(p)]};
+  color: ${p =>
+    p.isResolved
+      ? p.theme.tokens.content.success
+      : p.isWarning
+        ? p.theme.tokens.content.warning
+        : p.theme.tokens.content.danger};
 `;
 
 const StyledEmptyStateWarning = styled(EmptyStateWarning)`
   height: ${PLACEHOLDER_AND_EMPTY_HEIGHT};
   justify-content: center;
 `;
-
-export default ProjectLatestAlerts;

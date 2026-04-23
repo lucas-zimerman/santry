@@ -1,7 +1,6 @@
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ConfigStore from 'sentry/stores/configStore';
+import {ConfigStore} from 'sentry/stores/configStore';
 
 import RelocationOnboardingContainer from './index';
 
@@ -31,14 +30,14 @@ describe('Relocation Onboarding Container', () => {
   });
 
   it('should render if feature enabled', async () => {
-    const {routerProps, organization} = initializeOrg({
-      router: {
-        params: {step: 'get-started'},
-      },
-    });
     ConfigStore.set('features', new Set(['relocation:enabled']));
-    render(<RelocationOnboardingContainer {...routerProps} />, {
-      organization,
+    render(<RelocationOnboardingContainer />, {
+      initialRouterConfig: {
+        location: {
+          pathname: '/relocation/get-started/',
+        },
+        route: '/relocation/:step/',
+      },
     });
     expect(
       await screen.findByText(/Choose where to store your organization's data/)
@@ -49,14 +48,14 @@ describe('Relocation Onboarding Container', () => {
   });
 
   it('should not render if feature disabled', async () => {
-    const {routerProps, organization} = initializeOrg({
-      router: {
-        params: {step: 'get-started'},
-      },
-    });
     ConfigStore.set('features', new Set([]));
-    render(<RelocationOnboardingContainer {...routerProps} />, {
-      organization,
+    render(<RelocationOnboardingContainer />, {
+      initialRouterConfig: {
+        location: {
+          pathname: '/relocation/get-started/',
+        },
+        route: '/relocation/:step/',
+      },
     });
     expect(
       await screen.findByText("You don't have access to this feature")

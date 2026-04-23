@@ -1,20 +1,24 @@
 import {useMemo, useState} from 'react';
+import * as Sentry from '@sentry/react';
+import {useQuery} from '@tanstack/react-query';
 
-import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {addRepository, migrateRepository} from 'sentry/actionCreators/integrations';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import DropdownButton from 'sentry/components/dropdownButton';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+
+import {addRepository} from 'sentry/actionCreators/integrations';
+import {DropdownButton} from 'sentry/components/dropdownButton';
 import {t} from 'sentry/locale';
-import RepositoryStore from 'sentry/stores/repositoryStore';
+import {RepositoryStore} from 'sentry/stores/repositoryStore';
 import type {
   Integration,
   IntegrationRepository,
   Repository,
 } from 'sentry/types/integrations';
-import {fetchDataQuery, useQuery} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
+import {apiFetch} from 'sentry/utils/api/apiFetch';
+import {apiOptions} from 'sentry/utils/api/apiOptions';
+import {useApi} from 'sentry/utils/useApi';
 import {useDebouncedValue} from 'sentry/utils/useDebouncedValue';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 interface IntegrationReposAddRepositoryProps {
   currentRepositories: Repository[];
@@ -42,26 +46,32 @@ export function IntegrationReposAddRepository({
   const debouncedSearch = useDebouncedValue(search, 200);
 
   const query = useQuery({
-    queryKey: [
-      `/organizations/${organization.slug}/integrations/${integration.id}/repos/`,
-      {method: 'GET', query: {search: debouncedSearch, installableOnly: false}},
-    ] as const,
+    ...apiOptions.as<IntegrationRepoSearchResult>()(
+      '/organizations/$organizationIdOrSlug/integrations/$integrationId/repos/',
+      {
+        path: {
+          organizationIdOrSlug: organization.slug,
+          integrationId: integration.id,
+        },
+        query: {search: debouncedSearch, installableOnly: false},
+        staleTime: 20_000,
+      }
+    ),
     queryFn: async context => {
       try {
         onSearchError(null);
-        return await fetchDataQuery<IntegrationRepoSearchResult>(context);
+        return await apiFetch<IntegrationRepoSearchResult>(context);
       } catch (error: any) {
         onSearchError(error?.status);
         throw error;
       }
     },
     retry: 0,
-    staleTime: 20_000,
     placeholderData: previousData => (debouncedSearch ? previousData : undefined),
     enabled: !!debouncedSearch,
   });
 
-  const searchResult = query.data?.[0] ?? defaultSearchResult;
+  const searchResult = query.data ?? defaultSearchResult;
 
   const addRepo = async (selection: {value: string}) => {
     setAdding(true);
@@ -73,20 +83,32 @@ export function IntegrationReposAddRepository({
       return selection.value === item.externalSlug;
     });
 
-    let promise: Promise<Repository>;
     if (migratableRepo) {
-      promise = migrateRepository(api, organization.slug, migratableRepo.id, integration);
-    } else {
-      promise = addRepository(api, organization.slug, selection.value, integration);
+      Sentry.captureException(
+        new Error(
+          'Attempted to migrate repository integration — this code path is disabled'
+        ),
+        {
+          extra: {
+            repositoryId: migratableRepo.id,
+            integrationId: integration.id,
+            orgSlug: organization.slug,
+          },
+        }
+      );
     }
 
     try {
-      const repo = await promise;
+      const repo = await addRepository(
+        api,
+        organization.slug,
+        selection.value,
+        integration
+      );
       onAddRepository(repo);
-      addSuccessMessage(t('Repository added'));
       RepositoryStore.resetRepositories();
-    } catch (error) {
-      addErrorMessage(t('Unable to add repository.'));
+    } catch {
+      // Error feedback is handled by addRepository
     } finally {
       setAdding(false);
     }
@@ -108,9 +130,11 @@ export function IntegrationReposAddRepository({
     return (
       <DropdownButton
         disabled
-        title={t(
-          'You must be an organization owner, manager or admin to add repositories'
-        )}
+        tooltipProps={{
+          title: t(
+            'You must be an organization owner, manager or admin to add repositories'
+          ),
+        }}
         isOpen={false}
         size="xs"
       >
@@ -126,8 +150,8 @@ export function IntegrationReposAddRepository({
       options={dropdownItems}
       onChange={addRepo}
       disabled={false}
+      value={undefined}
       menuTitle={t('Repositories')}
-      triggerLabel={t('Add Repository')}
       emptyMessage={
         query.isFetching
           ? t('Searching\u2026')
@@ -137,14 +161,13 @@ export function IntegrationReposAddRepository({
               )
             : t('Please enter a repository name')
       }
-      searchPlaceholder={t('Search Repositories')}
+      search={{placeholder: t('Search Repositories'), filter: false, onChange: setSearch}}
       loading={query.isFetching}
-      searchable
-      onSearch={setSearch}
-      triggerProps={{
-        busy: adding,
-      }}
-      disableSearchFilter
+      trigger={triggerProps => (
+        <OverlayTrigger.Button {...triggerProps} busy={adding}>
+          {t('Add Repository')}
+        </OverlayTrigger.Button>
+      )}
     />
   );
 }

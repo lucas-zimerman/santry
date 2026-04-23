@@ -1,18 +1,12 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFiltersFixture, PageFilterStateFixture} from 'sentry-fixture/pageFilters';
+import {PageFiltersFixture} from 'sentry-fixture/pageFilters';
 import {ProjectFixture} from 'sentry-fixture/project';
 
-import {render, screen} from 'sentry-test/reactTestingLibrary';
+import {render, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import BackendOverviewPage from 'sentry/views/insights/pages/backend/backendOverviewPage';
-
-jest.mock('sentry/utils/usePageFilters');
-jest.mock('sentry/utils/useLocation');
-
-let useLocationMock: jest.Mock;
 
 const organization = OrganizationFixture({features: ['performance-view']});
 const pageFilterSelection = PageFiltersFixture({
@@ -39,31 +33,31 @@ describe('BackendOverviewPage', () => {
 
   describe('data fetching', () => {
     it('contains correct query with search', async () => {
-      useLocationMock.mockClear();
-      useLocationMock.mockReturnValue({
-        pathname: '/insights/backend/http/',
-        search: '',
-        query: {
-          statsPeriod: '10d',
-          project: '1',
-          query: 'transaction:transaction-name',
+      render(<BackendOverviewPage />, {
+        organization,
+        initialRouterConfig: {
+          location: {
+            pathname: '/insights/backend/http/',
+            query: {
+              statsPeriod: '10d',
+              project: '1',
+              query: 'transaction:transaction-name',
+            },
+          },
+          route: '/insights/backend/http/',
         },
-        hash: '',
-        state: undefined,
-        action: 'PUSH',
-        key: '',
       });
-      render(<BackendOverviewPage />, {organization});
 
-      expect(await screen.findByRole('heading', {level: 1})).toHaveTextContent('Backend');
-      expect(mainTableApiCall).toHaveBeenCalledWith(
-        '/organizations/org-slug/events/',
-        expect.objectContaining({
-          query: expect.objectContaining({
-            query:
-              'transaction:transaction-name ( ( !transaction.op:pageload !transaction.op:navigation !transaction.op:ui.render !transaction.op:interaction !transaction.op:ui.action.swipe !transaction.op:ui.action.scroll !transaction.op:ui.action.click !transaction.op:ui.action !transaction.op:ui.load !transaction.op:app.lifecycle !project.id:[1] ) OR ( transaction.op:http.server ) ) event.type:transaction',
-          }),
-        })
+      await waitFor(() =>
+        expect(mainTableApiCall).toHaveBeenCalledWith(
+          '/organizations/org-slug/events/',
+          expect.objectContaining({
+            query: expect.objectContaining({
+              query:
+                'transaction:transaction-name ( ( !transaction.op:pageload !transaction.op:navigation !transaction.op:ui.render !transaction.op:interaction !transaction.op:ui.action.swipe !transaction.op:ui.action.scroll !transaction.op:ui.action.click !transaction.op:ui.action !transaction.op:ui.load !transaction.op:app.lifecycle !project.id:[1] ) OR ( transaction.op:http.server ) ) event.type:transaction',
+            }),
+          })
+        )
       );
     });
   });
@@ -164,19 +158,6 @@ const setupMocks = () => {
     body: [],
   });
 
-  useLocationMock = jest.mocked(useLocation);
-  useLocationMock.mockReturnValue({
-    pathname: '/insights/backend/http/',
-    search: '',
-    query: {statsPeriod: '10d', 'span.domain': 'git', project: '1'},
-    hash: '',
-    state: undefined,
-    action: 'PUSH',
-    key: '',
-  });
-
-  jest
-    .mocked(usePageFilters)
-    .mockReturnValue(PageFilterStateFixture({selection: pageFilterSelection}));
+  PageFiltersStore.onInitializeUrlState(pageFilterSelection);
   ProjectsStore.loadInitialData(projects);
 };

@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from sentry import features
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases import NoProjects, OrganizationEndpoint
 from sentry.api.paginator import GenericOffsetPaginator
 from sentry.api.serializers import serialize
@@ -32,6 +32,7 @@ from sentry.explore.endpoints.bases import ExploreSavedQueryPermission
 from sentry.explore.endpoints.serializers import ExploreSavedQuerySerializer
 from sentry.explore.models import (
     ExploreSavedQuery,
+    ExploreSavedQueryDataset,
     ExploreSavedQueryLastVisited,
     ExploreSavedQueryStarred,
 )
@@ -264,7 +265,7 @@ def sync_prebuilt_queries_starred(organization, user_id):
 
 
 @extend_schema(tags=["Discover"])
-@region_silo_endpoint
+@cell_silo_endpoint
 class ExploreSavedQueriesEndpoint(OrganizationEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PRIVATE,
@@ -333,6 +334,12 @@ class ExploreSavedQueriesEndpoint(OrganizationEndpoint):
             .prefetch_related("projects")
             .extra(select={"lower_name": "lower(name)"})
         )
+
+        if not features.has(
+            "organizations:expose-migrated-discover-queries", organization, actor=request.user
+        ):
+            queryset = queryset.exclude(dataset=ExploreSavedQueryDataset.SEGMENT_SPANS)
+
         query = request.query_params.get("query")
         if query:
             tokens = tokenize_query(query)

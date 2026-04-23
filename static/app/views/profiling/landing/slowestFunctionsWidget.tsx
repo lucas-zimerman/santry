@@ -2,22 +2,30 @@ import type {ReactNode} from 'react';
 import {Fragment, useCallback, useEffect, useMemo, useState} from 'react';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
+import omit from 'lodash/omit';
+
+import {Button} from '@sentry/scraps/button';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import type {SelectOption} from '@sentry/scraps/compactSelect';
+import {Flex} from '@sentry/scraps/layout';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
 import ChartZoom from 'sentry/components/charts/chartZoom';
 import {LineChart} from 'sentry/components/charts/lineChart';
-import {Button} from 'sentry/components/core/button';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import Count from 'sentry/components/count';
+import {Count} from 'sentry/components/count';
 import type {MenuItemProps} from 'sentry/components/dropdownMenu';
 import {DropdownMenu} from 'sentry/components/dropdownMenu';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import IdBadge from 'sentry/components/idBadge';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Pagination from 'sentry/components/pagination';
-import PerformanceDuration from 'sentry/components/performanceDuration';
-import ScoreBar from 'sentry/components/scoreBar';
-import TextOverflow from 'sentry/components/textOverflow';
-import TimeSince from 'sentry/components/timeSince';
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
+import {IdBadge} from 'sentry/components/idBadge';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {Pagination} from 'sentry/components/pagination';
+import {PerformanceDuration} from 'sentry/components/performanceDuration';
+import {ScoreBar} from 'sentry/components/scoreBar';
+import {TextOverflow} from 'sentry/components/textOverflow';
+import {TimeSince} from 'sentry/components/timeSince';
 import {IconChevron} from 'sentry/icons/iconChevron';
 import {IconEllipsis} from 'sentry/icons/iconEllipsis';
 import {IconWarning} from 'sentry/icons/iconWarning';
@@ -26,21 +34,24 @@ import type {Series} from 'sentry/types/echarts';
 import type {EventsStatsSeries} from 'sentry/types/organization';
 import {defined} from 'sentry/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import {browserHistory} from 'sentry/utils/browserHistory';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {axisLabelFormatter, tooltipFormatter} from 'sentry/utils/discover/charts';
 import {getShortEventId} from 'sentry/utils/events';
 import {Frame} from 'sentry/utils/profiling/frame';
 import type {EventsResultsDataRow} from 'sentry/utils/profiling/hooks/types';
-import {useProfileFunctions} from 'sentry/utils/profiling/hooks/useProfileFunctions';
+import {
+  useProfileFunctions,
+  useProfileFunctionsOptions,
+} from 'sentry/utils/profiling/hooks/useProfileFunctions';
 import {useProfileTopEventsStats} from 'sentry/utils/profiling/hooks/useProfileTopEventsStats';
 import {generateProfileRouteFromProfileReference} from 'sentry/utils/profiling/routes';
 import type {UseApiQueryResult} from 'sentry/utils/queryClient';
 import {decodeScalar} from 'sentry/utils/queryString';
-import type RequestError from 'sentry/utils/requestError/requestError';
+import type {RequestError} from 'sentry/utils/requestError/requestError';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
 import type {DataState} from 'sentry/views/profiling/useLandingAnalytics';
 import {getProfileTargetId} from 'sentry/views/profiling/utils';
 
@@ -48,7 +59,6 @@ import {MAX_FUNCTIONS} from './constants';
 import {
   Accordion,
   AccordionItem,
-  ContentContainer,
   HeaderContainer,
   HeaderTitleLegend,
   StatusContainer,
@@ -60,6 +70,9 @@ const DEFAULT_CURSOR_NAME = 'slowFnCursor';
 
 type BreakdownFunction = 'avg()' | 'p50()' | 'p75()' | 'p95()' | 'p99()';
 type ChartFunctions<F extends BreakdownFunction> = F | 'all_examples()';
+type SortOption = 'sum()' | 'avg()' | 'p50()' | 'p75()' | 'p95()' | 'p99()';
+
+const DEFAULT_SORTING_OPTION: SortOption = 'sum()';
 
 interface SlowestFunctionsWidgetProps<F extends BreakdownFunction> {
   breakdownFunction: F;
@@ -78,13 +91,27 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
   widgetHeight,
   onDataState,
 }: SlowestFunctionsWidgetProps<F>) {
+  const navigate = useNavigate();
   const location = useLocation();
   const organization = useOrganization();
+
+  const [sortFunction, setSortFunction] = useState<SortOption>(DEFAULT_SORTING_OPTION);
 
   // strip the parenthesis to stay consistent in analytics
   const analyticsSource = breakdownFunction.slice(0, -2);
 
   const [expandedIndex, setExpandedIndex] = useState(0);
+
+  useEffect(() => {
+    setSortFunction(DEFAULT_SORTING_OPTION);
+    setExpandedIndex(0);
+  }, [
+    setSortFunction,
+    setExpandedIndex,
+    // we want to reset the sorting option and expanded index to the default
+    // every time the breakdown function changes.
+    breakdownFunction,
+  ]);
 
   const slowFnCursor = useMemo(
     () => decodeScalar(location.query[cursorName]),
@@ -93,12 +120,12 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
 
   const handleCursor = useCallback(
     (cursor: any, pathname: any, query: any) => {
-      browserHistory.push({
+      navigate({
         pathname,
         query: {...query, [cursorName]: cursor},
       });
     },
-    [cursorName]
+    [cursorName, navigate]
   );
 
   const paginationAnalyticsEvent = useCallback(
@@ -112,19 +139,27 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
     [organization, analyticsSource]
   );
 
-  const functionsQuery = useProfileFunctions<FunctionsField>({
-    fields: functionsFields,
+  const functionsQueryOptions = useProfileFunctionsOptions<FunctionsField>({
+    fields: functionsFields.includes(sortFunction as any)
+      ? functionsFields
+      : [...functionsFields, sortFunction],
     referrer: 'api.profiling.suspect-functions.list',
     sort: {
-      key: 'sum()',
+      key: sortFunction,
       order: 'desc',
     },
     query: userQuery,
     limit: MAX_FUNCTIONS,
     cursor: slowFnCursor,
   });
+  const functionsQuery = useQuery({
+    ...functionsQueryOptions,
+    select: selectJsonWithHeaders,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 
-  const functionsData = functionsQuery.data?.data || [];
+  const functionsData = functionsQuery.data?.json?.data || [];
 
   const hasFunctions = (functionsData.length || 0) > 0;
 
@@ -132,7 +167,9 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
   const projects = functionsQuery.isFetched
     ? [
         ...new Set(
-          (functionsQuery.data?.data ?? []).map(func => func['project.id'] as number)
+          (functionsQuery.data?.json?.data ?? []).map(
+            func => func['project.id'] as number
+          )
         ),
       ]
     : [];
@@ -183,15 +220,46 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
     <WidgetContainer height={widgetHeight}>
       <HeaderContainer>
         {header ?? <HeaderTitleLegend>{t('Slowest Functions')}</HeaderTitleLegend>}
-        <Subtitle>{t('Slowest functions by total self time spent.')}</Subtitle>
+        <Subtitle>
+          <Flex gap="xs" align="center">
+            {tct('Slowest functions sorted by [sorting].', {
+              sorting: (
+                <StyledCompactSelect
+                  value={sortFunction}
+                  options={WIDGET_SORTING_OPTIONS}
+                  onChange={option => {
+                    setSortFunction(option.value as SortOption);
+                    setExpandedIndex(0);
+                    const newQuery = omit(location.query, [cursorName]);
+                    navigate(
+                      {
+                        pathname: location.pathname,
+                        query: newQuery,
+                      },
+                      {replace: true}
+                    );
+                  }}
+                  trigger={triggerProps => (
+                    <OverlayTrigger.Button
+                      {...triggerProps}
+                      priority="transparent"
+                      size="zero"
+                    />
+                  )}
+                  offset={4}
+                />
+              ),
+            })}
+          </Flex>
+        </Subtitle>
         <StyledPagination
-          pageLinks={functionsQuery.getResponseHeader?.('Link') ?? null}
+          pageLinks={functionsQuery.data?.headers.Link ?? null}
           size="xs"
           onCursor={handleCursor}
           paginationAnalyticsEvent={paginationAnalyticsEvent}
         />
       </HeaderContainer>
-      <ContentContainer>
+      <Flex flex="1 1 auto" direction="column" justify="center">
         {isLoading && (
           <StatusContainer>
             <LoadingIndicator />
@@ -199,7 +267,7 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
         )}
         {isError && (
           <StatusContainer>
-            <IconWarning data-test-id="error-indicator" color="gray300" size="lg" />
+            <IconWarning data-test-id="error-indicator" variant="muted" size="lg" />
           </StatusContainer>
         )}
         {!isError && !isLoading && !hasFunctions && (
@@ -238,7 +306,7 @@ export function SlowestFunctionsWidget<F extends BreakdownFunction>({
             })}
           </Accordion>
         )}
-      </ContentContainer>
+      </Flex>
     </WidgetContainer>
   );
 }
@@ -272,7 +340,7 @@ function SlowestFunctionEntry<F extends BreakdownFunction>({
 
   const score = Math.ceil((((func['sum()'] as number) ?? 0) / totalDuration) * BARS);
   const colors = theme.chart.getColorPalette(0);
-  const palette = new Array(BARS).fill([colors[0]]);
+  const palette = Array.from<[string]>({length: BARS}).fill([colors[0]]);
 
   const frame = useMemo(() => {
     return new Frame(
@@ -315,10 +383,10 @@ function SlowestFunctionEntry<F extends BreakdownFunction>({
           return {
             key: targetId,
             label: (
-              <DropdownItem>
+              <Flex justify="between" width="150px">
                 {getShortEventId(targetId)}
                 {timestamp}
-              </DropdownItem>
+              </Flex>
             ),
             textValue: targetId,
             to: generateProfileRouteFromProfileReference({
@@ -331,8 +399,7 @@ function SlowestFunctionEntry<F extends BreakdownFunction>({
           };
         });
       })
-      .reverse()
-      .slice(0, 10);
+      .reverse();
   }, [func, stats, organization, project, frame]);
 
   return (
@@ -343,7 +410,7 @@ function SlowestFunctionEntry<F extends BreakdownFunction>({
           aria-label={t('Expand')}
           aria-expanded={isExpanded}
           size="zero"
-          borderless
+          priority="transparent"
           onClick={setExpanded}
         />
         {project && (
@@ -362,13 +429,19 @@ function SlowestFunctionEntry<F extends BreakdownFunction>({
             ),
           })}
         >
-          <ScoreBar score={score} palette={palette} size={20} radius={0} />
+          <ScoreBar
+            score={score}
+            // @ts-expect-error -- TODO: resolve this types mismatch
+            palette={palette}
+            size={20}
+            radius={0}
+          />
         </Tooltip>
         <DropdownMenu
           position="bottom-end"
           triggerProps={{
             icon: <IconEllipsis size="xs" />,
-            borderless: true,
+            priority: 'transparent',
             showChevron: false,
             size: 'xs',
             'aria-label': t('Example Profiles'),
@@ -383,16 +456,17 @@ function SlowestFunctionEntry<F extends BreakdownFunction>({
           }}
           items={examples}
           menuTitle={t('Example Profiles')}
+          maxMenuHeight={300}
         />
       </AccordionItem>
       {isExpanded && (
-        <FunctionChartContainer>
+        <Flex flex="1 1 auto" direction="column" justify="center">
           <FunctionChart
             func={func}
             breakdownFunction={breakdownFunction}
             stats={stats}
           />
-        </FunctionChartContainer>
+        </Flex>
       )}
     </Fragment>
   );
@@ -446,7 +520,7 @@ function FunctionChart<F extends BreakdownFunction>({
       },
       yAxis: {
         axisLabel: {
-          color: theme.chartLabel,
+          color: theme.tokens.content.secondary,
           formatter: (value: number) => axisLabelFormatter(value, 'duration'),
         },
       },
@@ -457,7 +531,7 @@ function FunctionChart<F extends BreakdownFunction>({
         valueFormatter: (value: number) => tooltipFormatter(value, 'duration'),
       },
     };
-  }, [theme.chartLabel]);
+  }, [theme.tokens.content.secondary]);
 
   if (stats?.isPending) {
     return (
@@ -470,7 +544,7 @@ function FunctionChart<F extends BreakdownFunction>({
   if (stats?.isError) {
     return (
       <StatusContainer>
-        <IconWarning data-test-id="error-indicator" color="gray300" size="lg" />
+        <IconWarning data-test-id="error-indicator" variant="muted" size="lg" />
       </StatusContainer>
     );
   }
@@ -498,11 +572,38 @@ const functionsFields = [
   'sum()',
 ] as const;
 
-type FunctionsField = (typeof functionsFields)[number];
+type FunctionsField = (typeof functionsFields)[number] | SortOption;
 
 const totalsFields = ['project.id', 'sum()'] as const;
 
 type TotalsField = (typeof totalsFields)[number];
+
+const WIDGET_SORTING_OPTIONS: Array<SelectOption<SortOption>> = [
+  {
+    label: t('total self time spent'),
+    value: 'sum()' as const,
+  },
+  {
+    label: t('average self time spent'),
+    value: 'avg()' as const,
+  },
+  {
+    label: t('p50 self time spent'),
+    value: 'p50()' as const,
+  },
+  {
+    label: t('p75 self time spent'),
+    value: 'p75()' as const,
+  },
+  {
+    label: t('p95 self time spent'),
+    value: 'p95()' as const,
+  },
+  {
+    label: t('p99 self time spent'),
+    value: 'p99()' as const,
+  },
+];
 
 const StyledPagination = styled(Pagination)`
   margin: 0;
@@ -512,15 +613,9 @@ const FunctionName = styled(TextOverflow)`
   flex: 1 1 auto;
 `;
 
-const FunctionChartContainer = styled('div')`
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-`;
-
-const DropdownItem = styled('div')`
-  width: 150px;
-  display: flex;
-  justify-content: space-between;
+const StyledCompactSelect = styled(CompactSelect)`
+  > button {
+    border: None;
+    padding: 0;
+  }
 `;

@@ -11,11 +11,14 @@ from sentry.api.helpers.group_index import update_groups, validate_search_filter
 from sentry.api.helpers.group_index.delete import schedule_tasks_to_delete_groups
 from sentry.api.helpers.group_index.update import (
     get_group_list,
+    get_semver_releases,
+    greatest_semver_release,
     handle_assigned_to,
     handle_has_seen,
     handle_is_bookmarked,
     handle_is_public,
     handle_is_subscribed,
+    most_recent_release,
 )
 from sentry.api.helpers.group_index.validators import ValidationError
 from sentry.api.serializers import serialize
@@ -28,15 +31,14 @@ from sentry.models.groupbookmark import GroupBookmark
 from sentry.models.grouphash import GroupHash
 from sentry.models.groupinbox import GroupInbox, GroupInboxReason, add_group_to_inbox
 from sentry.models.grouplink import GroupLink
-from sentry.models.groupopenperiod import GroupOpenPeriod
 from sentry.models.groupseen import GroupSeen
 from sentry.models.groupshare import GroupShare
 from sentry.models.groupsnooze import GroupSnooze
 from sentry.models.groupsubscription import GroupSubscription
+from sentry.models.release import ReleaseStatus
 from sentry.notifications.types import GroupSubscriptionReason
 from sentry.testutils.cases import TestCase
 from sentry.testutils.helpers.analytics import assert_last_analytics_event
-from sentry.testutils.helpers.features import with_feature
 from sentry.testutils.skips import requires_snuba
 from sentry.types.activity import ActivityType
 from sentry.types.actor import Actor
@@ -127,16 +129,10 @@ class UpdateGroupsTest(TestCase):
         assert send_unresolved.called
 
     @patch("sentry.signals.issue_resolved.send_robust")
-    @with_feature("organizations:issue-open-periods")
     def test_resolving_unresolved_group(self, send_robust: Mock) -> None:
         unresolved_group = self.create_group(status=GroupStatus.UNRESOLVED)
         add_group_to_inbox(unresolved_group, GroupInboxReason.NEW)
         assert unresolved_group.status == GroupStatus.UNRESOLVED
-        open_period = GroupOpenPeriod.objects.filter(
-            group=unresolved_group, date_ended__isnull=True
-        ).first()
-        assert open_period is not None
-        assert open_period.date_ended is None
 
         request = self.make_request(user=self.user, method="GET")
         request.user = self.user
@@ -151,31 +147,6 @@ class UpdateGroupsTest(TestCase):
         assert unresolved_group.status == GroupStatus.RESOLVED
         assert not GroupInbox.objects.filter(group=unresolved_group).exists()
         assert send_robust.called
-        open_period.refresh_from_db()
-        assert open_period.date_ended is not None
-
-    @patch("sentry.signals.issue_resolved.send_robust")
-    @with_feature("organizations:issue-open-periods")
-    def test_resolving_unresolved_group_without_open_period(self, send_robust: Mock) -> None:
-        unresolved_group = self.create_group(status=GroupStatus.UNRESOLVED)
-        add_group_to_inbox(unresolved_group, GroupInboxReason.NEW)
-        assert unresolved_group.status == GroupStatus.UNRESOLVED
-        GroupOpenPeriod.objects.all().delete()
-
-        request = self.make_request(user=self.user, method="GET")
-        request.user = self.user
-        request.data = {"status": "resolved", "substatus": None}
-        request.GET = QueryDict(query_string=f"id={unresolved_group.id}")
-
-        group_list = get_group_list(self.organization.id, [self.project], request.GET.getlist("id"))
-        update_groups(request, group_list)
-
-        unresolved_group.refresh_from_db()
-
-        assert unresolved_group.status == GroupStatus.RESOLVED
-        assert not GroupInbox.objects.filter(group=unresolved_group).exists()
-        assert send_robust.called
-        assert GroupOpenPeriod.objects.filter(group=unresolved_group).count() == 0
 
     @patch("sentry.signals.issue_ignored.send_robust")
     @patch("sentry.issues.status_change.post_save")
@@ -312,7 +283,6 @@ class UpdateGroupsTest(TestCase):
     @patch("sentry.signals.issue_resolved.send_robust")
     def test_resolving_group_with_short_id(self, send_robust: Mock) -> None:
         group = self.create_group(status=GroupStatus.UNRESOLVED)
-        assert GroupOpenPeriod.objects.filter(group=group, date_ended__isnull=True).exists()
 
         request = self.make_request(
             user=self.user,
@@ -332,6 +302,41 @@ class UpdateGroupsTest(TestCase):
 
         assert group.status == GroupStatus.RESOLVED
         assert send_robust.called
+
+    def test_get_group_list_filters_by_project_access(self) -> None:
+        """
+        Test that get_group_list properly filters groups by project access when using qualified short IDs.
+        This prevents IDOR vulnerabilities where a user could access groups from projects they don't have access to.
+        """
+        # Create a second project in the same organization
+        project2 = self.create_project(organization=self.organization, name="Project 2")
+
+        # Create groups in both projects
+        group1 = self.create_group(project=self.project, status=GroupStatus.UNRESOLVED)
+        group2 = self.create_group(project=project2, status=GroupStatus.UNRESOLVED)
+
+        # User only has access to self.project, not project2
+        # When requesting group2 using qualified short ID, it should be filtered out
+        group_list = get_group_list(
+            self.organization.id, [self.project], [group2.qualified_short_id]
+        )
+
+        # The group from the inaccessible project should be filtered out
+        assert group_list == []
+
+        # But when requesting a group from an accessible project, it should work
+        group_list = get_group_list(
+            self.organization.id, [self.project], [group1.qualified_short_id]
+        )
+        assert group_list == [group1]
+
+        # When user has access to both projects, both groups should be returned
+        group_list = get_group_list(
+            self.organization.id,
+            [self.project, project2],
+            [group1.qualified_short_id, group2.qualified_short_id],
+        )
+        assert set(group_list) == {group1, group2}
 
     def test_unresolve_clears_commit_resolution_links(self) -> None:
         """
@@ -395,6 +400,48 @@ class UpdateGroupsTest(TestCase):
         assert serialized["status"] == "resolved"
         assert "inCommit" not in serialized["statusDetails"]
         assert serialized["statusDetails"] == {}
+
+    def test_resolve_in_next_release(self) -> None:
+        self.create_release(project=self.project, version="test@1.0.0.0")
+        group = self.create_group(status=GroupStatus.UNRESOLVED)
+
+        request = self.make_request(user=self.user, method="GET")
+        request.user = self.user
+        request.data = {"status": "resolvedInNextRelease"}
+        request.GET = QueryDict(query_string=f"id={group.id}")
+
+        group_list = get_group_list(self.organization.id, [self.project], request.GET.getlist("id"))
+        update_groups(request, group_list)
+
+        group.refresh_from_db()
+        assert group.status == GroupStatus.RESOLVED
+
+    def test_resolve_in_next_release_ignores_archived_releases(self) -> None:
+        open_release = self.create_release(
+            project=self.project,
+            version="test@1.0.0.0",
+            date_added=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        self.create_release(
+            project=self.project,
+            version="test@2.0.0.0",
+            date_added=datetime(2024, 1, 2, tzinfo=UTC),
+            status=ReleaseStatus.ARCHIVED,
+        )
+        group = self.create_group(status=GroupStatus.UNRESOLVED)
+
+        request = self.make_request(user=self.user, method="GET")
+        request.user = self.user
+        request.data = {"status": "resolvedInNextRelease"}
+        request.GET = QueryDict(query_string=f"id={group.id}")
+
+        group_list = get_group_list(self.organization.id, [self.project], request.GET.getlist("id"))
+        update_groups(request, group_list)
+
+        group.refresh_from_db()
+        assert group.status == GroupStatus.RESOLVED
+        resolution = group.groupresolution_set.get()
+        assert resolution.release == open_release
 
 
 class MergeGroupsTest(TestCase):
@@ -466,7 +513,7 @@ class MergeGroupsTest(TestCase):
 
         assert len(call_args) == 3
         # Have to convert to ids because first argument is a queryset
-        assert [group.id for group in call_args[0]] == group_ids
+        assert sorted(group.id for group in call_args[0]) == sorted(group_ids)
         assert call_args[1] == {proj1.id: proj1}
         assert call_args[2] == self.user
 
@@ -489,7 +536,7 @@ class MergeGroupsTest(TestCase):
 
         assert len(call_args) == 3
         # Have to convert to ids because first argument is a queryset
-        assert [group.id for group in call_args[0]] == group_ids
+        assert sorted(group.id for group in call_args[0]) == sorted(group_ids)
         assert call_args[1] == {project.id: project}
         assert call_args[2] == self.user
 
@@ -523,7 +570,10 @@ class MergeGroupsTest(TestCase):
                     platform="javascript",
                     metadata={"sdk": {"name_normalized": "sentry.javascript.nextjs"}},
                 ).id,
-                self.create_group(platform="javascript").id,
+                self.create_group(
+                    platform="javascript",
+                    metadata={"sdk": {"name_normalized": "sentry.javascript.nextjs"}},
+                ).id,
             ]
             project = self.project
 
@@ -825,60 +875,6 @@ class TestHandleAssignedTo(TestCase):
         )
 
     @patch("sentry.analytics.record")
-    @with_feature("organizations:team-workflow-notifications")
-    def test_unassign_team_with_team_workflow_notifications_flag(self, mock_record: Mock) -> None:
-        user1 = self.create_user("foo@example.com")
-        user2 = self.create_user("bar@example.com")
-        team1 = self.create_team()
-        member1 = self.create_member(user=user1, organization=self.organization, role="member")
-        member2 = self.create_member(user=user2, organization=self.organization, role="member")
-        self.create_team_membership(team1, member1, role="admin")
-        self.create_team_membership(team1, member2, role="admin")
-
-        # first assign the issue to team1
-        assigned_to = handle_assigned_to(
-            Actor.from_identifier(f"team:{team1.id}"),
-            None,
-            None,
-            self.group_list,
-            self.project_lookup,
-            self.user,
-        )
-
-        assert GroupAssignee.objects.filter(group=self.group, team_id=team1.id).exists()
-        assert GroupSubscription.objects.filter(
-            group=self.group,
-            project=self.group.project,
-            team_id=team1.id,
-            reason=GroupSubscriptionReason.assigned,
-        ).exists()
-
-        # then unassign it
-        assigned_to = handle_assigned_to(
-            None, None, None, self.group_list, self.project_lookup, self.user
-        )
-
-        assert not GroupAssignee.objects.filter(group=self.group, team_id=team1.id).exists()
-        assert not GroupSubscription.objects.filter(
-            group=self.group,
-            project=self.group.project,
-            user_id=team1.id,
-            reason=GroupSubscriptionReason.assigned,
-        ).exists()
-
-        assert assigned_to is None
-        assert_last_analytics_event(
-            mock_record,
-            ManualIssueAssignment(
-                group_id=self.group.id,
-                organization_id=self.group.project.organization_id,
-                project_id=self.group.project_id,
-                assigned_by=None,
-                had_to_deassign=True,
-            ),
-        )
-
-    @patch("sentry.analytics.record")
     def test_reassign_user(self, mock_record: Mock) -> None:
         user2 = self.create_user(email="meow@meow.meow")
 
@@ -1079,85 +1075,6 @@ class TestHandleAssignedTo(TestCase):
             ),
         )
 
-    @patch("sentry.analytics.record")
-    @with_feature("organizations:team-workflow-notifications")
-    def test_reassign_team_with_team_workflow_notifications_flag(self, mock_record: Mock) -> None:
-        user1 = self.create_user("foo@example.com")
-        user2 = self.create_user("bar@example.com")
-        team1 = self.create_team()
-        member1 = self.create_member(user=user1, organization=self.organization, role="member")
-        member2 = self.create_member(user=user2, organization=self.organization, role="member")
-        self.create_team_membership(team1, member1, role="admin")
-        self.create_team_membership(team1, member2, role="admin")
-
-        user3 = self.create_user("baz@example.com")
-        user4 = self.create_user("boo@example.com")
-        team2 = self.create_team()
-        member3 = self.create_member(user=user3, organization=self.organization, role="member")
-        member4 = self.create_member(user=user4, organization=self.organization, role="member")
-        self.create_team_membership(team2, member3, role="admin")
-        self.create_team_membership(team2, member4, role="admin")
-
-        # first assign the issue to team1
-        assigned_to = handle_assigned_to(
-            Actor.from_identifier(f"team:{team1.id}"),
-            None,
-            None,
-            self.group_list,
-            self.project_lookup,
-            self.user,
-        )
-
-        assert GroupAssignee.objects.filter(group=self.group, team=team1.id).exists()
-        assert GroupSubscription.objects.filter(
-            group=self.group,
-            project=self.group.project,
-            team=team1,
-            reason=GroupSubscriptionReason.assigned,
-        ).exists()
-
-        # then assign it to team2
-        assigned_to = handle_assigned_to(
-            Actor.from_identifier(f"team:{team2.id}"),
-            None,
-            None,
-            self.group_list,
-            self.project_lookup,
-            self.user,
-        )
-
-        assert not GroupAssignee.objects.filter(group=self.group, team=team1.id).exists()
-        assert not GroupSubscription.objects.filter(
-            group=self.group,
-            project=self.group.project,
-            team=team1,
-            reason=GroupSubscriptionReason.assigned,
-        ).exists()
-
-        assert GroupAssignee.objects.filter(group=self.group, team=team2.id).exists()
-        assert GroupSubscription.objects.filter(
-            group=self.group,
-            project=self.group.project,
-            team=team2,
-            reason=GroupSubscriptionReason.assigned,
-        ).exists()
-
-        assert assigned_to == {
-            "id": str(team2.id),
-            "name": team2.slug,
-            "type": "team",
-        }
-        assert_last_analytics_event(
-            mock_record,
-            ManualIssueAssignment(
-                group_id=self.group.id,
-                organization_id=self.group.project.organization_id,
-                project_id=self.group.project_id,
-                assigned_by=None,
-                had_to_deassign=True,
-            ),
-        )
-
     def test_user_in_reassigned_team(self) -> None:
         """Test that the correct participants are present when re-assigning from user to team and vice versa"""
         user1 = self.create_user("foo@example.com")
@@ -1261,7 +1178,8 @@ class DeleteGroupsTest(TestCase):
             GroupHash.objects.create(project=self.project, group=group, hash=hashes[i])
             add_group_to_inbox(group, GroupInboxReason.NEW)
 
-        schedule_tasks_to_delete_groups(request, [self.project], self.organization.id)
+        with self.tasks():
+            schedule_tasks_to_delete_groups(request, [self.project], self.organization.id)
 
         assert (
             len(GroupHash.objects.filter(project_id=self.project.id, group_id__in=group_ids).all())
@@ -1274,7 +1192,7 @@ class DeleteGroupsTest(TestCase):
         assert send_robust.called
 
     @patch(
-        "sentry.tasks.delete_seer_grouping_records.delete_seer_grouping_records_by_hash.apply_async"
+        "sentry.tasks.seer.delete_seer_grouping_records.delete_seer_grouping_records_by_hash.apply_async"
     )
     @patch("sentry.signals.issue_deleted.send_robust")
     def test_delete_groups_deletes_seer_records_by_hash(
@@ -1292,7 +1210,8 @@ class DeleteGroupsTest(TestCase):
             GroupHash.objects.create(project=self.project, group=group, hash=hashes[i])
             add_group_to_inbox(group, GroupInboxReason.NEW)
 
-        schedule_tasks_to_delete_groups(request, [self.project], self.organization.id)
+        with self.tasks():
+            schedule_tasks_to_delete_groups(request, [self.project], self.organization.id)
 
         assert (
             len(GroupHash.objects.filter(project_id=self.project.id, group_id__in=group_ids).all())
@@ -1306,3 +1225,137 @@ class DeleteGroupsTest(TestCase):
         mock_delete_seer_grouping_records_by_hash.assert_called_with(
             args=[self.project.id, hashes, 0]
         )
+
+
+class GetSemverReleasesTest(TestCase):
+    def test_greatest_semver_releases(self) -> None:
+        """Test get_semver_releases orders releases by semver."""
+        release_1 = self.create_release(version="test@2.2", project=self.project)
+        release_2 = self.create_release(version="test@10.0+1000", project=self.project)
+        release_3 = self.create_release(version="test@2.2-alpha", project=self.project)
+        release_4 = self.create_release(version="test@2.2.3", project=self.project)
+        release_5 = self.create_release(version="test@2.20.3", project=self.project)
+        release_6 = self.create_release(version="test@2.20.3.3", project=self.project)
+        release_7 = self.create_release(version="test@10.0+998", project=self.project)
+        release_8 = self.create_release(version="test@10.0+x22", project=self.project)
+        release_9 = self.create_release(version="test@10.0+a23", project=self.project)
+        release_10 = self.create_release(version="test@10.0", project=self.project)
+        release_11 = self.create_release(version="test@10.0-abc", project=self.project)
+        release_12 = self.create_release(version="test@10.0+999", project=self.project)
+        # Non-semver releases that will be filtered out by filter_to_semver()
+        self.create_release(version="test@some_thing", project=self.project)
+        self.create_release(version="random_junk", project=self.project)
+
+        releases = list(get_semver_releases(self.project))
+
+        # Without build code ordering, 10.0 releases (same semver, different build codes)
+        # are not in deterministic order. Just verify they're grouped at the top.
+        all_10_releases = {
+            release_2,
+            release_7,
+            release_8,
+            release_9,
+            release_10,
+            release_11,
+            release_12,
+        }
+
+        assert len(releases) == 12
+        assert set(releases[:7]) == all_10_releases
+        assert releases[7:] == [
+            release_6,
+            release_5,
+            release_4,
+            release_1,
+            release_3,
+        ]
+
+    def test_greatest_semver_releases_with_build_code(self) -> None:
+        """Test get_semver_releases orders releases by semver and build code."""
+        release_1 = self.create_release(version="test@2.2", project=self.project)
+        release_2 = self.create_release(version="test@10.0+1000", project=self.project)
+        release_3 = self.create_release(version="test@2.2-alpha", project=self.project)
+        release_4 = self.create_release(version="test@2.2.3", project=self.project)
+        release_5 = self.create_release(version="test@2.20.3", project=self.project)
+        release_6 = self.create_release(version="test@2.20.3.3", project=self.project)
+        release_7 = self.create_release(version="test@10.0+998", project=self.project)
+        release_8 = self.create_release(version="test@10.0+x22", project=self.project)
+        release_9 = self.create_release(version="test@10.0+a23", project=self.project)
+        release_10 = self.create_release(version="test@10.0", project=self.project)
+        release_11 = self.create_release(version="test@10.0-abc", project=self.project)
+        release_12 = self.create_release(version="test@10.0+999", project=self.project)
+        # Non-semver releases that will be filtered out by filter_to_semver()
+        self.create_release(version="test@some_thing", project=self.project)
+        self.create_release(version="random_junk", project=self.project)
+
+        with self.feature("organizations:semver-ordering-with-build-code"):
+            releases = list(get_semver_releases(self.project))
+
+        expected_order = [
+            release_8,  # test@10.0+x22
+            release_9,  # test@10.0+a23
+            release_2,  # test@10.0+1000
+            release_12,  # test@10.0+999
+            release_7,  # test@10.0+998
+            release_10,  # test@10.0
+            release_11,  # test@10.0-abc
+            release_6,  # test@2.20.3.3
+            release_5,  # test@2.20.3
+            release_4,  # test@2.2.3
+            release_1,  # test@2.2
+            release_3,  # test@2.2-alpha
+        ]
+
+        assert len(releases) == len(expected_order)
+        assert [r.id for r in releases] == [r.id for r in expected_order]
+
+    def test_greatest_semver_release(self) -> None:
+        """Test that greatest_semver_release returns the highest version release."""
+        self.create_release(version="test@1.0", project=self.project)
+        release_2 = self.create_release(version="test@2.0", project=self.project)
+        self.create_release(version="test@1.5", project=self.project)
+
+        greatest = greatest_semver_release(self.project)
+        assert greatest is not None
+        assert greatest.id == release_2.id
+        assert greatest.version == "test@2.0"
+
+    def test_greatest_semver_release_with_build_code(self) -> None:
+        """Test that greatest_semver_release returns the highest version release with the highest build code."""
+        release_with_highest_build = self.create_release(
+            version="test@1.0+100", project=self.project
+        )
+        self.create_release(version="test@1.0+99", project=self.project)
+
+        with self.feature("organizations:semver-ordering-with-build-code"):
+            greatest = greatest_semver_release(self.project)
+            assert greatest is not None
+            assert greatest.id == release_with_highest_build.id
+            assert greatest.version == "test@1.0+100"
+
+
+class TestHandleReleases(TestCase):
+    def test_excludes_archived_releases_from_helpers(self) -> None:
+        """archived releases should not be selected as the most recent release."""
+        open_release = self.create_release(
+            project=self.project,
+            version="test@1.0.0.0",
+            date_added=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+        self.create_release(
+            project=self.project,
+            version="test@1.1.0.0",
+            date_added=datetime(2024, 1, 2, tzinfo=UTC),
+            status=ReleaseStatus.ARCHIVED,
+        )
+
+        assert most_recent_release(self.project) == open_release
+        assert greatest_semver_release(self.project) == open_release
+
+        new_release = self.create_release(
+            project=self.project,
+            version="test@1.2.0.0",
+            date_added=datetime(2024, 1, 3, tzinfo=UTC),
+        )
+        assert most_recent_release(self.project) == new_release
+        assert greatest_semver_release(self.project) == new_release

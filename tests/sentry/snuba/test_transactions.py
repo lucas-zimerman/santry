@@ -1373,7 +1373,7 @@ class TransactionQueryIntegrationTest(SnubaTestCase, TestCase):
 
         queries = [
             ("", 8, True),
-            ("failure_count():>0", 6, True),
+            ("failure_count():>0", 7, True),
             ("failure_count():>0", 8, False),
         ]
 
@@ -2433,12 +2433,12 @@ class TransactionQueryIntegrationTest(SnubaTestCase, TestCase):
         self.store_event(data, project_id=project.id)
 
         orderbys = [
-            ("failure_count()", [0, 0, 1, 1, 1, 1, 1, 2]),
-            ("failure_count()", [0, 0, 1, 1, 1, 1, 1, 2]),
-            ("-failure_count()", [2, 1, 1, 1, 1, 1, 0, 0]),
-            ("-failure_count()", [2, 1, 1, 1, 1, 1, 0, 0]),
-            ("failure_count", [0, 0, 1, 1, 1, 1, 1, 2]),
-            ("-failure_count", [2, 1, 1, 1, 1, 1, 0, 0]),
+            ("failure_count()", [0, 1, 1, 1, 1, 1, 1, 2]),
+            ("failure_count()", [0, 1, 1, 1, 1, 1, 1, 2]),
+            ("-failure_count()", [2, 1, 1, 1, 1, 1, 1, 0]),
+            ("-failure_count()", [2, 1, 1, 1, 1, 1, 1, 0]),
+            ("failure_count", [0, 1, 1, 1, 1, 1, 1, 2]),
+            ("-failure_count", [2, 1, 1, 1, 1, 1, 1, 0]),
         ]
 
         for orderby, expected in orderbys:
@@ -2677,10 +2677,7 @@ class TransactionQueryIntegrationTest(SnubaTestCase, TestCase):
 
         results = transactions.query(
             selected_columns=["transaction", "count()"],
-            query="event.type:transaction AND (timestamp:<{} OR timestamp:>{})".format(
-                (self.now - timedelta(seconds=5)).isoformat(),
-                (self.now - timedelta(seconds=3)).isoformat(),
-            ),
+            query=f"event.type:transaction AND (timestamp:<{(self.now - timedelta(seconds=5)).isoformat()} OR timestamp:>{(self.now - timedelta(seconds=3)).isoformat()})",
             snuba_params=SnubaParams(
                 start=self.two_min_ago,
                 end=self.now,

@@ -1,36 +1,33 @@
 import {Fragment} from 'react';
+import {useMutation, useQueryClient} from '@tanstack/react-query';
+
+import {LinkButton} from '@sentry/scraps/button';
+import {Link} from '@sentry/scraps/link';
+import {Switch} from '@sentry/scraps/switch';
 
 import {
   addErrorMessage,
   addLoadingMessage,
   clearIndicators,
 } from 'sentry/actionCreators/indicator';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Link} from 'sentry/components/core/link';
-import {Switch} from 'sentry/components/core/switch';
-import EmptyMessage from 'sentry/components/emptyMessage';
-import FieldGroup from 'sentry/components/forms/fieldGroup';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Panel from 'sentry/components/panels/panel';
-import PanelAlert from 'sentry/components/panels/panelAlert';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import Truncate from 'sentry/components/truncate';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
+import {FieldGroup} from 'sentry/components/forms/fieldGroup';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelAlert} from 'sentry/components/panels/panelAlert';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
+import {Truncate} from 'sentry/components/truncate';
 import {IconAdd} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import type {ServiceHook} from 'sentry/types/integrations';
-import {
-  setApiQueryData,
-  useApiQuery,
-  useMutation,
-  useQueryClient,
-} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {setApiQueryData, useApiQuery} from 'sentry/utils/queryClient';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
-import withOrganization from 'sentry/utils/withOrganization';
-import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
+import {SettingsPageHeader} from 'sentry/views/settings/components/settingsPageHeader';
 
 type RowProps = {
   hook: ServiceHook;
@@ -65,7 +62,7 @@ function ServiceHookRow({orgId, projectId, hook, onToggleActive}: RowProps) {
   );
 }
 
-function ProjectServiceHooks() {
+export default function ProjectServiceHooks() {
   const organization = useOrganization();
   const {projectId} = useParams<{projectId: string}>();
   const api = useApi({persistInFlight: true});
@@ -76,9 +73,16 @@ function ProjectServiceHooks() {
     isPending,
     isError,
     refetch,
-  } = useApiQuery<ServiceHook[]>([`/projects/${organization.slug}/${projectId}/hooks/`], {
-    staleTime: 0,
-  });
+  } = useApiQuery<ServiceHook[]>(
+    [
+      getApiUrl('/projects/$organizationIdOrSlug/$projectIdOrSlug/hooks/', {
+        path: {organizationIdOrSlug: organization.slug, projectIdOrSlug: projectId},
+      }),
+    ],
+    {
+      staleTime: 0,
+    }
+  );
 
   const onToggleActiveMutation = useMutation({
     mutationFn: ({hook}: {hook: ServiceHook}) => {
@@ -99,7 +103,11 @@ function ProjectServiceHooks() {
       clearIndicators();
       setApiQueryData<ServiceHook[]>(
         queryClient,
-        [`/projects/${organization.slug}/${projectId}/hooks/`],
+        [
+          getApiUrl('/projects/$organizationIdOrSlug/$projectIdOrSlug/hooks/', {
+            path: {organizationIdOrSlug: organization.slug, projectIdOrSlug: projectId},
+          }),
+        ],
         oldHookList => {
           return oldHookList?.map(h => {
             if (h.id === data.id) {
@@ -139,7 +147,7 @@ function ProjectServiceHooks() {
       <Fragment>
         <PanelHeader key="header">{t('Service Hook')}</PanelHeader>
         <PanelBody key="body">
-          <PanelAlert type="info">
+          <PanelAlert variant="info">
             {t(
               'Service Hooks are an early adopter preview feature and will change in the future.'
             )}
@@ -171,7 +179,7 @@ function ProjectServiceHooks() {
               to={`/settings/${organization.slug}/projects/${projectId}/hooks/new/`}
               size="sm"
               priority="primary"
-              icon={<IconAdd isCircled />}
+              icon={<IconAdd />}
             >
               {t('Create New Hook')}
             </LinkButton>
@@ -182,5 +190,3 @@ function ProjectServiceHooks() {
     </Fragment>
   );
 }
-
-export default withOrganization(ProjectServiceHooks);

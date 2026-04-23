@@ -1,24 +1,23 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Alert} from 'sentry/components/core/alert';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
+import {Alert} from '@sentry/scraps/alert';
+import {Button, LinkButton} from '@sentry/scraps/button';
+
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 
 import {
   sendReplayOnboardRequest,
   sendUpgradeRequest,
 } from 'getsentry/actionCreators/upsell';
-import withSubscription from 'getsentry/components/withSubscription';
+import {withSubscription} from 'getsentry/components/withSubscription';
 import {useAM2UpsellModal} from 'getsentry/hooks/useAM2UpsellModal';
 import type {Subscription} from 'getsentry/types';
 import {PlanTier} from 'getsentry/types';
 import type {ProductUnavailableUpsellAlert} from 'getsentry/utils/trackGetsentryAnalytics';
-import trackGetsentryAnalytics from 'getsentry/utils/trackGetsentryAnalytics';
+import {trackGetsentryAnalytics} from 'getsentry/utils/trackGetsentryAnalytics';
 
 function getUpdatePlanLabel({
   hasSessionReplay,
@@ -104,7 +103,7 @@ function RequestUpdateAlert({
     );
   }, [analyticsCommonProps]);
 
-  const handleClick = useCallback(async () => {
+  const handleClick = async () => {
     setLoading(true);
 
     trackGetsentryAnalytics(
@@ -128,19 +127,19 @@ function RequestUpdateAlert({
     }
 
     setLoading(false);
-  }, [api, isAncientPlan, organization, analyticsCommonProps]);
+  };
 
   return (
     <AlertWithCustomMargin
       system
-      type="info"
+      variant="info"
       trailingItems={
         <Button
           size="xs"
           onClick={handleClick}
           busy={loading}
           disabled={requestSent}
-          title={requestSent ? t('Request sent!') : undefined}
+          tooltipProps={{title: requestSent ? t('Request sent!') : undefined}}
         >
           {t('Request Update')}
         </Button>
@@ -195,7 +194,7 @@ function UpdatePlanAlert({
     );
   }, [analyticsCommonProps]);
 
-  const handleClick = useCallback(() => {
+  const handleClick = () => {
     trackGetsentryAnalytics(
       'product_unavailable_upsell_alert_button.clicked',
       analyticsCommonProps
@@ -206,11 +205,11 @@ function UpdatePlanAlert({
     }
 
     am2UpsellModal.showModal();
-  }, [analyticsCommonProps, canSelfServe, isAncientPlan, am2UpsellModal]);
+  };
 
   return (
     <AlertWithCustomMargin
-      type="info"
+      variant="info"
       system
       trailingItems={
         isAncientPlan || !canSelfServe ? (
@@ -284,5 +283,6 @@ export const ProductUnavailableCTA = withSubscription(ProductUnavailableCTAConta
 });
 
 const AlertWithCustomMargin = styled(Alert)`
-  margin: -${space(3)} -${space(4)} ${space(2)} -${space(4)};
+  margin: -${p => p.theme.space['2xl']} -${p => p.theme.space['3xl']}
+    ${p => p.theme.space.xl} -${p => p.theme.space['3xl']};
 `;

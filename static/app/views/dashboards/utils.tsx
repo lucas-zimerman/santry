@@ -1,8 +1,8 @@
 import {connect} from 'echarts';
-import type {Location, Query} from 'history';
+import type {Location} from 'history';
 import cloneDeep from 'lodash/cloneDeep';
 import isEqual from 'lodash/isEqual';
-import pick from 'lodash/pick';
+import omit from 'lodash/omit';
 import trimStart from 'lodash/trimStart';
 import * as qs from 'query-string';
 
@@ -14,34 +14,29 @@ import {
   SIX_HOURS,
   TWENTY_FOUR_HOURS,
 } from 'sentry/components/charts/utils';
-import {normalizeDateTimeString} from 'sentry/components/organizations/pageFilters/parse';
-import {parseSearch, Token} from 'sentry/components/searchSyntax/parser';
+import {normalizeDateTimeString} from 'sentry/components/pageFilters/parse';
 import {t} from 'sentry/locale';
 import type {PageFilters} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import {defined} from 'sentry/utils';
 import {browserHistory} from 'sentry/utils/browserHistory';
 import {getUtcDateString} from 'sentry/utils/dates';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {DURATION_UNITS} from 'sentry/utils/discover/fieldRenderers';
 import {
+  ABYTE_UNITS,
   getAggregateAlias,
-  getAggregateArg,
-  getColumnsAndAggregates,
   isEquation,
   isMeasurement,
   RATE_UNIT_MULTIPLIERS,
   RateUnit,
+  SIZE_UNIT_MULTIPLIERS,
   stripEquationPrefix,
 } from 'sentry/utils/discover/fields';
-import {
-  DiscoverDatasets,
-  DisplayModes,
-  type SavedQueryDatasets,
-} from 'sentry/utils/discover/types';
+import {DisplayModes, type SavedQueryDatasets} from 'sentry/utils/discover/types';
 import {parsePeriodToHours} from 'sentry/utils/duration/parsePeriodToHours';
 import {getMeasurements} from 'sentry/utils/measurements/measurements';
-import {decodeList, decodeScalar} from 'sentry/utils/queryString';
+import {decodeList} from 'sentry/utils/queryString';
 import type {
   DashboardDetails,
   DashboardFilters,
@@ -55,11 +50,11 @@ import {
   WidgetType,
 } from 'sentry/views/dashboards/types';
 
-export type ValidationError = {
+type ValidationError = {
   [key: string]: string | string[] | ValidationError[] | ValidationError;
 };
 
-export type FlatValidationError = {
+type FlatValidationError = {
   [key: string]: string | FlatValidationError[] | FlatValidationError;
 };
 
@@ -115,6 +110,13 @@ export function getThresholdUnitSelectOptions(
     }));
   }
 
+  if (dataType === 'size') {
+    return Object.values(ABYTE_UNITS).map(unit => ({
+      label: unit,
+      value: unit,
+    }));
+  }
+
   return [];
 }
 
@@ -126,53 +128,11 @@ export function normalizeUnit(value: number, unit: string, dataType: string): nu
       : dataType === 'duration'
         ? // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
           DURATION_UNITS[unit]
-        : 1;
+        : dataType === 'size'
+          ? // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
+            SIZE_UNIT_MULTIPLIERS[unit]
+          : 1;
   return value * multiplier;
-}
-
-function coerceStringToArray(value?: string | string[] | null) {
-  return typeof value === 'string' ? [value] : value;
-}
-
-export function constructWidgetFromQuery(query?: Query): Widget | undefined {
-  if (query) {
-    const queryNames = coerceStringToArray(query.queryNames);
-    const queryConditions = coerceStringToArray(query.queryConditions);
-    const queryFields = coerceStringToArray(query.queryFields);
-    const widgetType = decodeScalar(query.widgetType);
-    const queries: WidgetQuery[] = [];
-    if (
-      queryConditions &&
-      queryNames &&
-      queryFields &&
-      typeof query.queryOrderby === 'string'
-    ) {
-      const {columns, aggregates} = getColumnsAndAggregates(queryFields);
-      queryConditions.forEach((condition, index) => {
-        queries.push({
-          name: queryNames[index]!,
-          conditions: condition,
-          fields: queryFields,
-          columns,
-          aggregates,
-          orderby: query.queryOrderby as string,
-        });
-      });
-    }
-    if (query.title && query.displayType && query.interval && queries.length > 0) {
-      const newWidget: Widget = {
-        ...(pick(query, ['title', 'displayType', 'interval']) as {
-          displayType: DisplayType;
-          interval: string;
-          title: string;
-        }),
-        widgetType: widgetType ? (widgetType as WidgetType) : WidgetType.DISCOVER,
-        queries,
-      };
-      return newWidget;
-    }
-  }
-  return undefined;
 }
 
 export function getWidgetInterval(
@@ -185,7 +145,9 @@ export function getWidgetInterval(
   const MAX_BIN_COUNT = 66;
 
   let interval =
-    widget.widgetType === WidgetType.SPANS || widget.widgetType === WidgetType.LOGS
+    widget.widgetType === WidgetType.SPANS ||
+    widget.widgetType === WidgetType.LOGS ||
+    widget.widgetType === WidgetType.TRACEMETRICS
       ? // For span based widgets, we want to permit non 1d bar charts.
         undefined
       : // Bars charts are daily totals to aligned with discover. It also makes them
@@ -215,9 +177,13 @@ export function getWidgetInterval(
   if (selectedRange / (desiredPeriod * 60) > MAX_BIN_COUNT) {
     const highInterval = getInterval(
       datetimeObj,
-      widget.widgetType === WidgetType.SPANS || widget.widgetType === WidgetType.LOGS
+      widget.widgetType === WidgetType.SPANS ||
+        widget.widgetType === WidgetType.LOGS ||
+        widget.widgetType === WidgetType.TRACEMETRICS
         ? 'spans'
-        : 'high'
+        : widget.widgetType === WidgetType.ISSUE
+          ? 'issues'
+          : 'high'
     );
     // Only return high fidelity interval if desired interval is higher fidelity
     if (desiredPeriod < parsePeriodToHours(highInterval)) {
@@ -229,7 +195,7 @@ export function getWidgetInterval(
 
 export function getFieldsFromEquations(fields: string[]): string[] {
   // Gather all fields and functions used in equations and prepend them to the provided fields
-  const termsSet: Set<string> = new Set();
+  const termsSet = new Set<string>();
   fields.filter(isEquation).forEach(field => {
     const parsed = parseArithmetic(stripEquationPrefix(field)).tc;
     parsed.fields.forEach(({term}) => termsSet.add(term as string));
@@ -243,8 +209,7 @@ export function getWidgetDiscoverUrl(
   dashboardFilters: DashboardFilters | undefined,
   selection: PageFilters,
   organization: Organization,
-  index = 0,
-  isMetricsData = false
+  index = 0
 ) {
   const eventView = eventViewFromWidget(widget.title, widget.queries[index]!, selection);
   const discoverLocation = eventView.getResultsViewUrlTarget(
@@ -306,13 +271,14 @@ export function getWidgetDiscoverUrl(
     dashboardFilters
   );
 
-  if (isMetricsData) {
-    discoverLocation.query.fromMetric = 'true';
-  }
+  // Pass empty string when projects is empty to preserve "My Projects" selection in URL
+  const projectParam =
+    selection.projects.length === 0 ? '' : discoverLocation.query.project;
 
   // Construct and return the discover url
   const discoverPath = `${discoverLocation.pathname}?${qs.stringify({
     ...discoverLocation.query,
+    project: projectParam,
   })}`;
   return discoverPath;
 }
@@ -332,7 +298,8 @@ export function getWidgetIssueUrl(
     query: applyDashboardFilters(widget.queries?.[0]?.conditions, dashboardFilters),
     sort: widget.queries?.[0]?.orderby,
     ...datetime,
-    project: selection.projects,
+    // Pass empty string when projects is empty to preserve "My Projects" selection in URL
+    project: selection.projects.length === 0 ? '' : selection.projects,
     environment: selection.environments,
   })}`;
   return issuesLocation;
@@ -352,7 +319,8 @@ export function getWidgetReleasesUrl(
   const releasesLocation = `/organizations/${organization.slug}/releases/?${qs.stringify({
     ...datetime,
     query: applyDashboardFilters('', dashboardFilters),
-    project: selection.projects,
+    // Pass empty string when projects is empty to preserve "My Projects" selection in URL
+    project: selection.projects.length === 0 ? '' : selection.projects,
     environment: selection.environments,
   })}`;
   return releasesLocation;
@@ -386,14 +354,6 @@ export function flattenErrors(
   return update;
 }
 
-export function getDashboardsMEPQueryParams(isMEPEnabled: boolean) {
-  return isMEPEnabled
-    ? {
-        dataset: DiscoverDatasets.METRICS_ENHANCED,
-      }
-    : {};
-}
-
 export function getNumEquations(possibleEquations: string[]) {
   return possibleEquations.filter(isEquation).length;
 }
@@ -401,53 +361,6 @@ export function getNumEquations(possibleEquations: string[]) {
 const DEFINED_MEASUREMENTS = new Set(Object.keys(getMeasurements()));
 export function isCustomMeasurement(field: string) {
   return !DEFINED_MEASUREMENTS.has(field) && isMeasurement(field);
-}
-
-export function isCustomMeasurementWidget(widget: Widget) {
-  return (
-    widget.widgetType === WidgetType.DISCOVER &&
-    widget.queries.some(({aggregates, columns, fields}) => {
-      const aggregateArgs = aggregates.reduce((acc: string[], aggregate) => {
-        // Should be ok to use getAggregateArg. getAggregateArg only returns the first arg
-        // but there aren't any custom measurement aggregates that use custom measurements
-        // outside of the first arg.
-        const aggregateArg = getAggregateArg(aggregate);
-        if (aggregateArg) {
-          acc.push(aggregateArg);
-        }
-        return acc;
-      }, []);
-      return [...aggregateArgs, ...columns, ...(fields ?? [])].some(field =>
-        isCustomMeasurement(field)
-      );
-    })
-  );
-}
-
-export function isWidgetUsingTransactionName(widget: Widget) {
-  return (
-    widget.widgetType === WidgetType.DISCOVER &&
-    widget.queries.some(({aggregates, columns, fields, conditions}) => {
-      const aggregateArgs = aggregates.reduce((acc: string[], aggregate) => {
-        const aggregateArg = getAggregateArg(aggregate);
-        if (aggregateArg) {
-          acc.push(aggregateArg);
-        }
-        return acc;
-      }, []);
-      const transactionSelected = [
-        ...aggregateArgs,
-        ...columns,
-        ...(fields ?? []),
-      ].includes('transaction');
-      const transactionUsedInFilter = parseSearch(conditions)?.some(
-        parsedCondition =>
-          parsedCondition.type === Token.FILTER &&
-          parsedCondition.key?.text === 'transaction'
-      );
-      return transactionSelected || transactionUsedInFilter;
-    })
-  );
 }
 
 export function hasSavedPageFilters(
@@ -458,7 +371,7 @@ export function hasSavedPageFilters(
 ) {
   return !(
     (dashboard.projects === undefined || dashboard.projects.length === 0) &&
-    dashboard.environment === undefined &&
+    (dashboard.environment === undefined || dashboard.environment.length === 0) &&
     dashboard.start === undefined &&
     dashboard.end === undefined &&
     dashboard.period === undefined
@@ -473,6 +386,7 @@ export function hasUnsavedFilterChanges(
   type Filters = {
     end?: string;
     environment?: Set<string>;
+    globalFilter?: Set<string>;
     period?: string;
     projects?: Set<number>;
     release?: Set<string>;
@@ -502,6 +416,13 @@ export function hasUnsavedFilterChanges(
     // params, otherwise the dashboard should be using its saved state
     savedFilters.release = new Set(initialDashboard.filters?.release);
     currentFilters.release = new Set(location.query?.release);
+  }
+
+  if (defined(location.query?.globalFilter)) {
+    savedFilters.globalFilter = new Set(
+      initialDashboard.filters?.globalFilter?.map(filter => JSON.stringify(filter))
+    );
+    currentFilters.globalFilter = new Set(decodeList(location.query?.globalFilter));
   }
 
   return !isEqual(savedFilters, currentFilters);
@@ -554,8 +475,7 @@ export function getCurrentPageFilters(
         : typeof project === 'string'
           ? [Number(project)]
           : project.map(Number),
-    environment:
-      typeof environment === 'string' ? [environment] : (environment ?? undefined),
+    environment: decodeList(environment),
     period: statsPeriod as string | undefined,
     start: defined(start) ? normalizeDateTimeString(start as string) : undefined,
     end: defined(end) ? normalizeDateTimeString(end as string) : undefined,
@@ -563,22 +483,53 @@ export function getCurrentPageFilters(
   };
 }
 
+/**
+ * Merges saved dashboard filters with any overrides from the URL.
+ * URL filters take precedence per-key, but saved filters fill in
+ * keys that aren't present in the URL (e.g. globalFilter when only
+ * release is in the URL).
+ */
+export function getMergedDashboardFilters(
+  savedFilters: DashboardFilters | undefined,
+  location: Location
+): DashboardFilters {
+  return {...savedFilters, ...getDashboardFiltersFromURL(location)};
+}
+
 export function getDashboardFiltersFromURL(location: Location): DashboardFilters | null {
   const dashboardFilters: DashboardFilters = {};
   Object.values(DashboardFilterKeys).forEach(key => {
     if (defined(location.query?.[key])) {
-      dashboardFilters[key] = decodeList(location.query?.[key]);
+      const queryFilters = decodeList(location.query?.[key]);
+
+      if (key === DashboardFilterKeys.GLOBAL_FILTER) {
+        // Global filters are stored as JSON strings
+        dashboardFilters[key] = queryFilters
+          .map(filter => {
+            try {
+              return JSON.parse(filter);
+            } catch (error) {
+              return null;
+            }
+          })
+          .filter(filter => filter !== null);
+      } else {
+        dashboardFilters[key] = queryFilters;
+      }
     }
   });
   return Object.keys(dashboardFilters).length > 0 ? dashboardFilters : null;
 }
 
 export function dashboardFiltersToString(
-  dashboardFilters: DashboardFilters | null | undefined
+  dashboardFilters: DashboardFilters | null | undefined,
+  widgetType?: WidgetType
 ): string {
   let dashboardFilterConditions = '';
-  if (dashboardFilters) {
-    for (const [key, activeFilters] of Object.entries(dashboardFilters)) {
+
+  const pinnedFilters = omit(dashboardFilters, DashboardFilterKeys.GLOBAL_FILTER);
+  if (pinnedFilters) {
+    for (const [key, activeFilters] of Object.entries(pinnedFilters)) {
       if (activeFilters.length === 1) {
         dashboardFilterConditions += `${key}:"${activeFilters[0]}" `;
       } else if (activeFilters.length > 1) {
@@ -588,6 +539,18 @@ export function dashboardFiltersToString(
       }
     }
   }
+
+  const globalFilters = dashboardFilters?.[DashboardFilterKeys.GLOBAL_FILTER];
+
+  // If widgetType is provided, concatenate global filters that apply
+  if (widgetType && globalFilters) {
+    dashboardFilterConditions +=
+      globalFilters
+        .filter(globalFilter => globalFilter.dataset === widgetType)
+        .map(globalFilter => globalFilter.value)
+        .join(' ') ?? '';
+  }
+
   return dashboardFilterConditions;
 }
 
@@ -634,9 +597,13 @@ export const performanceScoreTooltip = t('peformance_score is not supported in D
 
 export function applyDashboardFilters(
   baseQuery: string | undefined,
-  dashboardFilters: DashboardFilters | undefined
+  dashboardFilters: DashboardFilters | undefined,
+  widgetType?: WidgetType
 ): string | undefined {
-  const dashboardFilterConditions = dashboardFiltersToString(dashboardFilters);
+  const dashboardFilterConditions = dashboardFiltersToString(
+    dashboardFilters,
+    widgetType
+  );
   if (dashboardFilterConditions) {
     if (baseQuery) {
       return `(${baseQuery}) ${dashboardFilterConditions}`;
@@ -645,3 +612,55 @@ export function applyDashboardFilters(
   }
   return baseQuery;
 }
+
+/**
+ * Returns true if the display type uses time-series data (events-stats endpoint)
+ * and stores aggregates in yAxis state. Returns false for display types that
+ * use table-style data (events endpoint) and store everything in fields state.
+ */
+export const usesTimeSeriesData = (displayType?: DisplayType) => {
+  if (!displayType) {
+    return true;
+  }
+  return ![
+    DisplayType.BIG_NUMBER,
+    DisplayType.CATEGORICAL_BAR,
+    DisplayType.DETAILS,
+    DisplayType.SERVER_TREE,
+    DisplayType.TABLE,
+    DisplayType.WHEEL,
+    DisplayType.RAGE_AND_DEAD_CLICKS,
+    DisplayType.AGENTS_TRACES_TABLE,
+    DisplayType.TEXT,
+  ].includes(displayType);
+};
+
+export function doesDisplayTypeSupportThresholds(displayType?: DisplayType): boolean {
+  if (!displayType) {
+    return false;
+  }
+  return displayType === DisplayType.BIG_NUMBER || usesTimeSeriesData(displayType);
+}
+
+// Custom widgets that fetch their own data (and don't use genericWidgetQueries)
+// handle error state and loading state on their own
+export const widgetFetchesOwnData = (widgetType: DisplayType) => {
+  const widgetTypesThatFetchOwnData = [
+    DisplayType.SERVER_TREE,
+    DisplayType.RAGE_AND_DEAD_CLICKS,
+    DisplayType.AGENTS_TRACES_TABLE,
+    DisplayType.TEXT,
+  ];
+  return widgetTypesThatFetchOwnData.includes(widgetType);
+};
+
+// Custom widgets from the widget library that are not editable but still have menu options
+export const isWidgetEditable = (widgetType: DisplayType) => {
+  const nonEditableWidgetTypes = [
+    DisplayType.SERVER_TREE,
+    DisplayType.RAGE_AND_DEAD_CLICKS,
+    DisplayType.WHEEL,
+    DisplayType.AGENTS_TRACES_TABLE,
+  ];
+  return !nonEditableWidgetTypes.includes(widgetType);
+};

@@ -2,10 +2,12 @@ from django.urls import reverse
 from rest_framework import status
 
 from sentry import options
+from sentry.models.apitoken import ApiToken
 from sentry.models.orgauthtoken import OrgAuthToken
 from sentry.testutils.cases import APITestCase, PermissionTestCase
-from sentry.testutils.silo import control_silo_test, create_test_regions
-from sentry.types.region import get_region_by_name
+from sentry.testutils.helpers.impersonation import simulate_impersonation
+from sentry.testutils.silo import control_silo_test, create_test_cells
+from sentry.types.cell import get_cell_by_name
 from sentry.utils.security.orgauthtoken_token import parse_token
 
 
@@ -98,7 +100,7 @@ class OrganizationAuthTokensListTest(APITestCase):
 
     def test_no_auth(self) -> None:
         response = self.get_error_response(self.organization.slug)
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_other_org(self) -> None:
         other_org = self.create_organization()
@@ -107,7 +109,7 @@ class OrganizationAuthTokensListTest(APITestCase):
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
-@control_silo_test(regions=create_test_regions("us"))
+@control_silo_test(cells=create_test_cells("us"))
 class OrganizationAuthTokenCreateTest(APITestCase):
     endpoint = "sentry-api-0-org-auth-tokens"
     method = "POST"
@@ -142,7 +144,7 @@ class OrganizationAuthTokenCreateTest(APITestCase):
         token_payload = parse_token(token=token.get("token"))
         assert token_payload is not None
         assert token_payload.get("region_url", None)
-        assert token_payload.get("region_url") == get_region_by_name(name="us").address
+        assert token_payload.get("region_url") == get_cell_by_name(name="us").address
         assert token_payload.get("url") == options.get("system.url-prefix")
 
     def test_no_name(self) -> None:
@@ -177,7 +179,7 @@ class OrganizationAuthTokenCreateTest(APITestCase):
 
     def test_no_auth(self) -> None:
         response = self.get_error_response(self.organization.slug)
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_other_org(self) -> None:
         other_org = self.create_organization()
@@ -185,6 +187,17 @@ class OrganizationAuthTokenCreateTest(APITestCase):
 
         self.login_as(self.user)
         response = self.get_error_response(other_org.slug, **payload)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_deny_token_access(self) -> None:
+        personal_token = ApiToken.objects.create(user=self.user, scope_list=["org:read"])
+        payload = {"name": "test token"}
+
+        response = self.get_error_response(
+            self.organization.slug,
+            **payload,
+            extra_headers={"HTTP_AUTHORIZATION": f"Bearer {personal_token.token}"},
+        )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
@@ -213,3 +226,27 @@ class OrganizationAuthTokensPermissionTest(PermissionTestCase):
 
     def test_member_can_post(self) -> None:
         self.assert_member_can_access(self.path, method="POST", data=self.postData)
+
+
+@control_silo_test
+class OrganizationAuthTokensImpersonationTest(APITestCase):
+    endpoint = "sentry-api-0-org-auth-tokens"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.impersonator = self.create_user(is_superuser=True)
+
+    def test_impersonated_post_blocked(self) -> None:
+        self.login_as(self.user)
+        url = reverse("sentry-api-0-org-auth-tokens", args=[self.organization.slug])
+        with simulate_impersonation(self.impersonator):
+            response = self.client.post(url, data={"name": "test token"})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert not OrgAuthToken.objects.filter(organization_id=self.organization.id).exists()
+
+    def test_impersonated_get_allowed(self) -> None:
+        self.login_as(self.user)
+        url = reverse("sentry-api-0-org-auth-tokens", args=[self.organization.slug])
+        with simulate_impersonation(self.impersonator):
+            response = self.client.get(url)
+        assert response.status_code == status.HTTP_200_OK

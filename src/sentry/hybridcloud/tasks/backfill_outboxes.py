@@ -6,18 +6,27 @@ will produce new outboxes incrementally to replicate those models.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from django.apps import apps
+from django.conf import settings
 from django.db import router, transaction
 from django.db.models import Max, Min, Model
+from sentry_redis_tools.clients import RedisCluster, StrictRedis
 
 from sentry import options
 from sentry.hybridcloud.models.outbox import outbox_context
-from sentry.hybridcloud.outbox.base import ControlOutboxProducingModel, RegionOutboxProducingModel
+from sentry.hybridcloud.outbox.base import CellOutboxProducingModel, ControlOutboxProducingModel
 from sentry.silo.base import SiloMode
 from sentry.users.models.user import User
 from sentry.utils import json, metrics, redis
+
+logger = logging.getLogger(__name__)
+
+
+def _get_redis_client() -> RedisCluster[str] | StrictRedis[str]:
+    return redis.redis_clusters.get(settings.SENTRY_HYBRIDCLOUD_BACKFILL_OUTBOXES_REDIS_CLUSTER)
 
 
 @dataclass
@@ -44,29 +53,29 @@ def get_backfill_key(table_name: str) -> str:
 
 def get_processing_state(table_name: str) -> tuple[int, int]:
     result: tuple[int, int]
-    with redis.clusters.get("default").get_local_client_for_key("backfill_outboxes") as client:
-        key = get_backfill_key(table_name)
-        v = client.get(key)
-        if v is None:
-            result = (0, 1)
-            client.set(key, json.dumps(result))
-        else:
-            lower, version = json.loads(v)
-            if not (isinstance(lower, int) and isinstance(version, int)):
-                raise TypeError("Expected processing data to be a tuple of (int, int)")
-            result = lower, version
-        metrics.gauge(
-            "backfill_outboxes.low_bound",
-            result[0],
-            tags=dict(table_name=table_name, version=result[1]),
-            sample_rate=1.0,
-        )
-        return result
+    client = _get_redis_client()
+    key = get_backfill_key(table_name)
+    v = client.get(key)
+    if v is None:
+        result = (0, 1)
+        client.set(key, json.dumps(result))
+    else:
+        lower, version = json.loads(v)
+        if not (isinstance(lower, int) and isinstance(version, int)):
+            raise TypeError("Expected processing data to be a tuple of (int, int)")
+        result = lower, version
+    metrics.gauge(
+        "backfill_outboxes.low_bound",
+        result[0],
+        tags=dict(table_name=table_name, version=result[1]),
+        sample_rate=1.0,
+    )
+    return result
 
 
 def set_processing_state(table_name: str, value: int, version: int) -> None:
-    with redis.clusters.get("default").get_local_client_for_key("backfill_outboxes") as client:
-        client.set(get_backfill_key(table_name), json.dumps((value, version)))
+    client = _get_redis_client()
+    client.set(get_backfill_key(table_name), json.dumps((value, version)))
     metrics.gauge(
         "backfill_outboxes.low_bound",
         value,
@@ -75,7 +84,7 @@ def set_processing_state(table_name: str, value: int, version: int) -> None:
 
 
 def find_replication_version(
-    model: type[ControlOutboxProducingModel] | type[RegionOutboxProducingModel] | type[User],
+    model: type[ControlOutboxProducingModel] | type[CellOutboxProducingModel] | type[User],
     force_synchronous: bool = False,
 ) -> int:
     """
@@ -95,7 +104,7 @@ def find_replication_version(
 
 
 def _chunk_processing_batch(
-    model: type[ControlOutboxProducingModel] | type[RegionOutboxProducingModel] | type[User],
+    model: type[ControlOutboxProducingModel] | type[CellOutboxProducingModel] | type[User],
     *,
     batch_size: int,
     force_synchronous: bool = False,
@@ -122,7 +131,7 @@ def process_outbox_backfill_batch(
     model: type[Model], batch_size: int, force_synchronous: bool = False
 ) -> BackfillBatch | None:
     if (
-        not issubclass(model, RegionOutboxProducingModel)
+        not issubclass(model, CellOutboxProducingModel)
         and not issubclass(model, ControlOutboxProducingModel)
         and not issubclass(model, User)
     ):
@@ -132,11 +141,22 @@ def process_outbox_backfill_batch(
         model, batch_size=batch_size, force_synchronous=force_synchronous
     )
     if not processing_state:
+        logger.info("processing_state.missing", extra={"model": model.__name__})
         return None
+
+    logger.info(
+        "processing_state.current",
+        extra={
+            "model": model.__name__,
+            "batch_low": processing_state.low,
+            "batch_up": processing_state.up,
+            "version": processing_state.version,
+        },
+    )
 
     for inst in model.objects.filter(id__gte=processing_state.low, id__lte=processing_state.up):
         with outbox_context(transaction.atomic(router.db_for_write(model)), flush=False):
-            if isinstance(inst, RegionOutboxProducingModel):
+            if isinstance(inst, CellOutboxProducingModel):
                 inst.outbox_for_update().save()
             if isinstance(inst, ControlOutboxProducingModel) or isinstance(inst, User):
                 for outbox in inst.outboxes_for_update():

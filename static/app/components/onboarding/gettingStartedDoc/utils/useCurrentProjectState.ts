@@ -1,22 +1,22 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import partition from 'lodash/partition';
+import {parseAsString, useQueryState} from 'nuqs';
 
-import type {SidebarPanelKey} from 'sentry/components/sidebar/types';
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import type {OnboardingDrawerKey} from 'sentry/stores/onboardingDrawerStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
 import type {PlatformKey, Project} from 'sentry/types/project';
 import {getSelectedProjectList} from 'sentry/utils/project/useSelectedProjectsHaveField';
-import useUrlParams from 'sentry/utils/url/useUrlParams';
-import useProjects from 'sentry/utils/useProjects';
+import {useProjects} from 'sentry/utils/useProjects';
 
 type Props = {
   allPlatforms: readonly PlatformKey[];
-  currentPanel: '' | SidebarPanelKey;
+  currentPanel: '' | OnboardingDrawerKey;
   onboardingPlatforms: readonly PlatformKey[];
-  targetPanel: SidebarPanelKey;
+  targetPanel: OnboardingDrawerKey;
 };
 
-function useCurrentProjectState({
+export function useCurrentProjectState({
   currentPanel,
   targetPanel,
   onboardingPlatforms,
@@ -24,8 +24,7 @@ function useCurrentProjectState({
 }: Props) {
   const {projects, initiallyLoaded: projectsLoaded} = useProjects();
   const {selection, isReady} = useLegacyStore(PageFiltersStore);
-  const {getParamValue: projectIds} = useUrlParams('project');
-  const projectId = projectIds()?.split('&').at(0);
+  const [projectId] = useQueryState('project', parseAsString);
   const isActive = currentPanel === targetPanel;
 
   // Projects with onboarding instructions
@@ -138,5 +137,3 @@ function useCurrentProjectState({
     unsupportedProjects,
   };
 }
-
-export default useCurrentProjectState;

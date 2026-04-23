@@ -1,10 +1,13 @@
 import {Fragment} from 'react';
 
+import {Button} from '@sentry/scraps/button';
+import {Kbd} from '@sentry/scraps/hotkey';
+
 import {CopyToClipboardButton} from 'sentry/components/copyToClipboardButton';
-import {Button} from 'sentry/components/core/button';
 import {IconLink} from 'sentry/icons';
+import {t} from 'sentry/locale';
 import * as Storybook from 'sentry/stories';
-import useCopyToClipboard from 'sentry/utils/useCopyToClipboard';
+import {useCopyToClipboard} from 'sentry/utils/useCopyToClipboard';
 
 export default Storybook.story('CopyToClipboardButton', story => {
   story('Basic', () => (
@@ -12,23 +15,17 @@ export default Storybook.story('CopyToClipboardButton', story => {
       <p>
         By default the button will stick the{' '}
         <Storybook.JSXProperty name="text" value={String} /> value onto your clipboard; as
-        if you typed <kbd>CTRL+C</kbd> or <kbd>CMD+C</kbd>. It'll show toast messages, and
+        if you typed <Kbd>CTRL+C</Kbd> or <Kbd>CMD+C</Kbd>. It'll show toast messages, and
         includes <Storybook.JSXProperty name="onCopy" value={Function} /> &
         <Storybook.JSXProperty name="onError" value={Function} /> callbacks.
       </p>
 
-      <CopyToClipboardButton text="Hello World" />
+      <CopyToClipboardButton text="Hello World" aria-label={t('Copy to clipboard')} />
     </Fragment>
   ));
 
   story('useCopyToClipboard()', () => {
-    const {onClick, label} = useCopyToClipboard({
-      text: 'Hello World',
-      // eslint-disable-next-line no-console
-      onCopy: () => console.log('Copy complete'),
-      // eslint-disable-next-line no-console
-      onError: error => console.log('Something went wrong', error),
-    });
+    const {copy} = useCopyToClipboard();
 
     return (
       <Fragment>
@@ -37,7 +34,16 @@ export default Storybook.story('CopyToClipboardButton', story => {
           other component.
         </p>
         <p>Here's an example where I've chosen a different icon:</p>
-        <Button icon={<IconLink />} aria-label={label} onClick={onClick} />
+        <Button
+          icon={<IconLink />}
+          aria-label="Copy to clipboard"
+          onClick={() =>
+            copy('Hello World', {
+              successMessage: 'Copied to clipboard',
+              errorMessage: 'Failed to copy to clipboard',
+            })
+          }
+        />
       </Fragment>
     );
   });

@@ -7,19 +7,14 @@ from sentry.models.groupsnooze import GroupSnooze
 from sentry.signals import issue_unignored
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import issues_tasks
 
 
 @instrumented_task(
     name="sentry.tasks.clear_expired_snoozes",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=issues_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=issues_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 def clear_expired_snoozes() -> None:
     groupsnooze_list = list(
@@ -31,7 +26,9 @@ def clear_expired_snoozes() -> None:
     groups_with_snoozes = {gs[1]: {"id": gs[0], "until": gs[2]} for gs in groupsnooze_list}
 
     ignored_groups = list(
-        Group.objects.filter(id__in=groups_with_snoozes.keys(), status=GroupStatus.IGNORED)
+        Group.objects.filter(
+            id__in=groups_with_snoozes.keys(), status=GroupStatus.IGNORED
+        ).select_related("project")
     )
 
     GroupSnooze.objects.filter(id__in=group_snooze_ids).delete()

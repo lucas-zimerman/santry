@@ -1,34 +1,30 @@
 import styled from '@emotion/styled';
+import {parseAsString, useQueryStates} from 'nuqs';
 
-import {decodeScalar} from 'sentry/utils/queryString';
-import {useLocation} from 'sentry/utils/useLocation';
-import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import ReplaySearchBar from 'sentry/views/replays/list/replaySearchBar';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {ReplaySearchBar} from 'sentry/views/replays/list/replaySearchBar';
 
-export default function ReplaysSearch() {
+export function ReplaysSearch() {
   const {selection} = usePageFilters();
-  const {pathname, query} = useLocation();
   const organization = useOrganization();
 
-  const navigate = useNavigate();
+  const [{query}, setQueryParams] = useQueryStates({
+    query: parseAsString.withDefault(''),
+    cursor: parseAsString,
+  });
 
   return (
     <SearchContainer>
       <ReplaySearchBar
         organization={organization}
         pageFilters={selection}
-        defaultQuery=""
-        query={decodeScalar(query.query, '')}
+        initialQuery=""
+        query={query}
         onSearch={searchQuery => {
-          navigate({
-            pathname,
-            query: {
-              ...query,
-              cursor: undefined,
-              query: searchQuery.trim(),
-            },
+          setQueryParams({
+            query: searchQuery.trim() || null,
+            cursor: null,
           });
         }}
       />
@@ -38,7 +34,7 @@ export default function ReplaysSearch() {
 
 const SearchContainer = styled('div')`
   flex: 1;
-  min-width: 400px;
+  min-width: 267px;
   max-width: 100%;
   width: auto;
 

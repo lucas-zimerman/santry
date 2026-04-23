@@ -1,19 +1,24 @@
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from unittest.mock import ANY, patch
+from uuid import uuid4
 
 import pytest
+from django.test import override_settings
 
+from sentry.conf.types.sentry_config import SentryMode
+from sentry.constants import DataCategory
 from sentry.search.eap import constants
+from sentry.testutils.cases import OutcomesSnubaTest
+from sentry.testutils.helpers import parse_link_header
 from sentry.testutils.helpers.datetime import before_now
 from sentry.utils.cursors import Cursor
+from sentry.utils.outcomes import Outcome
+from sentry.utils.snuba_rpc import table_rpc
 from tests.snuba.api.endpoints.test_organization_events import OrganizationEventsEndpointTestBase
 
 
-class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
+class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase, OutcomesSnubaTest):
     dataset = "logs"
-
-    def do_request(self, query, features=None, **kwargs):
-        return super().do_request(query, features, **kwargs)
 
     def setUp(self) -> None:
         super().setUp()
@@ -33,7 +38,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.nine_mins_ago,
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "field": ["id", "log.body"],
@@ -49,11 +54,11 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
         assert len(data) == 2
         assert data == [
             {
-                "id": UUID(bytes=bytes(reversed(logs[0].item_id))).hex,
+                "id": logs[0].item_id.hex(),
                 "log.body": "foo",
             },
             {
-                "id": UUID(bytes=bytes(reversed(logs[1].item_id))).hex,
+                "id": logs[1].item_id.hex(),
                 "log.body": "bar",
             },
         ]
@@ -75,7 +80,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.ten_mins_ago + timedelta(microseconds=2),
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "field": ["log.body", "timestamp"],
@@ -116,7 +121,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.nine_mins_ago,
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "field": ["log.body"],
@@ -150,7 +155,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.nine_mins_ago,
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "field": ["log.body", "timestamp"],
@@ -177,7 +182,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.ten_mins_ago,
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "field": ["project"],
@@ -207,7 +212,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.ten_mins_ago,
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "field": ["message", "trace"],
@@ -240,7 +245,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
             {"body": "bar"},
             timestamp=three_days_ago,
         )
-        self.store_ourlogs([log1, log2])
+        self.store_eap_items([log1, log2])
 
         request = {
             "field": ["message"],
@@ -285,7 +290,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
             {"body": "foo"},
             timestamp=one_day_ago,
         )
-        self.store_ourlogs([log1])
+        self.store_eap_items([log1])
 
         request = {
             "field": ["message", "count()"],
@@ -311,7 +316,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
             attributes={"sentry.payload_size_bytes": 1234567},
             timestamp=one_day_ago,
         )
-        self.store_ourlogs([log1])
+        self.store_eap_items([log1])
 
         request = {
             "field": ["message", "payload_size"],
@@ -335,7 +340,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
             {"body": "test"},
             timestamp=self.ten_mins_ago,
         )
-        self.store_ourlogs([log])
+        self.store_eap_items([log])
 
         response = self.do_request(
             {
@@ -383,7 +388,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
                 timestamp=self.nine_mins_ago,
             ),
         ]
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
         response = self.do_request(
             {
                 "cursor": "",
@@ -412,7 +417,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
         assert len(data) == 2
         for result, source in zip(data, reversed(logs)):
             assert result == {
-                "sentry.item_id": UUID(bytes=bytes(reversed(source.item_id))).hex,
+                "sentry.item_id": source.item_id.hex(),
                 "project.id": self.project.id,
                 "trace": source.trace_id,
                 "severity_number": source.attributes["sentry.severity_number"].int_value,
@@ -463,7 +468,7 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
             ),
         ]
 
-        self.store_ourlogs(logs)
+        self.store_eap_items(logs)
 
         response = self.do_request(
             {
@@ -542,3 +547,431 @@ class OrganizationEventsOurLogsEndpointTest(OrganizationEventsEndpointTestBase):
         assert len(data) == 2
         assert data[0]["message.parameter.username"] == "bob"
         assert data[1]["message.parameter.username"] == "alice"
+
+    def test_high_accuracy_flex_time_filter_trace(self):
+        trace_id = "1" * 32
+        logs = [
+            self.create_ourlog(
+                {"body": "foo", "trace_id": trace_id},
+                timestamp=self.ten_mins_ago,
+            ),
+        ]
+        self.store_eap_items(logs)
+        response = self.do_request(
+            {
+                "field": ["id", "timestamp", "message"],
+                "query": f"trace:{trace_id}",
+                "orderby": "-timestamp",
+                "project": self.project.id,
+                "dataset": self.dataset,
+                "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+            },
+        )
+        assert response.status_code == 200, response.content
+
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "false"
+
+    def test_high_accuracy_flex_time_order_by_timestamp(self):
+        logs = [
+            self.create_ourlog(
+                {"body": "foo"},
+                timestamp=self.nine_mins_ago,
+                log_id=uuid4().hex,
+            ),
+            self.create_ourlog(
+                {"body": "bar"},
+                timestamp=self.ten_mins_ago,
+                log_id="1" + uuid4().hex[1:],
+            ),
+            self.create_ourlog(
+                {"body": "qux"},
+                timestamp=self.ten_mins_ago,
+                log_id="0" + uuid4().hex[1:],  # qux's id sorts after bar's id
+            ),
+        ]
+        self.store_eap_items(logs)
+        response = self.do_request(
+            {
+                "field": ["id", "timestamp", "message"],
+                "query": "",
+                "orderby": "-timestamp",
+                "project": self.project.id,
+                "dataset": self.dataset,
+                "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+            },
+        )
+        assert response.status_code == 200, response.content
+
+        assert [row["message"] for row in response.data["data"]] == ["foo", "bar", "qux"]
+
+    def test_high_accuracy_flex_time_empty_page_no_next(self):
+        response = self.do_request(
+            {
+                "field": ["timestamp", "message"],
+                "orderby": "-timestamp",
+                "project": self.project.id,
+                "dataset": self.dataset,
+                "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+            },
+        )
+
+        assert response.status_code == 200, response.content
+        assert response.data["data"] == []
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "false"
+
+    def test_high_accuracy_flex_time_partial_page_no_next(self):
+        logs = [
+            self.create_ourlog(
+                {"body": "log"},
+                timestamp=self.nine_mins_ago,
+            )
+        ]
+        self.store_eap_items(logs)
+
+        response = self.do_request(
+            {
+                "field": ["timestamp", "message"],
+                "orderby": "-timestamp",
+                "project": self.project.id,
+                "dataset": self.dataset,
+                "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+                "per_page": 10,
+            },
+        )
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == ["log"]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "false"
+
+    def test_high_accuracy_flex_time_full_page_no_next(self):
+        n = 5
+        logs = [
+            self.create_ourlog(
+                {"body": f"log {i + 1} of {n}"},
+                timestamp=self.nine_mins_ago - timedelta(minutes=i + 1),
+            )
+            for i in range(n)
+        ]
+        self.store_eap_items(logs)
+
+        response = self.do_request(
+            {
+                "field": ["timestamp", "message"],
+                "orderby": "-timestamp",
+                "project": self.project.id,
+                "dataset": self.dataset,
+                "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+                "per_page": 5,
+            },
+        )
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == [
+            f"log {i + 1} of {n}" for i in range(5)
+        ]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "false"
+
+    def test_high_accuracy_flex_time_full_page_with_next(self):
+        n = 8
+        logs = [
+            self.create_ourlog(
+                {"body": f"log {i + 1} of {n}"},
+                timestamp=self.nine_mins_ago - timedelta(minutes=i + 1),
+            )
+            for i in range(n)
+        ]
+        self.store_eap_items(logs)
+
+        request = {
+            "field": ["timestamp", "message"],
+            "orderby": "-timestamp",
+            "project": self.project.id,
+            "dataset": self.dataset,
+            "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+            "per_page": 5,
+        }
+
+        response = self.do_request(request)
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == [
+            f"log {i + 1} of {n}" for i in range(5)
+        ]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "true"
+
+        response = self.do_request(
+            {**request, "cursor": links["next"]["cursor"]},
+        )
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == [
+            f"log {i + 6} of {n}" for i in range(3)
+        ]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "false"
+
+    def test_high_accuracy_flex_time_partial_page_with_next(self):
+        hour_1 = before_now(hours=4).replace(minute=0, second=0, microsecond=0)
+        hour_2 = before_now(hours=3).replace(minute=0, second=0, microsecond=0)
+        hour_3 = before_now(hours=2).replace(minute=0, second=0, microsecond=0)
+        hour_4 = before_now(hours=1).replace(minute=0, second=0, microsecond=0)
+
+        logs = [
+            self.create_ourlog(
+                {"body": "log 1"},
+                timestamp=hour_4 - timedelta(minutes=30),
+            ),
+            self.create_ourlog(
+                {"body": "log 2"},
+                timestamp=hour_3 - timedelta(minutes=30),
+            ),
+        ]
+        self.store_eap_items(logs)
+        for hour in [hour_4, hour_3]:
+            self.store_outcomes(
+                {
+                    "org_id": self.organization.id,
+                    "timestamp": hour - timedelta(minutes=30),
+                    "project_id": self.project.id,
+                    "outcome": Outcome.ACCEPTED,
+                    "reason": "none",
+                    "category": DataCategory.LOG_ITEM,
+                    "quantity": 1,
+                },
+                1,
+            )
+
+        self.store_outcomes(
+            {
+                "org_id": self.organization.id,
+                "timestamp": hour_2 - timedelta(minutes=30),
+                "project_id": self.project.id,
+                "outcome": Outcome.ACCEPTED,
+                "reason": "none",
+                "category": DataCategory.LOG_ITEM,
+                "quantity": 300_000_000,
+            },
+            1,
+        )
+
+        request = {
+            "field": ["timestamp", "message"],
+            "orderby": "-timestamp",
+            "project": self.project.id,
+            "dataset": self.dataset,
+            "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+            "per_page": 5,
+            "start": hour_1.isoformat(),
+            "end": hour_4.isoformat(),
+        }
+
+        response = self.do_request(request)
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == ["log 1"]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "true"
+
+        response = self.do_request(
+            {**request, "cursor": links["next"]["cursor"]},
+        )
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == ["log 2"]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "true"
+
+    def test_high_accuracy_flex_time_empty_page_with_next(self):
+        hour_1 = before_now(hours=4).replace(minute=0, second=0, microsecond=0)
+        hour_2 = before_now(hours=3).replace(minute=0, second=0, microsecond=0)
+        hour_3 = before_now(hours=2).replace(minute=0, second=0, microsecond=0)
+        hour_4 = before_now(hours=1).replace(minute=0, second=0, microsecond=0)
+
+        logs = [
+            self.create_ourlog(
+                {"body": "log 2"},
+                timestamp=hour_3 - timedelta(minutes=30),
+            ),
+        ]
+        self.store_eap_items(logs)
+        self.store_outcomes(
+            {
+                "org_id": self.organization.id,
+                "timestamp": hour_3 - timedelta(minutes=30),
+                "project_id": self.project.id,
+                "outcome": Outcome.ACCEPTED,
+                "reason": "none",
+                "category": DataCategory.LOG_ITEM,
+                "quantity": 1,
+            },
+            1,
+        )
+
+        self.store_outcomes(
+            {
+                "org_id": self.organization.id,
+                "timestamp": hour_2 - timedelta(minutes=30),
+                "project_id": self.project.id,
+                "outcome": Outcome.ACCEPTED,
+                "reason": "none",
+                "category": DataCategory.LOG_ITEM,
+                "quantity": 300_000_000,
+            },
+            1,
+        )
+
+        request = {
+            "field": ["timestamp", "message"],
+            "orderby": "-timestamp",
+            "project": self.project.id,
+            "dataset": self.dataset,
+            "sampling": "HIGHEST_ACCURACY_FLEX_TIME",
+            "per_page": 5,
+            "start": hour_1.isoformat(),
+            "end": hour_4.isoformat(),
+        }
+
+        response = self.do_request(request)
+
+        assert response.status_code == 200, response.content
+        assert response.data["data"] == []
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "true"
+
+        response = self.do_request(
+            {**request, "cursor": links["next"]["cursor"]},
+        )
+
+        assert response.status_code == 200, response.content
+        assert [row["message"] for row in response.data["data"]] == ["log 2"]
+        assert response.data["meta"]["dataScanned"] == "full"
+        links = {
+            attrs["rel"]: {**attrs, "href": url}
+            for url, attrs in parse_link_header(response["link"]).items()
+        }
+        assert links["previous"]["results"] == "false"
+        assert links["next"]["results"] == "true"
+
+    def test_bytes_scanned(self):
+        self.store_eap_items([self.create_ourlog({"body": "log"}, timestamp=self.ten_mins_ago)])
+
+        request = {
+            "field": ["timestamp", "message"],
+            "orderby": "-timestamp",
+            "project": self.project.id,
+            "dataset": self.dataset,
+        }
+
+        response = self.do_request(request)
+        assert response.status_code == 200
+        assert response.data["meta"]["bytesScanned"] > 0
+
+    def test_count_message(self):
+        self.store_eap_items([self.create_ourlog({"body": "log"}, timestamp=self.ten_mins_ago)])
+        request = {
+            "field": ["count(message)"],
+            "project": self.project.id,
+            "dataset": self.dataset,
+            "statsPeriod": "1h",
+        }
+
+        response = self.do_request(request)
+        assert response.status_code == 200
+        assert response.data["data"] == [{"count(message)": 1}]
+
+    @override_settings(SENTRY_MODE=SentryMode.SAAS)
+    def test_no_project_sent_logs(self):
+        project1 = self.create_project()
+        project2 = self.create_project()
+
+        request = {
+            "field": ["timestamp", "message"],
+            "project": [project1.id, project2.id],
+            "dataset": self.dataset,
+            "sort": "-timestamp",
+            "statsPeriod": "1h",
+        }
+
+        response = self.do_request(request)
+        assert response.status_code == 200
+        assert response.data["data"] == []
+
+    @override_settings(SENTRY_MODE=SentryMode.SAAS)
+    @patch("sentry.utils.snuba_rpc.table_rpc", wraps=table_rpc)
+    def test_sent_logs_project_optimization(self, mock_table_rpc):
+        project1 = self.create_project()
+        project2 = self.create_project()
+
+        self.store_eap_items(
+            [self.create_ourlog({"body": "log"}, project=project1, timestamp=self.ten_mins_ago)]
+        )
+
+        request = {
+            "field": ["timestamp", "message"],
+            "project": [project1.id, project2.id],
+            "dataset": self.dataset,
+            "sort": "-timestamp",
+            "statsPeriod": "1h",
+        }
+
+        response = self.do_request(request)
+        assert response.status_code == 200
+        assert response.data["data"] == [
+            {
+                "timestamp": ANY,
+                "timestamp_precise": ANY,
+                "message": "log",
+            }
+        ]
+
+        mock_table_rpc.assert_called_once()
+        assert mock_table_rpc.call_args.args[0][0].meta.project_ids == [project1.id]

@@ -4,39 +4,35 @@ from typing import TYPE_CHECKING
 import sentry_sdk
 from django.conf import settings
 from django.db import router, transaction
+from taskbroker_client.retry import Retry
 
-from sentry import eventstore, eventstream, nodestore
+from sentry import eventstream, nodestore
 from sentry.models.project import Project
 from sentry.reprocessing2 import buffered_delete_old_primary_hash
+from sentry.search.eap.occurrences.query_utils import build_group_id_in_filter
+from sentry.services import eventstore
 from sentry.services.eventstore.models import Event
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task, retry
 from sentry.tasks.process_buffer import buffer_incr
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import issues_tasks
-from sentry.taskworker.retry import Retry
 from sentry.types.activity import ActivityType
 from sentry.utils import metrics
-from sentry.utils.query import CeleryBulkQueryState, celery_run_batch_query
+from sentry.utils.query import TaskBulkQueryState, task_run_batch_query
 
 
 @instrumented_task(
     name="sentry.tasks.reprocessing2.reprocess_group",
-    queue="events.reprocessing.process_event",
-    time_limit=120,
-    soft_time_limit=110,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=issues_tasks,
-        processing_deadline_duration=120,
-    ),
+    namespace=issues_tasks,
+    processing_deadline_duration=120,
+    silo_mode=SiloMode.CELL,
 )
 def reprocess_group(
     project_id: int,
     group_id: int,
     remaining_events: str = "delete",
     new_group_id: int | None = None,
-    query_state: CeleryBulkQueryState | None = None,
+    query_state: TaskBulkQueryState | None = None,
     start_time: float | None = None,
     max_events: int | None = None,
     acting_user_id: int | None = None,
@@ -70,7 +66,7 @@ def reprocess_group(
 
     assert new_group_id is not None
 
-    query_state, events = celery_run_batch_query(
+    query_state, events = task_run_batch_query(
         filter=eventstore.Filter(project_ids=[project_id], group_ids=[group_id]),
         batch_size=settings.SENTRY_REPROCESSING_PAGE_SIZE,
         state=query_state,
@@ -78,6 +74,7 @@ def reprocess_group(
         tenant_ids={
             "organization_id": Project.objects.get_from_cache(id=project_id).organization_id
         },
+        eap_conditions=build_group_id_in_filter([group_id]),
     )
 
     if not events:
@@ -142,17 +139,10 @@ def reprocess_group(
 
 @instrumented_task(
     name="sentry.tasks.reprocessing2.handle_remaining_events",
-    queue="events.reprocessing.process_event",
-    time_limit=60 * 5,
-    max_retries=5,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=issues_tasks,
-        processing_deadline_duration=60 * 5,
-        retry=Retry(
-            times=5,
-        ),
-    ),
+    namespace=issues_tasks,
+    processing_deadline_duration=60 * 5,
+    retry=Retry(times=5),
+    silo_mode=SiloMode.CELL,
 )
 @retry
 def handle_remaining_events(
@@ -234,13 +224,8 @@ def handle_remaining_events(
 
 @instrumented_task(
     name="sentry.tasks.reprocessing2.finish_reprocessing",
-    queue="events.reprocessing.process_event",
-    time_limit=(60 * 5) + 5,
-    soft_time_limit=60 * 5,
-    taskworker_config=TaskworkerConfig(
-        namespace=issues_tasks,
-        processing_deadline_duration=(60 * 5) + 5,
-    ),
+    namespace=issues_tasks,
+    processing_deadline_duration=(60 * 5) + 5,
 )
 def finish_reprocessing(project_id: int, group_id: int) -> None:
     from sentry.models.activity import Activity
@@ -248,7 +233,7 @@ def finish_reprocessing(project_id: int, group_id: int) -> None:
     from sentry.models.groupredirect import GroupRedirect
 
     with transaction.atomic(router.db_for_write(Group)):
-        group = Group.objects.get(id=group_id)
+        group = Group.objects.select_for_update().get(id=group_id)
 
         # While we migrated all associated models at the beginning of
         # reprocessing, there is still the "reprocessing" activity that we need
@@ -260,7 +245,16 @@ def finish_reprocessing(project_id: int, group_id: int) -> None:
         new_group_id = activity.group_id = activity.data["newGroupId"]
         activity.save()
 
-        new_group = Group.objects.get(id=new_group_id)
+        new_group = Group.objects.select_for_update().get(id=new_group_id)
+
+        # Remove the marker that indicates that the new group is currently being reprocessed to.
+        # Thus making it re-processable.
+        try:
+            del new_group.data["_reprocessing_old_group_id"]
+        except Exception as e:
+            from sentry.reprocessing2 import logger
+
+            logger.exception(str(e))
 
         # Any sort of success message will be shown at the *new* group ID's URL
         GroupRedirect.objects.create(
@@ -272,6 +266,7 @@ def finish_reprocessing(project_id: int, group_id: int) -> None:
         # All the associated models (groupassignee and eventattachments) should
         # have moved to a successor group that may be deleted independently.
         group.delete()
+        new_group.save()
 
     # Tombstone unwanted events that should be dropped after new group
     # is generated after reprocessing
@@ -283,6 +278,8 @@ def finish_reprocessing(project_id: int, group_id: int) -> None:
 
     eventstream.backend.exclude_groups(project_id, [group_id])
 
-    from sentry import similarity
+    # Don't do MinHash work if we use embeddings-based similarity.
+    if not group.project.get_option("sentry:similarity_backfill_completed"):
+        from sentry import similarity
 
-    similarity.delete(None, group)
+        similarity.delete(None, group)

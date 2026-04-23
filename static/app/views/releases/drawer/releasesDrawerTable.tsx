@@ -1,32 +1,36 @@
-import {Fragment, useCallback, useMemo} from 'react';
+import {useCallback, useMemo} from 'react';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 
-import {Link} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import Count from 'sentry/components/count';
-import GlobalSelectionLink from 'sentry/components/globalSelectionLink';
+import {Link} from '@sentry/scraps/link';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {Count} from 'sentry/components/count';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
 import ProjectBadge from 'sentry/components/idBadge/projectBadge';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
-import Pagination from 'sentry/components/pagination';
-import renderSortableHeaderCell from 'sentry/components/replays/renderSortableHeaderCell';
+import {
+  extractSelectionParameters,
+  normalizeDateTimeParams,
+} from 'sentry/components/pageFilters/parse';
+import {Pagination} from 'sentry/components/pagination';
+import {renderSortableHeaderCell} from 'sentry/components/replays/renderSortableHeaderCell';
 import type {
   GridColumnHeader,
   GridColumnOrder,
 } from 'sentry/components/tables/gridEditable';
-import GridEditable from 'sentry/components/tables/gridEditable';
-import useQueryBasedSorting from 'sentry/components/tables/gridEditable/useQueryBasedSorting';
-import TextOverflow from 'sentry/components/textOverflow';
+import {GridEditable} from 'sentry/components/tables/gridEditable';
+import {useQueryBasedSorting} from 'sentry/components/tables/gridEditable/useQueryBasedSorting';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {PageFilters} from 'sentry/types/core';
 import type {Release, ReleaseProject} from 'sentry/types/release';
+import {apiOptions, selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import type {EventsMetaType} from 'sentry/utils/discover/eventView';
 import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
-import {useApiQuery} from 'sentry/utils/queryClient';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {formatVersion} from 'sentry/utils/versions/formatVersion';
 import {
   cleanReleaseCursors,
@@ -73,24 +77,23 @@ export function ReleasesDrawerTable({
   const location = useLocation();
   const navigate = useNavigate();
   const organization = useOrganization();
-  const {data, isLoading, isError, getResponseHeader} = useApiQuery<Release[]>(
-    [
-      `/organizations/${organization.slug}/releases/`,
-      {
-        query: {
-          project: projects,
-          environment: environments,
-          cursor: location.query[ReleasesDrawerFields.LIST_CURSOR],
-          ...normalizeDateTimeParams(datetime),
-          per_page: 15,
-        },
+  const {data, isLoading, isError} = useQuery({
+    ...apiOptions.as<Release[]>()('/organizations/$organizationIdOrSlug/releases/', {
+      path: {organizationIdOrSlug: organization.slug},
+      query: {
+        project: projects,
+        environment: environments,
+        cursor: location.query[ReleasesDrawerFields.LIST_CURSOR],
+        ...normalizeDateTimeParams(datetime),
+        per_page: 15,
       },
-    ],
-    {staleTime: 0}
-  );
-  const pageLinks = getResponseHeader?.('Link');
+      staleTime: 0,
+    }),
+    select: selectJsonWithHeaders,
+  });
+  const pageLinks = data?.headers.Link;
 
-  const releaseData = data?.map(d => ({
+  const releaseData = data?.json?.map(d => ({
     project: d.projects[0]!,
     release: d.version,
     date: d.dateCreated,
@@ -155,15 +158,25 @@ export function ReleasesDrawerTable({
         const value = dataRow[column.key];
         return value > 0 ? (
           <Tooltip title={t('Open in Issues')} position="auto-start">
-            <GlobalSelectionLink
-              to={getReleaseNewIssuesUrl(
-                organization.slug,
-                dataRow.project_id,
-                dataRow.release
-              )}
+            <Link
+              to={{
+                ...getReleaseNewIssuesUrl(
+                  organization.slug,
+                  dataRow.project_id,
+                  dataRow.release
+                ),
+                query: {
+                  ...extractSelectionParameters(location.query),
+                  ...getReleaseNewIssuesUrl(
+                    organization.slug,
+                    dataRow.project_id,
+                    dataRow.release
+                  ).query,
+                },
+              }}
             >
               <Count value={value} />
-            </GlobalSelectionLink>
+            </Link>
           </Tooltip>
         ) : (
           <Count value={value} />
@@ -190,14 +203,13 @@ export function ReleasesDrawerTable({
   );
 
   const tableEmptyMessage = (
-    <MessageContainer>
-      <Title>{t('No releases')}</Title>
-      <Subtitle>{t('There are no releases within this timeframe')}</Subtitle>
-    </MessageContainer>
+    <EmptyMessage title={t('No releases')}>
+      {t('There are no releases within this timeframe')}
+    </EmptyMessage>
   );
 
   return (
-    <Fragment>
+    <div>
       <GridEditable
         error={isError}
         isLoading={isLoading}
@@ -221,26 +233,9 @@ export function ReleasesDrawerTable({
           });
         }}
       />
-    </Fragment>
+    </div>
   );
 }
-
-const Subtitle = styled('div')`
-  font-size: ${p => p.theme.fontSize.md};
-`;
-
-const Title = styled('div')`
-  font-size: 24px;
-`;
-
-const MessageContainer = styled('div')`
-  display: grid;
-  grid-auto-flow: row;
-  gap: ${space(1)};
-  justify-items: center;
-  text-align: center;
-  padding: ${space(4)};
-`;
 
 const CellWrapper = styled('div')`
   & div {
@@ -254,5 +249,5 @@ const PaginationNoMargin = styled(Pagination)`
 const ReleaseLink = styled(Link)`
   display: flex;
   align-items: center;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
 `;

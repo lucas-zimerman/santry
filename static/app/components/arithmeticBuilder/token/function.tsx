@@ -1,11 +1,14 @@
 import type {ChangeEvent, FocusEvent, RefObject} from 'react';
-import {Fragment, useCallback, useMemo, useRef, useState} from 'react';
+import {useCallback, useMemo, useRef, useState} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import {type AriaGridListOptions} from '@react-aria/gridlist';
 import {Item, Section} from '@react-stately/collections';
 import {useListState, type ListState} from '@react-stately/list';
 import type {CollectionChildren, KeyboardEvent, Node} from '@react-types/shared';
+
+import type {SelectOptionWithKey} from '@sentry/scraps/compactSelect';
+import {Flex} from '@sentry/scraps/layout';
 
 import {useArithmeticBuilder} from 'sentry/components/arithmeticBuilder/context';
 import type {
@@ -14,19 +17,16 @@ import type {
   TokenFunction,
 } from 'sentry/components/arithmeticBuilder/token';
 import {TokenKind} from 'sentry/components/arithmeticBuilder/token';
+import {DeleteButton} from 'sentry/components/arithmeticBuilder/token/deleteButton';
 import {nextTokenKeyOfKind} from 'sentry/components/arithmeticBuilder/tokenizer';
 import type {FunctionArgument} from 'sentry/components/arithmeticBuilder/types';
-import type {SelectOptionWithKey} from 'sentry/components/core/compactSelect/types';
-import InteractionStateLayer from 'sentry/components/core/interactionStateLayer';
 import {itemIsSection} from 'sentry/components/searchQueryBuilder/tokens/utils';
 import {useGridList} from 'sentry/components/tokenizedInput/grid/useGridList';
 import {useGridListItem} from 'sentry/components/tokenizedInput/grid/useGridListItem';
 import {focusTarget} from 'sentry/components/tokenizedInput/grid/utils';
 import {ComboBox} from 'sentry/components/tokenizedInput/token/comboBox';
 import {InputBox} from 'sentry/components/tokenizedInput/token/inputBox';
-import {IconClose} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
 import {FieldKind, FieldValueType, prettifyTagKey} from 'sentry/utils/fields';
 
@@ -62,14 +62,12 @@ export function ArithmeticTokenFunction({
       tabIndex={isFocused ? 0 : -1}
       aria-label={`${token.function}(${attrText ?? ''})`}
       aria-invalid={false}
-      state={'valid'}
+      state="valid"
     >
       <FunctionGridCell {...gridCellProps}>{token.function}</FunctionGridCell>
-      {'('}
       <ArgumentsGrid rowRef={ref} item={item} state={state} token={token} />
-      {')'}
       <BaseGridCell {...gridCellProps}>
-        <DeleteFunction token={token} />
+        <DeleteButton token={token} label={t('Remove function %s', token.text)} />
       </BaseGridCell>
     </FunctionWrapper>
   );
@@ -104,31 +102,30 @@ function ArgumentsGrid({
     );
   };
 
+  if (!args.length) {
+    return '()';
+  }
+
   return (
-    <Fragment>
-      {args.length ? (
-        <ArgumentsGridList
-          aria-label={t('Enter arguments')}
-          items={functionToken.attributes}
-          arguments={args}
-          rowRef={rowRef}
-          item={functionItem}
-          state={functionListState}
-          token={functionToken}
-          onArgumentsChange={(index: number, argument: string) =>
-            updateArgumentAtIndex(index, argument)
-          }
-        >
-          {item => <Item key={item.key}>{item.key}</Item>}
-        </ArgumentsGridList>
-      ) : null}
-    </Fragment>
+    <ArgumentsGridList
+      aria-label={t('Enter arguments')}
+      items={functionToken.attributes}
+      arguments={args}
+      rowRef={rowRef}
+      item={functionItem}
+      state={functionListState}
+      token={functionToken}
+      onArgumentsChange={(index: number, argument: string) =>
+        updateArgumentAtIndex(index, argument)
+      }
+    >
+      {item => <Item key={item.key}>{item.key}</Item>}
+    </ArgumentsGridList>
   );
 }
 
 interface GridListProps
-  extends AriaGridListOptions<TokenAttribute>,
-    ArithmeticTokenFunctionProps {
+  extends AriaGridListOptions<TokenAttribute>, ArithmeticTokenFunctionProps {
   arguments: Argument[];
   children: CollectionChildren<TokenAttribute>;
   onArgumentsChange: (index: number, argument: string) => void;
@@ -168,16 +165,27 @@ function ArgumentsGridList({
   });
 
   return (
-    <BaseGridCell {...gridProps} ref={ref}>
+    <Flex
+      justify="start"
+      wrap="wrap"
+      flexGrow={0}
+      flexShrink={1}
+      height="100%"
+      position="relative"
+      {...gridProps}
+      ref={ref}
+    >
       {[...state.collection].map((item, index) => {
         const attribute = item.value;
 
         if (!defined(attribute)) {
           return null;
         }
+
         const argument = {label: attribute.attribute, value: attribute.text};
         return (
           <BaseGridCell key={`${attribute.key}-${attribute.attribute}`}>
+            {index === 0 ? '(' : null}
             <InternalInput
               functionItem={functionItem}
               functionListState={functionListState}
@@ -192,10 +200,11 @@ function ArgumentsGridList({
               onArgumentsChange={onArgumentsChange}
             />
             {index < functionToken.attributes.length - 1 && ','}
+            {index === state.collection.size - 1 ? ')' : null}
           </BaseGridCell>
         );
       })}
-    </BaseGridCell>
+    </Flex>
   );
 }
 
@@ -278,7 +287,7 @@ function InternalInput({
   );
 
   const attributesFilter = useMemo(() => {
-    if (parameterDefinition && parameterDefinition.kind === 'column') {
+    if (parameterDefinition?.kind === 'column') {
       const columnTypes = parameterDefinition.columnTypes;
       return typeof columnTypes === 'function'
         ? columnTypes
@@ -387,11 +396,7 @@ function InternalInput({
   const onInputCommit = useCallback(() => {
     let value = inputValue.trim() || argument.label;
 
-    if (
-      defined(getSuggestedKey) &&
-      parameterDefinition &&
-      parameterDefinition.kind === 'column'
-    ) {
+    if (defined(getSuggestedKey) && parameterDefinition?.kind === 'column') {
       value = getSuggestedKey(value) ?? value;
     }
 
@@ -582,7 +587,7 @@ function InternalInput({
     (!defined(parameterDefinition.options) || !parameterDefinition.options.length)
   ) {
     return (
-      <BaseGridCell {...rowProps} {...gridCellProps} tabIndex={-1} ref={gridCellRef}>
+      <ArgumentGridCell {...rowProps} {...gridCellProps} tabIndex={-1} ref={gridCellRef}>
         <InputBox
           tabIndex={-1}
           ref={inputRef}
@@ -598,12 +603,12 @@ function InternalInput({
           onKeyDownCapture={onKeyDownCapture}
         />
         {argumentIndex < functionToken.attributes.length - 1 && ','}
-      </BaseGridCell>
+      </ArgumentGridCell>
     );
   }
 
   return (
-    <BaseGridCell
+    <ArgumentGridCell
       {...rowProps}
       {...gridCellProps}
       tabIndex={isFocused ? 0 : -1}
@@ -661,29 +666,7 @@ function InternalInput({
           )
         }
       </ComboBox>
-    </BaseGridCell>
-  );
-}
-
-interface DeleteFunctionProps {
-  token: TokenFunction;
-}
-
-function DeleteFunction({token}: DeleteFunctionProps) {
-  const {dispatch} = useArithmeticBuilder();
-
-  const onClick = useCallback(() => {
-    dispatch({
-      type: 'DELETE_TOKEN',
-      token,
-    });
-  }, [dispatch, token]);
-
-  return (
-    <DeleteButton aria-label={t('Remove function %s', token.text)} onClick={onClick}>
-      <InteractionStateLayer />
-      <IconClose legacySize="8px" />
-    </DeleteButton>
+    </ArgumentGridCell>
   );
 }
 
@@ -714,34 +697,50 @@ function useAttributeItems({
 
 const FunctionWrapper = styled('div')<{state: 'invalid' | 'warning' | 'valid'}>`
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   position: relative;
-  border: 1px solid ${p => p.theme.innerBorder};
-  border-radius: ${p => p.theme.borderRadius};
-  height: 24px;
+  border: 1px solid ${p => p.theme.tokens.border.secondary};
+  border-radius: ${p => p.theme.radius.md};
+  height: fit-content;
   /* Ensures that filters do not grow outside of the container */
   min-width: 0;
+  max-width: 100%;
 
   :focus {
-    background-color: ${p => p.theme.gray100};
+    background-color: ${p => p.theme.colors.gray100};
     outline: none;
   }
 
   ${p =>
     p.state === 'invalid'
       ? css`
-          border-color: ${p.theme.red200};
-          background-color: ${p.theme.red100};
+          border-color: ${p.theme.colors.red200};
+          background-color: ${p.theme.colors.red100};
         `
       : p.state === 'warning'
         ? css`
-            border-color: ${p.theme.gray300};
-            background-color: ${p.theme.gray100};
+            border-color: ${p.theme.colors.gray400};
+            background-color: ${p.theme.colors.gray100};
           `
         : ''}
 
   &[aria-selected='true'] {
-    background-color: ${p => p.theme.gray100};
+    background-color: ${p => p.theme.colors.gray100};
+  }
+`;
+
+const ArgumentGridCell = styled('div')`
+  display: flex;
+  align-items: center;
+  position: relative;
+  height: 100%;
+  flex: 0 1 auto;
+  max-width: fit-content;
+
+  > div input {
+    max-width: 130px !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
   }
 `;
 
@@ -753,21 +752,6 @@ const BaseGridCell = styled('div')`
 `;
 
 const FunctionGridCell = styled(BaseGridCell)`
-  color: ${p => p.theme.green400};
-  padding-left: ${space(0.5)};
-`;
-
-const DeleteButton = styled('button')`
-  background: none;
-  border: none;
-  color: ${p => p.theme.subText};
-  outline: none;
-  user-select: none;
-  padding-right: ${space(0.5)};
-
-  :focus {
-    background-color: ${p => p.theme.translucentGray100};
-    border-left: 1px solid ${p => p.theme.innerBorder};
-    outline: none;
-  }
+  color: ${p => p.theme.colors.green500};
+  padding-left: ${p => p.theme.space.xs};
 `;

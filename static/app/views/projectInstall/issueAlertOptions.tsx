@@ -1,17 +1,19 @@
 import styled from '@emotion/styled';
 
-import {Input} from 'sentry/components/core/input';
-import {Select} from 'sentry/components/core/select';
-import RadioGroup from 'sentry/components/forms/controls/radioGroup';
+import {Input} from '@sentry/scraps/input';
+import {Flex} from '@sentry/scraps/layout';
+import {Select} from '@sentry/scraps/select';
+
+import {RadioGroup} from 'sentry/components/forms/controls/radioGroup';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {IssueAlertRule} from 'sentry/types/alerts';
 import {IssueAlertActionType, IssueAlertConditionType} from 'sentry/types/alerts';
-import IssueAlertNotificationOptions, {
+import {
+  IssueAlertNotificationOptions,
   type IssueAlertNotificationProps,
 } from 'sentry/views/projectInstall/issueAlertNotificationOptions';
 
-enum MetricValues {
+export enum MetricValues {
   ERRORS = 0,
   USERS = 1,
 }
@@ -45,12 +47,12 @@ function metricValueToConditionType(metricValue: MetricValues): IssueAlertCondit
   }
 }
 
-const METRIC_CHOICES = [
+export const METRIC_CHOICES = [
   {value: MetricValues.ERRORS, label: t('occurrences of')},
   {value: MetricValues.USERS, label: t('users affected by')},
 ];
 
-const INTERVAL_CHOICES = [
+export const INTERVAL_CHOICES = [
   {value: '1m', label: t('one minute')},
   {value: '5m', label: t('5 minutes')},
   {value: '15m', label: t('15 minutes')},
@@ -60,7 +62,7 @@ const INTERVAL_CHOICES = [
   {value: '30d', label: t('30 days')},
 ];
 
-const DEFAULT_ISSUE_ALERT_OPTIONS_VALUES = {
+export const DEFAULT_ISSUE_ALERT_OPTIONS_VALUES = {
   alertSetting: RuleAction.DEFAULT_ALERT,
   interval: '1m',
   metric: MetricValues.ERRORS,
@@ -124,7 +126,7 @@ export interface IssueAlertOptionsProps extends Partial<AlertRuleOptions> {
   notificationProps?: IssueAlertNotificationProps;
 }
 
-export default function IssueAlertOptions({
+export function IssueAlertOptions({
   alertSetting = DEFAULT_ISSUE_ALERT_OPTIONS_VALUES.alertSetting,
   interval = DEFAULT_ISSUE_ALERT_OPTIONS_VALUES.interval,
   metric = DEFAULT_ISSUE_ALERT_OPTIONS_VALUES.metric,
@@ -185,7 +187,16 @@ export default function IssueAlertOptions({
       <RadioGroup
         choices={issueAlertOptionsChoices.map(([choiceValue, node]) => [
           choiceValue.toString(),
-          <RadioItemWrapper key={choiceValue}>{node}</RadioItemWrapper>,
+          <Flex
+            justify="start"
+            align="center"
+            wrap="wrap"
+            gap="md"
+            minHeight="35px"
+            key={choiceValue}
+          >
+            {node}
+          </Flex>,
         ])}
         label={t('Options for creating an alert')}
         onChange={val => {
@@ -202,19 +213,9 @@ export default function IssueAlertOptions({
 }
 
 const Content = styled('div')`
-  padding-top: ${space(2)};
-  padding-bottom: ${space(4)};
+  padding-top: ${p => p.theme.space.xl};
+  padding-bottom: ${p => p.theme.space['3xl']};
   display: flex;
   flex-direction: column;
-  gap: ${space(4)};
-`;
-
-const RadioItemWrapper = styled('div')`
-  min-height: 35px;
-  display: flex;
-  flex-direction: row;
-  gap: ${space(1)};
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  align-items: center;
+  gap: ${p => p.theme.space['3xl']};
 `;

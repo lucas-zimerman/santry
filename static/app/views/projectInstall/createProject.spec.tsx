@@ -4,18 +4,21 @@ import {TeamFixture} from 'sentry-fixture/team';
 
 import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
+  act,
   render,
   renderGlobalModal,
   screen,
   userEvent,
   waitFor,
 } from 'sentry-test/reactTestingLibrary';
+import {selectEvent} from 'sentry-test/selectEvent';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import OrganizationStore from 'sentry/stores/organizationStore';
-import TeamStore from 'sentry/stores/teamStore';
+import {OrganizationStore} from 'sentry/stores/organizationStore';
+import {TeamStore} from 'sentry/stores/teamStore';
 import type {Organization} from 'sentry/types/organization';
 import {CreateProject} from 'sentry/views/projectInstall/createProject';
+import * as useValidateChannelModule from 'sentry/views/projectInstall/useValidateChannel';
 
 jest.mock('sentry/actionCreators/indicator');
 
@@ -42,12 +45,13 @@ function renderFrameworkModalMockRequests({
   });
 
   MockApiClient.addMockResponse({
-    url: `/organizations/${organization.slug}/integrations/?integrationType=messaging`,
+    url: `/organizations/${organization.slug}/integrations/`,
     body: [
       OrganizationIntegrationsFixture({
         name: "Moo Deng's Workspace",
       }),
     ],
+    match: [MockApiClient.matchQuery({integrationType: 'messaging'})],
   });
 
   const projectCreationMockRequest = MockApiClient.addMockResponse({
@@ -77,17 +81,25 @@ describe('CreateProject', () => {
     access: ['team:admin', 'team:write', 'team:read'],
   });
 
+  const integration = OrganizationIntegrationsFixture({
+    name: "Moo Deng's Workspace",
+  });
+
   beforeEach(() => {
     TeamStore.reset();
     TeamStore.loadUserTeams([teamNoAccess]);
 
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/integrations/?integrationType=messaging`,
-      body: [
-        OrganizationIntegrationsFixture({
-          name: "Moo Deng's Workspace",
-        }),
-      ],
+      url: '/organizations/org-slug/integrations/',
+      body: [integration],
+      match: [MockApiClient.matchQuery({integrationType: 'messaging'})],
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/org-slug/integrations/${integration.id}/channels/`,
+      body: {
+        results: [],
+      },
     });
   });
 
@@ -167,17 +179,220 @@ describe('CreateProject', () => {
     });
 
     await userEvent.click(screen.getByTestId('platform-apple-ios'));
-    expect(screen.getByPlaceholderText('project-name')).toHaveValue('apple-ios');
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('apple-ios');
 
     await userEvent.click(screen.getByTestId('platform-ruby-rails'));
-    expect(screen.getByPlaceholderText('project-name')).toHaveValue('ruby-rails');
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('ruby-rails');
 
-    // but not replace it when project name is something else:
-    await userEvent.clear(screen.getByPlaceholderText('project-name'));
-    await userEvent.type(screen.getByPlaceholderText('project-name'), 'another');
+    // but not replace it when project slug is something else:
+    await userEvent.clear(screen.getByPlaceholderText('project-slug'));
+    await userEvent.type(screen.getByPlaceholderText('project-slug'), 'another');
 
     await userEvent.click(screen.getByTestId('platform-apple-ios'));
-    expect(screen.getByPlaceholderText('project-name')).toHaveValue('another');
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('another');
+  });
+
+  it('should not overwrite a user-entered project name when the name happens to match the current platform key', async () => {
+    // Regression test: previously, the check `projectName !== platform.key` would incorrectly
+    // treat the name as auto-generated if it matched the current platform slug, causing a
+    // platform switch to overwrite a name the user explicitly typed.
+    const {organization} = initializeOrg({
+      organization: {
+        access: ['project:read'],
+        features: ['team-roles'],
+        allowMemberProjectCreation: true,
+      },
+    });
+
+    render(<CreateProject />, {organization});
+
+    // User explicitly types a name that happens to match a platform id
+    await userEvent.type(screen.getByPlaceholderText('project-slug'), 'apple-ios');
+
+    // User then selects a different platform
+    await userEvent.click(screen.getByTestId('platform-ruby-rails'));
+
+    // The name they typed should be preserved, not replaced with 'ruby-rails'
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('apple-ios');
+  });
+
+  it('should preserve user-entered project slug when filter bar auto-selects a platform', async () => {
+    // Regression test: PlatformPicker's debounceSearch captured setPlatform from the
+    // initial render. After the user typed a slug, handlePlatformChange was recreated with
+    // the new projectName — but debounceSearch still held the stale version with
+    // projectName='', so auto-selection via the filter bar would wipe the user's slug.
+    const {organization} = initializeOrg({
+      organization: {
+        access: ['project:read'],
+        features: ['team-roles'],
+        allowMemberProjectCreation: true,
+      },
+    });
+
+    jest.useFakeTimers();
+    render(<CreateProject />, {organization});
+
+    await userEvent.type(screen.getByPlaceholderText('project-slug'), 'my-custom-slug', {
+      delay: null,
+    });
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('my-custom-slug');
+
+    // Type a platform name that exactly matches "Android" (triggers debounce auto-selection)
+    await userEvent.type(screen.getByPlaceholderText('Filter Platforms'), 'android', {
+      delay: null,
+    });
+
+    // Run all pending timers and flush React state updates
+    act(() => {
+      jest.runAllTimers();
+    });
+
+    jest.useRealTimers();
+
+    // The user's slug must be preserved, not replaced by the auto-selected platform id
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('my-custom-slug');
+  });
+
+  it('should allow platform to fill the project name again after the user clears it', async () => {
+    const {organization} = initializeOrg({
+      organization: {
+        access: ['project:read'],
+        features: ['team-roles'],
+        allowMemberProjectCreation: true,
+      },
+    });
+
+    render(<CreateProject />, {organization});
+
+    // User types a name
+    await userEvent.type(screen.getByPlaceholderText('project-slug'), 'my-project');
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('my-project');
+
+    // User clears the field (signals they want the platform to drive the name again)
+    await userEvent.clear(screen.getByPlaceholderText('project-slug'));
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('');
+
+    // Now selecting a platform should fill the name
+    await userEvent.click(screen.getByTestId('platform-apple-ios'));
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('apple-ios');
+  });
+
+  it('should preserve user-entered project slug when returning via auto-fill after delayed route replace', async () => {
+    // Regression test: when the user clicks "Back to Platform Selection", the browser
+    // POP navigation fires first (without query params), mounting the component with
+    // autoFill=false. Then router.replace adds ?referrer=getting-started&project=<id>,
+    // transitioning autoFill to true. useRef only initializes once, so without the
+    // useEffect sync, hasUserModifiedProjectName stays false and platform changes
+    // overwrite the user's custom slug.
+    const {organization} = initializeOrg({
+      organization: {
+        access: ['project:read'],
+        features: ['team-roles'],
+        allowMemberProjectCreation: true,
+      },
+    });
+
+    TeamStore.loadUserTeams([teamWithAccess]);
+
+    // Simulate a previously created project stored in localStorage
+    window.localStorage.setItem(
+      'created-project-context',
+      JSON.stringify({
+        id: '12345',
+        name: 'my-custom-name',
+        team: teamWithAccess.slug,
+        platform: {
+          key: 'javascript-angular',
+          name: 'Angular',
+          type: 'framework',
+          language: 'javascript',
+          category: 'popular',
+        },
+        wasNameManuallyModified: true,
+      })
+    );
+
+    // Step 1: Mount WITHOUT query params (simulates the browser POP navigation)
+    const {router} = render(<CreateProject />, {
+      organization,
+      initialRouterConfig: {
+        location: {
+          pathname: '/projects/new/',
+        },
+      },
+    });
+
+    // Step 2: Navigate WITH query params (simulates router.replace)
+    router.navigate('/projects/new/?referrer=getting-started&project=12345');
+
+    // The slug field should be auto-filled with the stored name
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('project-slug')).toHaveValue('my-custom-name');
+    });
+
+    // Step 3: Click a different platform
+    await userEvent.click(screen.getByTestId('platform-apple-ios'));
+
+    // The user's custom slug must be preserved, not replaced with 'apple-ios'
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('my-custom-name');
+
+    // Clean up localStorage
+    window.localStorage.removeItem('created-project-context');
+  });
+
+  it('should update project slug on platform change when slug was not manually modified', async () => {
+    // When the user didn't manually type a slug (wasNameManuallyModified: false),
+    // changing the platform should update the slug to the new platform's ID.
+    const {organization} = initializeOrg({
+      organization: {
+        access: ['project:read'],
+        features: ['team-roles'],
+        allowMemberProjectCreation: true,
+      },
+    });
+
+    TeamStore.loadUserTeams([teamWithAccess]);
+
+    window.localStorage.setItem(
+      'created-project-context',
+      JSON.stringify({
+        id: '12345',
+        name: 'javascript-angular',
+        team: teamWithAccess.slug,
+        platform: {
+          key: 'javascript-angular',
+          name: 'Angular',
+          type: 'framework',
+          language: 'javascript',
+          category: 'popular',
+        },
+        wasNameManuallyModified: false,
+      })
+    );
+
+    const {router} = render(<CreateProject />, {
+      organization,
+      initialRouterConfig: {
+        location: {
+          pathname: '/projects/new/',
+        },
+      },
+    });
+
+    router.navigate('/projects/new/?referrer=getting-started&project=12345');
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('project-slug')).toHaveValue(
+        'javascript-angular'
+      );
+    });
+
+    // Click a different platform — slug should update since user didn't manually modify it
+    await userEvent.click(screen.getByTestId('platform-apple-ios'));
+
+    expect(screen.getByPlaceholderText('project-slug')).toHaveValue('apple-ios');
+
+    window.localStorage.removeItem('created-project-context');
   });
 
   it('should display success message on proj creation', async () => {
@@ -356,6 +571,117 @@ describe('CreateProject', () => {
     expect(frameWorkModalMockRequests.projectCreationMockRequest).not.toHaveBeenCalled();
   });
 
+  it('should rollback project when rule creation fails', async () => {
+    const {organization} = initializeOrg({
+      organization: {
+        access: ['project:read'],
+        features: ['team-roles'],
+        allowMemberProjectCreation: true,
+      },
+    });
+
+    const discordIntegration = OrganizationIntegrationsFixture({
+      id: '338731',
+      name: "Moo Deng's Server",
+      provider: {
+        key: 'discord',
+        slug: 'discord',
+        name: 'Discord',
+        canAdd: true,
+        canDisable: false,
+        features: ['alert-rule', 'chat-unfurl'],
+        aspects: {
+          alerts: [],
+        },
+      },
+    });
+
+    TeamStore.loadUserTeams([teamWithAccess]);
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/teams/`,
+      body: [TeamFixture({slug: teamWithAccess.slug})],
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/`,
+      body: organization,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/integrations/`,
+      body: [discordIntegration],
+      match: [MockApiClient.matchQuery({integrationType: 'messaging'})],
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/integrations/${discordIntegration.id}/channels/`,
+      body: {
+        results: [
+          {
+            id: '1437461639900303454',
+            name: 'general',
+            display: '#general',
+            type: 'text',
+          },
+        ],
+      },
+    });
+
+    const projectCreationMockRequest = MockApiClient.addMockResponse({
+      url: `/teams/${organization.slug}/${teamWithAccess.slug}/projects/`,
+      method: 'POST',
+      body: {id: '1', slug: 'testProj', name: 'Test Project'},
+    });
+
+    const ruleCreationMockRequest = MockApiClient.addMockResponse({
+      url: `/projects/${organization.slug}/testProj/rules/`,
+      method: 'POST',
+      statusCode: 400,
+      body: {
+        actions: ['Discord: Discord channel URL is missing or formatted incorrectly'],
+      },
+    });
+
+    const projectDeletionMockRequest = MockApiClient.addMockResponse({
+      url: `/projects/${organization.slug}/testProj/`,
+      method: 'DELETE',
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/projects/`,
+      body: [
+        {
+          id: '1',
+          slug: 'testProj',
+          name: 'Test Project',
+        },
+      ],
+    });
+
+    render(<CreateProject />, {organization});
+
+    await userEvent.click(screen.getByTestId('platform-apple-ios'));
+    await userEvent.click(
+      screen.getByRole('checkbox', {
+        name: /Notify via integration/,
+      })
+    );
+    await selectEvent.select(screen.getByLabelText('channel'), /#general/);
+    await userEvent.click(screen.getByRole('button', {name: 'Create Project'}));
+    await waitFor(() => {
+      expect(projectCreationMockRequest).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(ruleCreationMockRequest).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(projectDeletionMockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    expect(addErrorMessage).toHaveBeenCalledWith('Failed to create project apple-ios');
+  });
+
   describe('Issue Alerts Options', () => {
     const organization = OrganizationFixture();
     beforeEach(() => {
@@ -376,6 +702,11 @@ describe('CreateProject', () => {
     });
 
     it('should enabled the submit button if and only if all the required information has been filled', async () => {
+      const {projectCreationMockRequest} = renderFrameworkModalMockRequests({
+        organization,
+        teamSlug: teamWithAccess.slug,
+      });
+
       render(<CreateProject />, {organization});
 
       // We need to query for the submit button every time we want to access it
@@ -384,7 +715,16 @@ describe('CreateProject', () => {
 
       expect(getSubmitButton()).toBeDisabled();
 
-      // Selecting the platform pre-fills the project name
+      // Fills the project slug
+      await userEvent.type(screen.getByPlaceholderText('project-slug'), 'my-project');
+
+      // Enforce users to select a platform
+      await userEvent.hover(getSubmitButton());
+      expect(await screen.findByText('Please select a platform')).toBeInTheDocument();
+
+      await userEvent.click(getSubmitButton());
+      expect(projectCreationMockRequest).not.toHaveBeenCalled();
+
       await userEvent.click(screen.getByTestId('platform-apple-ios'));
       expect(getSubmitButton()).toBeEnabled();
 
@@ -409,6 +749,107 @@ describe('CreateProject', () => {
 
       await userEvent.click(screen.getByText("I'll create my own alerts later"));
       expect(getSubmitButton()).toBeEnabled();
+
+      await userEvent.click(getSubmitButton());
+      expect(projectCreationMockRequest).toHaveBeenCalled();
+    });
+
+    it('should disable submit button when channel validation fails and integration is selected', async () => {
+      renderFrameworkModalMockRequests({
+        organization,
+        teamSlug: teamWithAccess.slug,
+      });
+
+      MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/integrations/${integration.id}/channel-validate/`,
+        body: {valid: false, detail: 'Channel not found'},
+      });
+
+      render(<CreateProject />, {organization});
+
+      await userEvent.click(screen.getByTestId('platform-apple-ios'));
+      expect(screen.getByRole('button', {name: 'Create Project'})).toBeEnabled();
+      await userEvent.click(
+        screen.getByRole('checkbox', {
+          name: /Notify via integration/,
+        })
+      );
+      await selectEvent.create(screen.getByLabelText('channel'), '#custom-channel', {
+        waitForElement: false,
+        createOptionText: '#custom-channel',
+      });
+      expect(await screen.findByText('Channel not found')).toBeInTheDocument();
+      expect(screen.getByRole('button', {name: 'Create Project'})).toBeDisabled();
+      await userEvent.hover(screen.getByRole('button', {name: 'Create Project'}));
+      await waitFor(() =>
+        expect(screen.getAllByText('Channel not found')).toHaveLength(2)
+      );
+      await userEvent.click(screen.getByLabelText('Clear choices'));
+      await userEvent.hover(screen.getByRole('button', {name: 'Create Project'}));
+      expect(
+        await screen.findByText(/provide an integration channel/)
+      ).toBeInTheDocument();
+    });
+
+    it('should NOT disable submit button when channel validation fails but integration is unchecked', async () => {
+      renderFrameworkModalMockRequests({
+        organization,
+        teamSlug: teamWithAccess.slug,
+      });
+
+      MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/integrations/${integration.id}/channel-validate/`,
+        body: {valid: false, detail: 'Channel not found'},
+      });
+
+      render(<CreateProject />, {organization});
+
+      await userEvent.click(screen.getByTestId('platform-apple-ios'));
+      await userEvent.click(
+        screen.getByRole('checkbox', {
+          name: /Notify via integration/,
+        })
+      );
+      await selectEvent.create(screen.getByLabelText('channel'), '#custom-channel', {
+        waitForElement: false,
+        createOptionText: '#custom-channel',
+      });
+      expect(await screen.findByText('Channel not found')).toBeInTheDocument();
+      expect(screen.getByRole('button', {name: 'Create Project'})).toBeDisabled();
+      await userEvent.click(
+        screen.getByRole('checkbox', {
+          name: /Notify via integration/,
+        })
+      );
+      await waitFor(() => {
+        expect(screen.getByRole('button', {name: 'Create Project'})).toBeEnabled();
+      });
+    });
+
+    it('should show validating tooltip and disable button while validating channel', async () => {
+      renderFrameworkModalMockRequests({
+        organization,
+        teamSlug: teamWithAccess.slug,
+      });
+
+      jest.spyOn(useValidateChannelModule, 'useValidateChannel').mockReturnValue({
+        isFetching: true,
+        clear: jest.fn(),
+        error: undefined,
+      });
+
+      render(<CreateProject />, {organization});
+      await userEvent.click(screen.getByTestId('platform-apple-ios'));
+      await userEvent.click(
+        screen.getByRole('checkbox', {
+          name: /Notify via integration/,
+        })
+      );
+      expect(screen.getByRole('button', {name: 'Create Project'})).toBeDisabled();
+      await userEvent.hover(screen.getByRole('button', {name: 'Create Project'}));
+      expect(
+        await screen.findByText(/Validating integration channel/)
+      ).toBeInTheDocument();
     });
 
     it('should create an issue alert rule by default', async () => {

@@ -1,21 +1,28 @@
 import {GroupFixture} from 'sentry-fixture/group';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 import {ProjectFixture} from 'sentry-fixture/project';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
-import {render, screen, waitFor} from 'sentry-test/reactTestingLibrary';
+import {
+  render,
+  screen,
+  waitFor,
+  type RouterConfig,
+} from 'sentry-test/reactTestingLibrary';
 
-import GroupStore from 'sentry/stores/groupStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {GroupStore} from 'sentry/stores/groupStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {SimilarIssuesDrawer} from 'sentry/views/issueDetails/groupSimilarIssues/similarIssuesDrawer';
 
 describe('SimilarIssuesDrawer', () => {
   const organization = OrganizationFixture();
   const project = ProjectFixture({features: ['similarity-view']});
   const group = GroupFixture();
-  const router = RouterFixture({
-    params: {groupId: group.id},
-  });
+  const initialRouterConfig: RouterConfig = {
+    location: {
+      pathname: `/organizations/${organization.slug}/issues/${group.id}/similar/`,
+    },
+    route: '/organizations/:orgId/issues/:groupId/similar/',
+  };
   let mockSimilarIssues: jest.Mock;
 
   beforeEach(() => {
@@ -24,9 +31,10 @@ describe('SimilarIssuesDrawer', () => {
     GroupStore.init();
 
     mockSimilarIssues = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/issues/${group.id}/similar/?limit=50`,
+      url: `/organizations/${organization.slug}/issues/${group.id}/similar/`,
       body: [[group, {'exception:stacktrace:pairs': 0.375}]],
       method: 'GET',
+      match: [MockApiClient.matchQuery({limit: 50})],
     });
     MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/issues/${group.id}/`,
@@ -37,23 +45,46 @@ describe('SimilarIssuesDrawer', () => {
       body: {features: []},
     });
     MockApiClient.addMockResponse({
-      url: `/issues/${group.id}/related-issues/`,
+      url: `/organizations/${organization.slug}/issues/${group.id}/related-issues/`,
+      match: [
+        MockApiClient.matchQuery({
+          type: 'same_root_cause',
+        }),
+      ],
       body: {data: [], type: 'same_root_cause'},
+    });
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/issues/${group.id}/related-issues/`,
+      match: [
+        MockApiClient.matchQuery({
+          type: 'trace_connected',
+        }),
+      ],
+      body: {data: [], type: 'trace_connected'},
+    });
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/issues/${group.id}/tags/`,
+      body: [],
+    });
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/issues/${group.id}/events/latest/`,
+      body: {},
     });
   });
 
   it('renders the content as expected', async () => {
     render(<SimilarIssuesDrawer group={group} project={project} />, {
       organization,
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
 
     expect(
       await screen.findByRole('heading', {name: 'Similar Issues'})
     ).toBeInTheDocument();
 
-    expect(screen.getByText('Issues with a similar stack trace')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Issues with a similar stack trace')
+    ).toBeInTheDocument();
     await waitFor(() => {
       expect(mockSimilarIssues).toHaveBeenCalled();
     });

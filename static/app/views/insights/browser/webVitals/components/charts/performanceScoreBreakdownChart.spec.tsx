@@ -1,46 +1,34 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {render, screen, waitForElementToBeRemoved} from 'sentry-test/reactTestingLibrary';
 
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
 import {formatTimeSeriesResultsToChartData} from 'sentry/views/insights/browser/webVitals/components/charts/formatTimeSeriesResultsToChartData';
 import PerformanceScoreBreakdownChartWidget from 'sentry/views/insights/common/components/widgets/performanceScoreBreakdownChartWidget';
-
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/usePageFilters');
 
 describe('PerformanceScoreBreakdownChartWidget', () => {
   const organization = OrganizationFixture();
   let eventsStatsMock: jest.Mock;
 
   beforeEach(() => {
-    jest.mocked(useLocation).mockReturnValue({
-      pathname: '',
-      search: '',
-      query: {},
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
-    });
-    jest.mocked(usePageFilters).mockReturnValue(PageFilterStateFixture());
-
     MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/releases/stats/`,
       body: [],
     });
 
     eventsStatsMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       body: {
-        'performance_score(measurements.score.lcp)': {
-          data: [[1743348600, [{count: 0.6106921965623204}]]],
-        },
-        'performance_score(measurements.score.fcp)': {
-          data: [[1743435000, [{count: 0.7397871866098699}]]],
-        },
+        timeSeries: [
+          TimeSeriesFixture({
+            yAxis: 'performance_score(measurements.score.lcp)',
+            values: [{timestamp: 1743348600000, value: 0.6106921965623204}],
+          }),
+          TimeSeriesFixture({
+            yAxis: 'performance_score(measurements.score.fcp)',
+            values: [{timestamp: 1743435000000, value: 0.7397871866098699}],
+          }),
+        ],
       },
     });
   });
@@ -50,20 +38,11 @@ describe('PerformanceScoreBreakdownChartWidget', () => {
   });
 
   it('renders', async () => {
-    jest.mocked(useLocation).mockReturnValue({
-      pathname: '',
-      search: '',
-      query: {},
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
-    });
     render(<PerformanceScoreBreakdownChartWidget />, {organization});
     await waitForElementToBeRemoved(() => screen.queryByTestId('loading-indicator'));
 
     expect(eventsStatsMock).toHaveBeenCalledWith(
-      '/organizations/org-slug/events-stats/',
+      '/organizations/org-slug/events-timeseries/',
       expect.objectContaining({
         method: 'GET',
         query: expect.objectContaining({

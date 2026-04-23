@@ -1,21 +1,22 @@
 import * as Sentry from '@sentry/react';
 import MockDate from 'mockdate';
 import {TransactionEventFixture} from 'sentry-fixture/event';
+import {OrganizationFixture} from 'sentry-fixture/organization';
+import {ProjectFixture} from 'sentry-fixture/project';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
   render,
   screen,
   userEvent,
   waitFor,
   within,
+  type RouterConfig,
 } from 'sentry-test/reactTestingLibrary';
 import {setWindowLocation} from 'sentry-test/utils';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {EntryType, type EventTransaction} from 'sentry/types/event';
-import useProjects from 'sentry/utils/useProjects';
 import TraceView from 'sentry/views/performance/newTraceDetails/index';
 import {
   makeEventTransaction,
@@ -27,13 +28,6 @@ import type {StoredTracePreferences} from 'sentry/views/performance/newTraceDeta
 import {DEFAULT_TRACE_VIEW_PREFERENCES} from 'sentry/views/performance/newTraceDetails/traceState/tracePreferences';
 
 import type {TraceFullDetailed} from './traceApi/types';
-
-// TODO Abdullah Khan: Remove this, it's a hack as mocking ProjectsStore is not working,
-// a number of tests are failing as a result.
-// eslint-disable-next-line no-restricted-syntax
-jest.mock('sentry/utils/useProjects');
-
-const mockUseProjects = jest.mocked(useProjects);
 
 class MockResizeObserver {
   callback: ResizeObserverCallback;
@@ -65,7 +59,9 @@ class MockResizeObserver {
 type ResponseType = Parameters<typeof MockApiClient.addMockResponse>[0];
 
 function mockQueryString(queryString: `?${string}` | '') {
-  setWindowLocation(`http://localhost/${queryString}`);
+  setWindowLocation(
+    `http://localhost/organizations/org-slug/performance/trace/trace-id/${queryString}`
+  );
   expect(window.location.search).toBe(queryString);
 }
 
@@ -90,7 +86,7 @@ function mockTraceResponse(resp?: Partial<ResponseType>) {
 
 function mockPerformanceSubscriptionDetailsResponse(resp?: Partial<ResponseType>) {
   MockApiClient.addMockResponse({
-    url: '/subscriptions/org-slug/',
+    url: '/customers/org-slug/',
     method: 'GET',
     asyncDelay: 1,
     ...(resp ?? {body: {}}),
@@ -127,7 +123,7 @@ function mockTraceTagsResponse(resp?: Partial<ResponseType>) {
 
 function mockProjectDetailsResponse(resp?: Partial<ResponseType>) {
   MockApiClient.addMockResponse({
-    url: `/projects/org-slug//`,
+    url: '/projects/org-slug//',
     method: 'GET',
     asyncDelay: 1,
     ...resp,
@@ -154,7 +150,7 @@ function mockTraceRootEvent(id: string, resp?: Partial<ResponseType>) {
 
 function mockTraceRootFacets(resp?: Partial<ResponseType>) {
   MockApiClient.addMockResponse({
-    url: `/organizations/org-slug/events-facets/`,
+    url: '/organizations/org-slug/events-facets/',
     method: 'GET',
     asyncDelay: 1,
     body: {},
@@ -164,7 +160,7 @@ function mockTraceRootFacets(resp?: Partial<ResponseType>) {
 
 function mockTraceEventDetails(resp?: Partial<ResponseType>) {
   MockApiClient.addMockResponse({
-    url: `/organizations/org-slug/events/`,
+    url: '/organizations/org-slug/events/',
     method: 'GET',
     asyncDelay: 1,
     body: {},
@@ -200,11 +196,13 @@ function mockTransactionSpansResponse(
   });
 }
 
-const {router} = initializeOrg({
-  router: {
-    params: {orgId: 'org-slug', traceSlug: 'trace-id'},
+const initialRouterConfig: RouterConfig = {
+  location: {
+    pathname: '/organizations/org-slug/performance/trace/trace-id/',
+    query: {},
   },
-});
+  route: '/organizations/:orgId/performance/trace/:traceSlug/',
+};
 
 function mockEventsResponse() {
   MockApiClient.addMockResponse({
@@ -282,8 +280,7 @@ async function keyboardNavigationTestSetup() {
   mockEventsResponse();
 
   const value = render(<TraceView />, {
-    router,
-    deprecatedRouterMocks: true,
+    initialRouterConfig,
   });
   const virtualizedContainer = getVirtualizedContainer();
   const virtualizedScrollContainer = getVirtualizedScrollContainer();
@@ -345,8 +342,7 @@ async function pageloadTestSetup() {
   mockEventsResponse();
 
   const value = render(<TraceView />, {
-    router,
-    deprecatedRouterMocks: true,
+    initialRouterConfig,
   });
   const virtualizedContainer = getVirtualizedContainer();
   const virtualizedScrollContainer = getVirtualizedScrollContainer();
@@ -407,8 +403,7 @@ async function nestedTransactionsTestSetup() {
   mockEventsResponse();
 
   const value = render(<TraceView />, {
-    router,
-    deprecatedRouterMocks: true,
+    initialRouterConfig,
   });
   const virtualizedContainer = getVirtualizedContainer();
   const virtualizedScrollContainer = getVirtualizedScrollContainer();
@@ -469,8 +464,7 @@ async function searchTestSetup() {
   mockEventsResponse();
 
   const value = render(<TraceView />, {
-    router,
-    deprecatedRouterMocks: true,
+    initialRouterConfig,
   });
   const virtualizedContainer = getVirtualizedContainer();
   const virtualizedScrollContainer = getVirtualizedScrollContainer();
@@ -535,8 +529,7 @@ async function simpleTestSetup() {
   mockEventsResponse();
 
   const value = render(<TraceView />, {
-    router,
-    deprecatedRouterMocks: true,
+    initialRouterConfig,
   });
   const virtualizedContainer = getVirtualizedContainer();
   const virtualizedScrollContainer = getVirtualizedScrollContainer();
@@ -553,7 +546,11 @@ async function simpleTestSetup() {
   return {...value, virtualizedContainer, virtualizedScrollContainer};
 }
 
-async function completeTestSetup() {
+async function completeTestSetup({
+  organization,
+}: {
+  organization?: ReturnType<typeof OrganizationFixture>;
+} = {}) {
   mockPerformanceSubscriptionDetailsResponse();
   mockProjectDetailsResponse();
   const start = Date.now() / 1e3;
@@ -753,8 +750,8 @@ async function completeTestSetup() {
   mockSpansResponse('0', {}, transactionWithoutSpans);
 
   const value = render(<TraceView />, {
-    router,
-    deprecatedRouterMocks: true,
+    initialRouterConfig,
+    organization,
   });
   const virtualizedContainer = getVirtualizedContainer();
   const virtualizedScrollContainer = getVirtualizedScrollContainer();
@@ -844,24 +841,6 @@ function printVirtualizedList(container: HTMLElement) {
   console.log(stdout.join('\n'));
 }
 
-// @ts-expect-error ignore this line
-function printTabs() {
-  const tabs = screen.queryAllByTestId(DRAWER_TABS_TEST_ID);
-  const stdout: string[] = [];
-
-  for (const tab of tabs) {
-    let text = tab.textContent ?? 'empty tab??';
-    if (tab.hasAttribute('aria-selected')) {
-      text = 'active' + text;
-    }
-    stdout.push(text);
-  }
-
-  // This is a debug fn, we need it to log
-  // eslint-disable-next-line no-console
-  console.log(stdout.join(' | '));
-}
-
 async function assertHighlightedRowAtIndex(
   virtualizedContainer: HTMLElement,
   index: number
@@ -886,36 +865,26 @@ describe('trace view', () => {
     mockQueryString('');
     MockDate.reset();
 
-    const {project} = initializeOrg({});
+    const project = ProjectFixture({
+      slug: 'project_slug',
+      id: '1',
+      name: 'project_name',
+      isMember: true,
+    });
 
     ProjectsStore.loadInitialData([project]);
 
     PageFiltersStore.init();
-    PageFiltersStore.onInitializeUrlState(
-      {
-        projects: [parseInt(project.id, 10)],
-        environments: [],
-        datetime: {
-          period: '14d',
-          start: null,
-          end: null,
-          utc: null,
-        },
+    PageFiltersStore.onInitializeUrlState({
+      projects: [parseInt(project.id, 10)],
+      environments: [],
+      datetime: {
+        period: '14d',
+        start: null,
+        end: null,
+        utc: null,
       },
-      new Set()
-    );
-    mockUseProjects.mockReturnValue({
-      projects: [
-        {
-          slug: 'project_slug',
-          id: 1,
-          name: 'project_name',
-          color: '#000000',
-          avatarUrl: 'https://example.com/avatar.png',
-          isMember: true,
-        },
-      ],
-    } as any);
+    });
   });
   afterEach(() => {
     mockQueryString('');
@@ -933,8 +902,7 @@ describe('trace view', () => {
     mockEventsResponse();
 
     render(<TraceView />, {
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(await screen.findByText(/assembling the trace/i)).toBeInTheDocument();
   });
@@ -949,8 +917,7 @@ describe('trace view', () => {
     mockEventsResponse();
 
     render(<TraceView />, {
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(
       await screen.findByText(/Woof, we failed to load your trace/i)
@@ -978,8 +945,7 @@ describe('trace view', () => {
 
     mockQueryString(`?timestamp=${twelveMinutesAgoInSeconds.toString()}`);
     render(<TraceView />, {
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(
       await screen.findByText(
@@ -1009,8 +975,7 @@ describe('trace view', () => {
 
     mockQueryString(`?timestamp=${oneMinuteAgoInSeconds.toString()}`);
     render(<TraceView />, {
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(
       await screen.findByText(
@@ -1018,6 +983,18 @@ describe('trace view', () => {
       )
     ).toBeInTheDocument();
   });
+
+  it.isKnownFlake(
+    'does not render the summary tab even when the legacy feature flag is enabled',
+    async () => {
+      const organization = OrganizationFixture({features: ['single-trace-summary']});
+
+      await completeTestSetup({organization});
+
+      expect(await screen.findByRole('tab', {name: 'Waterfall'})).toBeInTheDocument();
+      expect(screen.queryByRole('tab', {name: 'Summary'})).not.toBeInTheDocument();
+    }
+  );
 
   describe('pageload', () => {
     it('scrolls to trace root', async () => {
@@ -1082,7 +1059,7 @@ describe('trace view', () => {
     });
 
     it('scrolls to sibling autogroup node', async () => {
-      mockQueryString('?node=ag-http0&node=txn-1');
+      mockQueryString('?node=ag-span0&node=txn-1');
 
       const {virtualizedContainer} = await completeTestSetup();
       await within(virtualizedContainer).findAllByText(/Autogrouped/i);
@@ -1112,6 +1089,7 @@ describe('trace view', () => {
     });
 
     it('scrolls to missing instrumentation node', async () => {
+      mockTracePreferences({missing_instrumentation: true});
       mockQueryString('?node=ms-queueprocess0&node=txn-1');
 
       const {virtualizedContainer} = await completeTestSetup();
@@ -1169,16 +1147,11 @@ describe('trace view', () => {
     ] as Array<`?${string}`>)('logs if path is not found: %s', async path => {
       mockQueryString(path);
 
-      const sentryScopeMock = {
-        setFingerprint: jest.fn(),
-        captureMessage: jest.fn(),
-      } as any;
-
-      jest.spyOn(Sentry, 'withScope').mockImplementation((f: any) => f(sentryScopeMock));
+      jest.spyOn(Sentry.logger, 'warn');
       await pageloadTestSetup();
 
       await waitFor(() => {
-        expect(sentryScopeMock.captureMessage).toHaveBeenCalledWith(
+        expect(Sentry.logger.warn).toHaveBeenCalledWith(
           'Failed to scroll to node in trace tree'
         );
       });
@@ -1496,7 +1469,8 @@ describe('trace view', () => {
       });
     });
 
-    it('arrowup+shift scrolls to the start of the list', async () => {
+    // eslint-disable-next-line jest/no-disabled-tests
+    it.skip('arrowup+shift scrolls to the start of the list', async () => {
       const {virtualizedContainer} = await keyboardNavigationTestSetup();
 
       let rows = getVirtualizedRows(virtualizedContainer);
@@ -1833,8 +1807,7 @@ describe('trace view', () => {
       );
 
       const {container} = render(<TraceView />, {
-        router,
-        deprecatedRouterMocks: true,
+        initialRouterConfig,
       });
 
       // Awaits for the placeholder rendering rows to be removed

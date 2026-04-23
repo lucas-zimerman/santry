@@ -15,8 +15,6 @@ import {
 import {SavedSearchType, type TagCollection} from 'sentry/types/group';
 import {FieldValueType} from 'sentry/utils/fields';
 
-export const INTERFACE_TYPE_LOCALSTORAGE_KEY = 'search-query-builder-interface';
-
 function getSearchConfigFromKeys(
   keys: TagCollection,
   getFieldDefinition: FieldDefinitionGetter
@@ -47,8 +45,8 @@ function getSearchConfigFromKeys(
         break;
       case FieldValueType.NUMBER:
       case FieldValueType.INTEGER:
-      case FieldValueType.SMALL_INTEGER:
       case FieldValueType.PERCENTAGE:
+      case FieldValueType.CURRENCY:
         config.numericKeys.add(key);
         break;
       case FieldValueType.DATE:
@@ -169,7 +167,8 @@ export function collapseTextTokens(tokens: ParseResult | null) {
       return acc;
     }
 
-    return [...acc, token];
+    acc.push(token);
+    return acc;
   }, []);
 }
 
@@ -199,6 +198,18 @@ export function isDateToken(token: TokenResult<Token.FILTER>) {
   );
 }
 
+export function isNumericFilterToken(token: TokenResult<Token.FILTER>): boolean {
+  return [
+    FilterType.NUMERIC,
+    FilterType.DURATION,
+    FilterType.SIZE,
+    FilterType.AGGREGATE_NUMERIC,
+    FilterType.AGGREGATE_PERCENTAGE,
+    FilterType.AGGREGATE_DURATION,
+    FilterType.AGGREGATE_SIZE,
+  ].includes(token.filter);
+}
+
 export function recentSearchTypeToLabel(type: SavedSearchType | undefined) {
   switch (type) {
     case SavedSearchType.ISSUE:
@@ -225,7 +236,7 @@ export function findNearestFreeTextKey(
   startKey: Key | null,
   direction: 'right' | 'left'
 ): Key | null {
-  let key: Key | null = startKey;
+  let key = startKey;
   while (key) {
     const item = state.collection.getItem(key);
     if (!item) {

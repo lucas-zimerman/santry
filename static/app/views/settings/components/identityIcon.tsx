@@ -27,6 +27,7 @@ const IDENTITY_ICONS = {
   bitbucket,
   bitbucket_server: bitbucketserver,
   github,
+  github_copilot: github,
   github_enterprise: githubEnterprise,
   gitlab,
   google,
@@ -38,6 +39,7 @@ const IDENTITY_ICONS = {
   rippling,
   saml2,
   slack,
+  slack_staging: slack,
   visualstudio,
   vsts,
 } satisfies Record<string, string>;
@@ -65,7 +67,7 @@ export function IdentityIcon({providerId, size = 36, ref}: IdentityIconProps) {
 const StyledIdentityIconContainer = styled('div')<{size: number}>`
   height: ${p => p.size}px;
   width: ${p => p.size}px;
-  background-color: ${p => p.theme.white};
+  background-color: ${p => p.theme.colors.white};
   border-radius: 2px;
   display: flex;
   align-items: center;

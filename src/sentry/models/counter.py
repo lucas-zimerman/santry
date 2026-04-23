@@ -7,13 +7,12 @@ from sentry.db.models import (
     BoundedBigIntegerField,
     FlexibleForeignKey,
     Model,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.locks import locks
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import ingest_errors_tasks
 from sentry.utils import metrics
 from sentry.utils.locking import UnableToAcquireLock
@@ -28,7 +27,7 @@ we will refill the block when there are less than 200 short ids in Redis
 """
 
 
-@region_silo_model
+@cell_silo_model
 class Counter(Model):
     __relocation_scope__ = RelocationScope.Organization
 
@@ -130,12 +129,9 @@ def increment_project_counter_in_database(project, delta=1, using="default") -> 
 
 @instrumented_task(
     name="sentry.models.counter.refill_cached_short_ids",
-    queue="shortid.counters.refill",
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=ingest_errors_tasks,
-        retry=None,  # No retries since we want to try again on next counter increment
-    ),
+    namespace=ingest_errors_tasks,
+    retry=None,  # No retries since we want to try again on next counter increment
+    silo_mode=SiloMode.CELL,
 )
 def refill_cached_short_ids(project_id, block_size: int, using="default", **kwargs) -> None:
     """Refills the Redis short-id counter block for a project."""

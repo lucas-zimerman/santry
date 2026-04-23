@@ -1,12 +1,10 @@
 import styled from '@emotion/styled';
 
-import {Tooltip} from 'sentry/components/core/tooltip';
-import KeyValueList from 'sentry/components/events/interfaces/keyValueList';
+import {KeyValueList} from 'sentry/components/events/interfaces/keyValueList';
 import type {RawSpanType} from 'sentry/components/events/interfaces/spans/types';
-import QuestionTooltip from 'sentry/components/questionTooltip';
+import {QuestionTooltip} from 'sentry/components/questionTooltip';
 import {IconCheckmark, IconClose} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {
   EntrySpans,
   Event,
@@ -16,7 +14,7 @@ import type {
 import {EventGroupVariantType} from 'sentry/types/event';
 import {capitalize} from 'sentry/utils/string/capitalize';
 
-import GroupingComponent, {GroupingHint} from './groupingComponent';
+import {GroupingComponent, GroupingHint} from './groupingComponent';
 
 interface GroupingVariantProps {
   event: Event;
@@ -70,12 +68,16 @@ function addFingerprintInfo(
   }
 }
 
-function GroupingVariant({event, variant, showNonContributing}: GroupingVariantProps) {
+export function GroupingVariant({
+  event,
+  variant,
+  showNonContributing,
+}: GroupingVariantProps) {
   const getVariantData = (): [VariantData, EventGroupComponent | undefined] => {
     const data: VariantData = [];
     let component: EventGroupComponent | undefined;
 
-    if (!showNonContributing && variant.hash === null) {
+    if (!showNonContributing && !variant.contributes) {
       return [data, component];
     }
 
@@ -105,9 +107,6 @@ function GroupingVariant({event, variant, showNonContributing}: GroupingVariantP
         component = variant.component;
         break;
       case EventGroupVariantType.CUSTOM_FINGERPRINT:
-        addFingerprintInfo(data, variant, showNonContributing);
-        break;
-      case EventGroupVariantType.BUILT_IN_FINGERPRINT:
         addFingerprintInfo(data, variant, showNonContributing);
         break;
       case EventGroupVariantType.SALTED_COMPONENT:
@@ -157,30 +156,19 @@ function GroupingVariant({event, variant, showNonContributing}: GroupingVariantP
   };
 
   const renderTitle = () => {
-    const isContributing = variant.hash !== null;
+    const isContributing = variant.contributes;
 
-    let title: string;
-    if (isContributing) {
-      title = t('Contributing variant');
-    } else {
-      const hint = 'component' in variant ? variant.component?.hint : undefined;
-      if (hint) {
-        title = t('Non-contributing variant: %s', hint);
-      } else {
-        title = t('Non-contributing variant');
-      }
-    }
+    const hint = variant.hint;
 
     return (
-      <Tooltip title={title}>
-        <VariantTitle>
-          <ContributionIcon isContributing={isContributing} />
-          {variant.description
-            ?.split(' ')
-            .map(i => capitalize(i))
-            .join(' ') ?? t('Nothing')}
-        </VariantTitle>
-      </Tooltip>
+      <VariantTitle>
+        <ContributionIcon isContributing={isContributing} />
+        {variant.description
+          ?.split(' ')
+          .map(i => capitalize(i))
+          .join(' ') ?? t('Nothing')}
+        <VariantHint>{hint && t('(%s)', hint)}</VariantHint>
+      </VariantTitle>
     );
   };
 
@@ -203,52 +191,60 @@ function GroupingVariant({event, variant, showNonContributing}: GroupingVariantP
 }
 
 const VariantWrapper = styled('div')`
-  margin-bottom: ${space(4)};
+  margin-bottom: ${p => p.theme.space['3xl']};
 `;
 
 const Header = styled('div')`
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
   @media (max-width: ${p => p.theme.breakpoints.sm}) {
     display: block;
   }
 `;
 
 const VariantTitle = styled('h5')`
-  font-size: ${p => p.theme.fontSize.md};
+  font-size: ${p => p.theme.font.size.md};
   margin: 0;
   display: flex;
   align-items: center;
 `;
 
+const VariantHint = styled('span')`
+  font-size: ${p => p.theme.font.size.sm};
+  margin-left: ${p => p.theme.space.xs};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
+  color: ${p => p.theme.tokens.content.secondary};
+`;
+
 const ContributionIcon = styled(({isContributing, ...p}: any) =>
   isContributing ? (
-    <IconCheckmark size="sm" isCircled color="successText" {...p} />
+    <IconCheckmark size="sm" variant="success" {...p} />
   ) : (
-    <IconClose size="sm" isCircled color="dangerText" {...p} />
+    <IconClose size="sm" variant="danger" {...p} />
   )
 )`
-  margin-right: ${space(1)};
+  margin-right: ${p => p.theme.space.md};
 `;
 
 const GroupingTree = styled('div')`
-  color: ${p => p.theme.textColor};
+  color: ${p => p.theme.tokens.content.primary};
 `;
 
 const TextWithQuestionTooltip = styled('div')`
   display: grid;
   align-items: center;
   grid-template-columns: auto 1fr;
-  gap: ${space(0.5)};
+  gap: ${p => p.theme.space.xs};
 `;
 
 const Hash = styled('span')`
   @media (max-width: ${p => p.theme.breakpoints.sm}) {
-    ${p => p.theme.overflowEllipsis};
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     width: 210px;
   }
 `;
-
-export default GroupingVariant;

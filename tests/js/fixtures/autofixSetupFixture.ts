@@ -8,10 +8,7 @@ export function AutofixSetupFixture(
       ok: true,
       reason: null,
     },
-    setupAcknowledgement: {
-      orgHasAcknowledged: true,
-      userHasAcknowledged: true,
-    },
+    seerReposLinked: true,
     githubWriteIntegration: {
       ok: true,
       repos: [],

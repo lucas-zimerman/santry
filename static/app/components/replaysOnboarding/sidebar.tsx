@@ -1,26 +1,27 @@
 import type {ReactNode} from 'react';
 import {Fragment, useEffect, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
+import {parseAsStringLiteral, useQueryState} from 'nuqs';
 import {PlatformIcon} from 'platformicons';
 
 import HighlightTopRightPattern from 'sentry-images/pattern/highlight-top-right.svg';
 
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import RadioGroup from 'sentry/components/forms/controls/radioGroup';
-import useDrawer from 'sentry/components/globalDrawer';
-import IdBadge from 'sentry/components/idBadge';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import useCurrentProjectState from 'sentry/components/onboarding/gettingStartedDoc/utils/useCurrentProjectState';
+import {LinkButton} from '@sentry/scraps/button';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {useDrawer} from '@sentry/scraps/drawer';
+import {Container, Flex} from '@sentry/scraps/layout';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+
+import {RadioGroup} from 'sentry/components/forms/controls/radioGroup';
+import {IdBadge} from 'sentry/components/idBadge';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {useCurrentProjectState} from 'sentry/components/onboarding/gettingStartedDoc/utils/useCurrentProjectState';
 import {useLoadGettingStarted} from 'sentry/components/onboarding/gettingStartedDoc/utils/useLoadGettingStarted';
 import {PlatformOptionDropdown} from 'sentry/components/onboarding/platformOptionDropdown';
 import {pickPlatformOptions} from 'sentry/components/replaysOnboarding/pickPlatformOptions';
 import {ReplayOnboardingLayout} from 'sentry/components/replaysOnboarding/replayOnboardingLayout';
 import {replayJsFrameworkOptions} from 'sentry/components/replaysOnboarding/utils';
-import SidebarPanel from 'sentry/components/sidebar/sidebarPanel';
-import type {CommonSidebarProps} from 'sentry/components/sidebar/types';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
-import TextOverflow from 'sentry/components/textOverflow';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {
   replayBackendPlatforms,
   replayFrontendPlatforms,
@@ -29,20 +30,21 @@ import {
   replayOnboardingPlatforms,
   replayPlatforms,
 } from 'sentry/data/platformCategories';
-import platforms, {otherPlatform} from 'sentry/data/platforms';
+import {otherPlatform, allPlatforms as platforms} from 'sentry/data/platforms';
 import {t, tct} from 'sentry/locale';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import {space} from 'sentry/styles/space';
 import type {SelectValue} from 'sentry/types/core';
 import type {PlatformKey, Project} from 'sentry/types/project';
-import useUrlParams from 'sentry/utils/url/useUrlParams';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 export function useReplaysOnboardingDrawer() {
   const organization = useOrganization();
-  const currentPanel = useLegacyStore(SidebarPanelStore);
-  const isActive = currentPanel === SidebarPanelKey.REPLAYS_ONBOARDING;
+  const currentPanel = useLegacyStore(OnboardingDrawerStore);
+  const isActive = currentPanel === OnboardingDrawerKey.REPLAYS_ONBOARDING;
   const hasProjectAccess = organization.access.includes('project:read');
 
   const {openDrawer} = useDrawer();
@@ -62,33 +64,11 @@ export function useReplaysOnboardingDrawer() {
 function DrawerContent() {
   useEffect(() => {
     return () => {
-      SidebarPanelStore.hidePanel();
+      OnboardingDrawerStore.close();
     };
   }, []);
 
   return <SidebarContent />;
-}
-
-function LegacyReplaysOnboardingSidebar(props: CommonSidebarProps) {
-  const {currentPanel, collapsed, hidePanel, orientation} = props;
-  const organization = useOrganization();
-
-  const isActive = currentPanel === SidebarPanelKey.REPLAYS_ONBOARDING;
-  const hasProjectAccess = organization.access.includes('project:read');
-
-  if (!isActive || !hasProjectAccess) {
-    return null;
-  }
-
-  return (
-    <TaskSidebarPanel
-      orientation={orientation}
-      collapsed={collapsed}
-      hidePanel={hidePanel}
-    >
-      <SidebarContent />
-    </TaskSidebarPanel>
-  );
 }
 
 function SidebarContent() {
@@ -101,8 +81,8 @@ function SidebarContent() {
     supportedProjects,
     unsupportedProjects,
   } = useCurrentProjectState({
-    currentPanel: SidebarPanelKey.REPLAYS_ONBOARDING,
-    targetPanel: SidebarPanelKey.REPLAYS_ONBOARDING,
+    currentPanel: OnboardingDrawerKey.REPLAYS_ONBOARDING,
+    targetPanel: OnboardingDrawerKey.REPLAYS_ONBOARDING,
     onboardingPlatforms: replayOnboardingPlatforms,
     allPlatforms: replayPlatforms,
   });
@@ -162,7 +142,7 @@ function SidebarContent() {
       <TopRightBackgroundImage src={HighlightTopRightPattern} />
       <TaskList>
         <Heading>{t('Getting Started with Session Replay')}</Heading>
-        <HeaderActions>
+        <Flex direction="row" justify="between" gap="2xl">
           <div
             onClick={e => {
               // we need to stop bubbling the CompactSelect click event
@@ -173,28 +153,32 @@ function SidebarContent() {
             }}
           >
             <CompactSelect
-              triggerLabel={
-                currentProject ? (
-                  <StyledIdBadge
-                    project={currentProject}
-                    avatarSize={16}
-                    hideOverflow
-                    disableLink
-                  />
-                ) : (
-                  t('Select a project')
-                )
-              }
               value={currentProject?.id}
               onChange={opt =>
                 setCurrentProject(allProjects.find(p => p.id === opt.value))
               }
-              triggerProps={{'aria-label': currentProject?.slug}}
+              trigger={triggerProps => (
+                <OverlayTrigger.Button
+                  {...triggerProps}
+                  aria-label={currentProject?.slug}
+                >
+                  {currentProject ? (
+                    <StyledIdBadge
+                      project={currentProject}
+                      avatarSize={16}
+                      hideOverflow
+                      disableLink
+                    />
+                  ) : (
+                    t('Select a project')
+                  )}
+                </OverlayTrigger.Button>
+              )}
               options={projectSelectOptions}
               position="bottom-end"
             />
           </div>
-        </HeaderActions>
+        </Flex>
         <OnboardingContent currentProject={selectedProject} hasDocs={hasDocs} />
       </TaskList>
     </Fragment>
@@ -215,10 +199,10 @@ function OnboardingContent({
       value: platform.id,
       textValue: platform.name,
       label: (
-        <PlatformLabel>
+        <Flex gap="md" align="center">
           <PlatformIcon platform={platform.id} size={16} />
           <TextOverflow>{platform.name}</TextOverflow>
-        </PlatformLabel>
+        </Flex>
       ),
     };
   });
@@ -239,13 +223,12 @@ function OnboardingContent({
       .filter((p): p is PlatformKey => p !== 'javascript')
       .includes(currentProject.platform);
 
-  const defaultTab = 'jsLoader';
-  const {getParamValue: setupMode, setParamValue: setSetupMode} = useUrlParams(
+  const [setupMode, setSetupMode] = useQueryState(
     'mode',
-    defaultTab
+    parseAsStringLiteral(['npm', 'jsLoader'] as const).withDefault('jsLoader')
   );
 
-  const showJsFrameworkInstructions = backendPlatform && setupMode() === 'npm';
+  const showJsFrameworkInstructions = backendPlatform && setupMode === 'npm';
 
   const currentPlatform = currentProject.platform
     ? (platforms.find(p => p.id === currentProject.platform) ?? otherPlatform)
@@ -259,7 +242,7 @@ function OnboardingContent({
     projectKeyId,
   } = useLoadGettingStarted({
     platform:
-      showJsFrameworkInstructions && setupMode() === 'npm'
+      showJsFrameworkInstructions && setupMode === 'npm'
         ? (replayJsFrameworkOptions().find(p => p.id === jsFramework.value) ??
           replayJsFrameworkOptions()[0]!)
         : currentPlatform,
@@ -285,48 +268,54 @@ function OnboardingContent({
   const radioButtons = (
     <Header>
       {showRadioButtons ? (
-        <StyledRadioGroup
-          label="mode"
-          choices={[
-            [
-              'npm',
-              backendPlatform ? (
-                <PlatformSelect key="platform-select">
-                  {tct('I use [platformSelect]', {
-                    platformSelect: (
-                      <CompactSelect
-                        size="xs"
-                        triggerLabel={jsFramework.label}
-                        value={jsFramework.value}
-                        onChange={setJsFramework}
-                        options={jsFrameworkSelectOptions}
-                        position="bottom-end"
-                        key={jsFramework.textValue}
-                        disabled={setupMode() === 'jsLoader'}
+        <Container padding="md 0">
+          <RadioGroup<'npm' | 'jsLoader'>
+            label="mode"
+            choices={[
+              [
+                'npm',
+                backendPlatform ? (
+                  <Flex gap="md" align="center" wrap="wrap" key="platform-select">
+                    {tct('I use [platformSelect]', {
+                      platformSelect: (
+                        <CompactSelect
+                          size="xs"
+                          trigger={triggerProps => (
+                            <OverlayTrigger.Button {...triggerProps}>
+                              {jsFramework.label ?? triggerProps.children}
+                            </OverlayTrigger.Button>
+                          )}
+                          value={jsFramework.value}
+                          onChange={setJsFramework}
+                          options={jsFrameworkSelectOptions}
+                          position="bottom-end"
+                          key={jsFramework.textValue}
+                          disabled={setupMode === 'jsLoader'}
+                        />
+                      ),
+                    })}
+                    {jsFrameworkDocs?.platformOptions && (
+                      <PlatformOptionDropdown
+                        platformOptions={jsFrameworkDocs?.platformOptions}
+                        disabled={setupMode === 'jsLoader'}
                       />
-                    ),
-                  })}
-                  {jsFrameworkDocs?.platformOptions && (
-                    <PlatformOptionDropdown
-                      platformOptions={jsFrameworkDocs?.platformOptions}
-                      disabled={setupMode() === 'jsLoader'}
-                    />
-                  )}
-                </PlatformSelect>
-              ) : (
-                t('I use NPM or Yarn')
-              ),
-            ],
-            ['jsLoader', t('I use HTML templates (Loader Script)')],
-          ]}
-          value={setupMode()}
-          onChange={setSetupMode}
-        />
+                    )}
+                  </Flex>
+                ) : (
+                  t('I use NPM or Yarn')
+                ),
+              ],
+              ['jsLoader', t('I use HTML templates (Loader Script)')],
+            ]}
+            value={setupMode}
+            onChange={value => setSetupMode(value)}
+          />
+        </Container>
       ) : (
         !mobilePlatform &&
         (docs?.platformOptions?.siblingOption || docs?.platformOptions?.packageManager) &&
         !isProjKeysLoading && (
-          <PlatformSelect>
+          <Flex gap="md" align="center" wrap="wrap">
             {tct("I'm using [platformSelect]", {
               platformSelect: (
                 <PlatformOptionDropdown
@@ -334,7 +323,7 @@ function OnboardingContent({
                 />
               ),
             })}
-          </PlatformSelect>
+          </Flex>
         )
       )}
     </Header>
@@ -417,7 +406,7 @@ function OnboardingContent({
         platformKey={currentPlatform.id}
         project={currentProject}
         configType={
-          setupMode() === 'npm' || // switched to NPM option
+          setupMode === 'npm' || // switched to NPM option
           npmOnlyFramework ||
           mobilePlatform // even if '?mode=jsLoader', only show npm/default instructions for FE frameworks & mobile platforms
             ? 'replayOnboarding'
@@ -429,12 +418,7 @@ function OnboardingContent({
 }
 
 const Header = styled('div')`
-  padding: ${space(1)} 0;
-`;
-
-const TaskSidebarPanel = styled(SidebarPanel)`
-  width: 600px;
-  max-width: 100%;
+  padding: ${p => p.theme.space.md} 0;
 `;
 
 const TopRightBackgroundImage = styled('img')`
@@ -449,18 +433,19 @@ const TaskList = styled('div')`
   display: grid;
   grid-auto-flow: row;
   grid-template-columns: 100%;
-  gap: ${space(1)};
-  margin: 50px ${space(4)} ${space(4)} ${space(4)};
+  gap: ${p => p.theme.space.md};
+  margin: 50px ${p => p.theme.space['3xl']} ${p => p.theme.space['3xl']}
+    ${p => p.theme.space['3xl']};
 `;
 
 const Heading = styled('div')`
   display: flex;
-  color: ${p => p.theme.activeText};
-  font-size: ${p => p.theme.fontSize.xs};
+  color: ${p => p.theme.tokens.interactive.link.accent.rest};
+  font-size: ${p => p.theme.font.size.xs};
   text-transform: uppercase;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   line-height: 1;
-  margin-top: ${space(3)};
+  margin-top: ${p => p.theme.space['2xl']};
 `;
 
 const StyledIdBadge = styled(IdBadge)`
@@ -468,29 +453,3 @@ const StyledIdBadge = styled(IdBadge)`
   white-space: nowrap;
   flex-shrink: 1;
 `;
-
-const HeaderActions = styled('div')`
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  gap: ${space(3)};
-`;
-
-const PlatformLabel = styled('div')`
-  display: flex;
-  gap: ${space(1)};
-  align-items: center;
-`;
-
-const PlatformSelect = styled('div')`
-  display: flex;
-  gap: ${space(1)};
-  align-items: center;
-  flex-wrap: wrap;
-`;
-
-const StyledRadioGroup = styled(RadioGroup)`
-  padding: ${space(1)} 0;
-`;
-
-export default LegacyReplaysOnboardingSidebar;

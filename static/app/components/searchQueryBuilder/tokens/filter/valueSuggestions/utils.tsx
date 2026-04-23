@@ -6,10 +6,7 @@ import {escapeTagValue} from 'sentry/components/searchQueryBuilder/tokens/filter
 import {DEFAULT_BOOLEAN_SUGGESTIONS} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/boolean';
 import {getRelativeDateSuggestions} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/date';
 import {getDurationSuggestions} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/duration';
-import {
-  getNumericSuggestions,
-  getSmallNumericSuggestions,
-} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/numeric';
+import {getNumericSuggestions} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/numeric';
 import {getSizeSuggestions} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/size';
 import type {SuggestionSection} from 'sentry/components/searchQueryBuilder/tokens/filter/valueSuggestions/types';
 import {Token, type TokenResult} from 'sentry/components/searchSyntax/parser';
@@ -29,10 +26,9 @@ export function getValueSuggestions({
 }): SuggestionSection[] | null {
   switch (valueType) {
     case FieldValueType.NUMBER:
+    case FieldValueType.CURRENCY:
     case FieldValueType.INTEGER:
       return getNumericSuggestions(filterValue);
-    case FieldValueType.SMALL_INTEGER:
-      return getSmallNumericSuggestions(filterValue);
     case FieldValueType.DURATION:
       return getDurationSuggestions(filterValue, token);
     case FieldValueType.SIZE:
@@ -67,12 +63,12 @@ export function cleanFilterValue({
 
   switch (valueType) {
     case FieldValueType.NUMBER:
+    case FieldValueType.CURRENCY:
       if (FILTER_VALUE_NUMERIC.test(value)) {
         return value;
       }
       return null;
     case FieldValueType.INTEGER:
-    case FieldValueType.SMALL_INTEGER:
       if (FILTER_VALUE_INT.test(value)) {
         return value;
       }

@@ -11,6 +11,7 @@ import responses
 
 from fixtures.gitlab import GET_COMMIT_RESPONSE, GitLabTestCase
 from sentry.auth.exceptions import IdentityNotValid
+from sentry.exceptions import RestrictedIPAddress
 from sentry.integrations.gitlab.blame import GitLabCommitResponse, GitLabFileBlameResponseItem
 from sentry.integrations.gitlab.utils import get_rate_limit_info_from_response
 from sentry.integrations.source_code_management.commit_context import (
@@ -19,7 +20,12 @@ from sentry.integrations.source_code_management.commit_context import (
     SourceLineInfo,
 )
 from sentry.integrations.types import EventLifecycleOutcome
-from sentry.shared_integrations.exceptions import ApiError, ApiRateLimitedError, ApiRetryError
+from sentry.shared_integrations.exceptions import (
+    ApiError,
+    ApiHostError,
+    ApiRateLimitedError,
+    ApiRetryError,
+)
 from sentry.testutils.silo import control_silo_test
 from sentry.users.models.identity import Identity
 from sentry.utils.cache import cache
@@ -49,6 +55,19 @@ class GitLabClientTest(GitLabTestCase):
         self.repo = self.create_gitlab_repo(name="Test-Org/foo", external_id=123)
         self.original_identity_data = dict(self.gitlab_client.identity.data)
         self.gitlab_id = 123
+
+
+@control_silo_test
+class GitLabGetAccessTokenTest(GitLabClientTest):
+    def test_returns_token_dict(self) -> None:
+        result = self.gitlab_client.get_access_token()
+        expected_token = self.gitlab_client.identity.data["access_token"]
+        assert result == {"access_token": expected_token, "permissions": None}
+
+    def test_returns_none_when_token_empty(self) -> None:
+        self.gitlab_client.identity.data["access_token"] = ""
+        result = self.gitlab_client.get_access_token()
+        assert result is None
 
 
 @control_silo_test
@@ -235,6 +254,33 @@ class GitlabRefreshAuthTest(GitLabClientTest):
         assert halt1.args[0] == EventLifecycleOutcome.HALTED  # check_file
         assert halt2.args[0] == EventLifecycleOutcome.SUCCESS
 
+    @responses.activate
+    @mock.patch("requests.sessions.Session.send")
+    @mock.patch("sentry.integrations.utils.metrics.EventLifecycle.record_event")
+    def test_get_stacktrace_link_restricted_ip_address(
+        self, mock_record: mock.MagicMock, mock_send: mock.MagicMock
+    ) -> None:
+        path = "/src/file.py"
+        ref = "537f2e94fbc489b2564ca3d6a5f0bd9afa38c3c3"
+        responses.add(
+            responses.HEAD,
+            f"https://example.gitlab.com/api/v4/projects/{self.gitlab_id}/repository/files/src%2Ffile.py?ref={ref}",
+            json={"text": 200},
+        )
+        mock_send.side_effect = RestrictedIPAddress
+
+        with pytest.raises(ApiHostError):
+            self.installation.get_stacktrace_link(self.repo, path, "master", None)
+
+        assert (
+            len(mock_record.mock_calls) == 4
+        )  # get_stacktrace_link calls check_file, which also has metrics
+        start1, start2, halt1, halt2 = mock_record.mock_calls
+        assert start1.args[0] == EventLifecycleOutcome.STARTED
+        assert start2.args[0] == EventLifecycleOutcome.STARTED  # check_file
+        assert halt1.args[0] == EventLifecycleOutcome.HALTED  # check_file
+        assert halt2.args[0] == EventLifecycleOutcome.HALTED
+
     @mock.patch(
         "sentry.integrations.gitlab.integration.GitlabIntegration.check_file",
         return_value=GITLAB_CODEOWNERS["html_url"],
@@ -276,6 +322,29 @@ class GitlabRefreshAuthTest(GitLabClientTest):
 
         resp = self.gitlab_client.get_commit(self.gitlab_id, commit)
         assert resp == orjson.loads(GET_COMMIT_RESPONSE)
+
+    @responses.activate
+    def test_get_repository_tree(self) -> None:
+        tree_response = [
+            {
+                "id": "a1e8f8d7",
+                "name": "html",
+                "type": "tree",
+                "path": "files/html",
+                "mode": "040000",
+            },
+        ]
+        responses.add(
+            method=responses.GET,
+            url=f"https://example.gitlab.com/api/v4/projects/{self.gitlab_id}/repository/tree",
+            json=tree_response,
+        )
+        resp = self.gitlab_client.get_repository_tree(
+            str(self.gitlab_id), ref="main", recursive=True
+        )
+        assert resp == tree_response
+        assert "ref=main" in responses.calls[0].request.url
+        assert "recursive=true" in responses.calls[0].request.url
 
     @responses.activate
     def test_get_rate_limit_info_from_response(self) -> None:

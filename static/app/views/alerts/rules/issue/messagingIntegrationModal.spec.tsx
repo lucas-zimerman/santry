@@ -9,7 +9,7 @@ import {
   ModalBody,
   ModalFooter,
 } from 'sentry/components/globalModal/components';
-import MessagingIntegrationModal from 'sentry/views/alerts/rules/issue/messagingIntegrationModal';
+import {MessagingIntegrationModal} from 'sentry/views/alerts/rules/issue/messagingIntegrationModal';
 import {MessagingIntegrationAnalyticsView} from 'sentry/views/alerts/rules/issue/setupMessagingIntegrationButton';
 
 jest.mock('sentry/actionCreators/modal');
@@ -26,8 +26,8 @@ describe('MessagingIntegrationModal', () => {
       closeModal={closeModal}
       Header={makeClosableHeader(() => {})}
       Body={ModalBody}
-      headerContent={'Connect with a messaging tool'}
-      bodyContent={'Receive alerts and digests right where you work.'}
+      headerContent="Connect with a messaging tool"
+      bodyContent="Receive alerts and digests right where you work."
       providers={providers}
       CloseButton={makeCloseButton(() => {})}
       Footer={ModalFooter}

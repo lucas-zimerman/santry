@@ -3,8 +3,8 @@ import {OrganizationFixture} from 'sentry-fixture/organization';
 
 import {render, screen, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import IssueListContainer from 'sentry/views/issueList';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {IssueListContainer} from 'sentry/views/issueList';
 import {IssueSortOptions} from 'sentry/views/issueList/utils';
 
 describe('IssueListContainer', () => {
@@ -12,9 +12,7 @@ describe('IssueListContainer', () => {
     children: <div>Foo</div>,
   };
 
-  const organization = OrganizationFixture({
-    features: ['enforce-stacked-navigation'],
-  });
+  const organization = OrganizationFixture();
 
   const initialRouterConfig = {
     location: {
@@ -28,14 +26,11 @@ describe('IssueListContainer', () => {
   describe('issue views', () => {
     beforeEach(() => {
       PageFiltersStore.init();
-      PageFiltersStore.onInitializeUrlState(
-        {
-          projects: [],
-          environments: [],
-          datetime: {start: null, end: null, period: '14d', utc: null},
-        },
-        new Set(['projects'])
-      );
+      PageFiltersStore.onInitializeUrlState({
+        projects: [],
+        environments: [],
+        datetime: {start: null, end: null, period: '14d', utc: null},
+      });
 
       MockApiClient.addMockResponse({
         url: '/organizations/org-slug/group-search-views/100/',

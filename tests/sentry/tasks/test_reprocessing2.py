@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import uuid
 from time import time
+from typing import Any
 from unittest import mock
 
 import pytest
 
-from sentry.attachments import attachment_cache
+from sentry.attachments import get_attachments_for_event
 from sentry.conf.server import DEFAULT_GROUPING_CONFIG
 from sentry.event_manager import EventManager
 from sentry.grouping.enhancer import EnhancementsConfig
@@ -18,7 +19,7 @@ from sentry.models.groupassignee import GroupAssignee
 from sentry.models.groupredirect import GroupRedirect
 from sentry.models.userreport import UserReport
 from sentry.plugins.base.v2 import Plugin2
-from sentry.reprocessing2 import is_group_finished
+from sentry.reprocessing2 import is_group_finished, start_group_reprocessing
 from sentry.services import eventstore
 from sentry.services.eventstore.models import Event
 from sentry.services.eventstore.processing import event_processing_store
@@ -29,21 +30,8 @@ from sentry.testutils.helpers.task_runner import BurstTaskRunner
 from sentry.testutils.pytest.fixtures import django_db_all
 from sentry.testutils.skips import requires_snuba
 from sentry.types.activity import ActivityType
-from sentry.utils.cache import cache_key_for_event
 
 pytestmark = [requires_snuba]
-
-
-def _create_event_attachment(evt, type):
-    EventAttachment.objects.create(
-        event_id=evt.event_id,
-        group_id=evt.group_id,
-        project_id=evt.project_id,
-        type=type,
-        name="foo",
-        size=len("hello world"),
-        blob_path=":hello world",
-    )
 
 
 def _create_user_report(evt):
@@ -125,7 +113,6 @@ def test_basic(
         old_tombstone_fn(*args, **kwargs)
 
     with mock.patch("sentry.eventstream.backend.tombstone_events_unsafe", tombstone_called):
-
         abs_count = 0
 
         @register_event_preprocessor
@@ -171,6 +158,7 @@ def test_basic(
         old_event = event
 
         with BurstTaskRunner() as burst:
+            assert event.group_id
             reprocess_group(default_project.id, event.group_id)
 
             burst(max_jobs=100)
@@ -251,6 +239,7 @@ def test_concurrent_events_go_into_new_group(
     )
 
     with BurstTaskRunner() as burst_reprocess:
+        assert event.group_id is not None
         reprocess_group(default_project.id, event.group_id)
 
         assert event.group_id is not None
@@ -382,9 +371,8 @@ def test_attachments_and_userfeedback(
         extra.setdefault("processing_counter", 0)
         extra["processing_counter"] += 1
 
-        cache_key = cache_key_for_event(data)
-        attachments = attachment_cache.get(cache_key)
-        extra.setdefault("attachments", []).append([attachment.type for attachment in attachments])
+        attachments = get_attachments_for_event(data)
+        extra.setdefault("attachments", []).extend(attachment.type for attachment in attachments)
 
         return data
 
@@ -405,13 +393,23 @@ def test_attachments_and_userfeedback(
     event = eventstore.backend.get_event_by_id(default_project.id, event_id)
     assert event is not None
 
-    for evt in (event, event_to_delete):
+    events: list[Any] = [event, event_to_delete]
+    for evt in events:
         for type in ("event.attachment", "event.minidump"):
-            _create_event_attachment(evt, type)
+            EventAttachment.objects.create(
+                event_id=evt.event_id,
+                group_id=evt.group_id,
+                project_id=evt.project_id,
+                type=type,
+                name="foo",
+                size=len("hello world"),
+                blob_path=":hello world",
+            )
 
         _create_user_report(evt)
 
     with BurstTaskRunner() as burst:
+        assert event.group_id
         reprocess_group(default_project.id, event.group_id, max_events=1)
 
         burst(max_jobs=100)
@@ -421,7 +419,7 @@ def test_attachments_and_userfeedback(
     assert new_event.group_id is not None
     assert new_event.group_id != event.group_id
 
-    assert new_event.data["extra"]["attachments"] == [["event.minidump"]]
+    assert new_event.data["extra"]["attachments"] == ["event.minidump"]
 
     att, mdmp = EventAttachment.objects.filter(project_id=default_project.id).order_by("type")
     assert att.group_id == mdmp.group_id == new_event.group_id
@@ -449,7 +447,6 @@ def test_nodestore_missing(
     remaining_events,
     django_cache,
 ):
-
     event_id = process_and_save({"message": "hello world", "platform": "python"})
     event = eventstore.backend.get_event_by_id(default_project.id, event_id)
     assert event is not None
@@ -457,6 +454,7 @@ def test_nodestore_missing(
     old_group = event.group
 
     with BurstTaskRunner() as burst:
+        assert event.group_id
         reprocess_group(
             default_project.id, event.group_id, max_events=1, remaining_events=remaining_events
         )
@@ -534,6 +532,7 @@ def test_apply_new_fingerprinting_rules(
     ):
         # Reprocess
         with BurstTaskRunner() as burst_reprocess:
+            assert event1.group_id
             reprocess_group(default_project.id, event1.group_id)
             burst_reprocess(max_jobs=100)
 
@@ -568,7 +567,7 @@ def test_apply_new_stack_trace_rules(
     process_and_save,
 ):
     """
-    Assert that after changing stack trace rules, the new grouping config
+    Assert that after changing stacktrace rules, the new grouping config
     is respected by reprocessing.
     """
 
@@ -622,7 +621,7 @@ def test_apply_new_stack_trace_rules(
 
     original_grouping_config = event1.data["grouping_config"]
 
-    # Different group, because different stack trace
+    # Different group, because different stacktrace
     assert event1.group.id != event2.group.id
     original_issue_id = event1.group.id
 
@@ -638,6 +637,8 @@ def test_apply_new_stack_trace_rules(
     ):
         # Reprocess
         with BurstTaskRunner() as burst_reprocess:
+            assert event1.group_id
+            assert event2.group_id
             reprocess_group(default_project.id, event1.group_id)
             reprocess_group(default_project.id, event2.group_id)
             burst_reprocess(max_jobs=100)
@@ -647,7 +648,7 @@ def test_apply_new_stack_trace_rules(
     assert is_group_finished(event1.group_id)
     assert is_group_finished(event2.group_id)
 
-    # Events should now be in same group because of stack trace rule
+    # Events should now be in same group because of stacktrace rule
     event1 = eventstore.backend.get_event_by_id(default_project.id, event_id1)
     event2 = eventstore.backend.get_event_by_id(default_project.id, event_id2)
     assert event1 is not None
@@ -689,3 +690,20 @@ def test_finish_reprocessing(default_project) -> None:
     )
     assert len(redirects) == 1
     assert redirects[0].group_id == new_group.id
+
+
+@django_db_all
+def test_reprocessing_an_ongoing_reprocessing(default_project) -> None:
+    # Pretend that the old group has more than one activity still connected:
+    old_group = Group.objects.create(project=default_project, data={})
+
+    new_group_id = start_group_reprocessing(default_project.id, old_group.id, "delete")
+
+    with pytest.raises(RuntimeError) as e:
+        start_group_reprocessing(default_project.id, new_group_id, "delete")
+    assert "Cannot reprocess group that is being reprocessed to" in str(e)
+
+    finish_reprocessing(default_project.id, old_group.id)
+    assert Group.objects.get(id=new_group_id).data == {}
+    # This should work now, i.e. not raise an exception like above
+    start_group_reprocessing(default_project.id, new_group_id, "delete")

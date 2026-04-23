@@ -1,53 +1,49 @@
-import {Fragment, useContext, useEffect, useState} from 'react';
-import {useTheme} from '@emotion/react';
-import styled from '@emotion/styled';
-import {PlatformIcon} from 'platformicons';
+import {useCallback, useContext, useEffect, useMemo, useRef, useState} from 'react';
+import {useQuery} from '@tanstack/react-query';
 
-import InteractionStateLayer from 'sentry/components/core/interactionStateLayer';
-import {Container, Flex} from 'sentry/components/core/layout';
-import {Link} from 'sentry/components/core/link';
-import {Text} from 'sentry/components/core/text';
+import {Container} from '@sentry/scraps/layout';
+
 import * as Layout from 'sentry/components/layouts/thirds';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Pagination from 'sentry/components/pagination';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import SearchBar from 'sentry/components/searchBar';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
-import {SimpleTable} from 'sentry/components/tables/simpleTable';
-import TimeSince from 'sentry/components/timeSince';
-import {IconCheckmark, IconCommit} from 'sentry/icons';
+import {LoadingError} from 'sentry/components/loadingError';
+import {
+  getPreprodBuildsDisplay,
+  PreprodBuildsDisplay,
+} from 'sentry/components/preprod/preprodBuildsDisplay';
+import {PreprodBuildsSearchControls} from 'sentry/components/preprod/preprodBuildsSearchControls';
+import {PreprodBuildsTable} from 'sentry/components/preprod/preprodBuildsTable';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
-import type {Organization} from 'sentry/types/organization';
-import type {Project} from 'sentry/types/project';
-import {browserHistory} from 'sentry/utils/browserHistory';
-import {formatBytesBase10} from 'sentry/utils/bytes/formatBytesBase10';
-import {useApiQuery, type UseApiQueryResult} from 'sentry/utils/queryClient';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {decodeScalar} from 'sentry/utils/queryString';
-import type RequestError from 'sentry/utils/requestError/requestError';
-import useLocationQuery from 'sentry/utils/url/useLocationQuery';
+import {useLocationQuery} from 'sentry/utils/url/useLocationQuery';
 import {useDebouncedValue} from 'sentry/utils/useDebouncedValue';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
 import {formatVersion} from 'sentry/utils/versions/formatVersion';
+import {usePreprodBuildsAnalytics} from 'sentry/views/preprod/hooks/usePreprodBuildsAnalytics';
 import type {BuildDetailsApiResponse} from 'sentry/views/preprod/types/buildDetailsTypes';
-import type {ListBuildsApiResponse} from 'sentry/views/preprod/types/listBuildsTypes';
-import {getPlatformIconFromPlatform} from 'sentry/views/preprod/utils/labelUtils';
+import {buildDetailsApiOptions} from 'sentry/views/preprod/utils/buildDetailsApiOptions';
+import {getUpdatedQueryForDisplay} from 'sentry/views/preprod/utils/installableQueryUtils';
 import {ReleaseContext} from 'sentry/views/releases/detail';
 
-import {EmptyState} from './emptyState';
+import {PreprodOnboarding} from './preprodOnboarding';
 
-interface PreprodBuildsProps {
-  organization: Organization;
-  projectSlug: Project['slug'];
-}
-
-function PreprodBuildsList({organization, projectSlug}: PreprodBuildsProps) {
+export default function PreprodBuilds() {
+  const organization = useOrganization();
+  const releaseContext = useContext(ReleaseContext);
+  const projectId = releaseContext.project.id;
+  const projectSlug = releaseContext.project.slug;
+  const projectPlatform = releaseContext.project.platform;
   const params = useParams<{release: string}>();
+  const navigate = useNavigate();
   const location = useLocation();
-  const theme = useTheme();
+  const activeDisplay = useMemo(
+    () => getPreprodBuildsDisplay(location.query.display),
+    [location.query.display]
+  );
 
   const {query: urlSearchQuery, cursor} = useLocationQuery({
     fields: {
@@ -58,14 +54,20 @@ function PreprodBuildsList({organization, projectSlug}: PreprodBuildsProps) {
 
   const [localSearchQuery, setLocalSearchQuery] = useState(urlSearchQuery || '');
   const debouncedLocalSearchQuery = useDebouncedValue(localSearchQuery);
+  const prevDebouncedRef = useRef(debouncedLocalSearchQuery);
 
   useEffect(() => {
     setLocalSearchQuery(urlSearchQuery || '');
   }, [urlSearchQuery]);
 
   useEffect(() => {
+    if (debouncedLocalSearchQuery === prevDebouncedRef.current) {
+      return;
+    }
+    prevDebouncedRef.current = debouncedLocalSearchQuery;
+
     if (debouncedLocalSearchQuery !== (urlSearchQuery || '')) {
-      browserHistory.push({
+      navigate({
         ...location,
         query: {
           ...location.query,
@@ -74,51 +76,107 @@ function PreprodBuildsList({organization, projectSlug}: PreprodBuildsProps) {
         },
       });
     }
-  }, [debouncedLocalSearchQuery, urlSearchQuery, location]);
+  }, [debouncedLocalSearchQuery, urlSearchQuery, location, navigate]);
 
   const queryParams: Record<string, any> = {
     per_page: 25,
-    release_version: params.release,
   };
 
   if (cursor) {
     queryParams.cursor = cursor;
   }
 
-  if (urlSearchQuery?.trim()) {
-    queryParams.query = urlSearchQuery.trim();
+  // Parse release version (format: "app_id@version+build_number" or "app_id@version")
+  // and convert to structured query.
+  let releaseQuery = '';
+  if (params.release) {
+    const [appId, versionPart] = params.release.split('@');
+    const buildVersion = versionPart?.split('+')[0];
+    if (appId && buildVersion) {
+      releaseQuery = `app_id:${appId} build_version:${buildVersion}`;
+    }
+  }
+
+  const sizeStateFilter =
+    activeDisplay === PreprodBuildsDisplay.SIZE ? '!size_state:not_ran' : '';
+
+  // Combine release filter with user search query
+  const combinedQuery = [releaseQuery, urlSearchQuery?.trim(), sizeStateFilter]
+    .filter(Boolean)
+    .join(' ');
+
+  if (combinedQuery) {
+    queryParams.query = combinedQuery;
+  }
+
+  if (projectId) {
+    queryParams.project = projectId;
   }
 
   const {
-    data: buildsData,
+    data: buildsResponse,
     isPending: isLoadingBuilds,
     error: buildsError,
     refetch,
-    getResponseHeader,
-  }: UseApiQueryResult<
-    ListBuildsApiResponse,
-    RequestError
-  > = useApiQuery<ListBuildsApiResponse>(
-    [
-      `/projects/${organization.slug}/${projectSlug}/preprodartifacts/list-builds/`,
-      {query: queryParams},
-    ],
-    {
-      staleTime: 0,
-      enabled: !!projectSlug && !!params.release,
-    }
-  );
+  } = useQuery({
+    ...buildDetailsApiOptions({organization, queryParams}),
+    select: selectJsonWithHeaders,
+    enabled: !!projectSlug && !!params.release,
+  });
 
-  const handleSearch = (query: string) => {
+  const handleSearch = (query: string, _state?: {queryIsValid: boolean}) => {
     setLocalSearchQuery(query);
   };
 
-  const builds = buildsData?.builds || [];
-  const pageLinks = getResponseHeader?.('Link') || null;
+  const handleDisplayChange = useCallback(
+    (display: PreprodBuildsDisplay) => {
+      navigate({
+        ...location,
+        query: {
+          ...location.query,
+          cursor: undefined,
+          display,
+          query: getUpdatedQueryForDisplay(urlSearchQuery, display),
+        },
+      });
+    },
+    [location, navigate, urlSearchQuery]
+  );
+
+  const builds = buildsResponse?.json ?? [];
+  const pageLinks = buildsResponse?.headers.Link ?? null;
+
+  const hasSearchQuery = !!urlSearchQuery?.trim();
+  const showOnboarding = builds.length === 0 && !hasSearchQuery && !isLoadingBuilds;
+
+  usePreprodBuildsAnalytics({
+    builds,
+    cursor,
+    display: activeDisplay,
+    enabled: !!projectSlug && !!params.release,
+    error: !!buildsError,
+    isLoading: isLoadingBuilds,
+    pageSource: 'releases_details_preprod_builds',
+    projectCount: 1,
+    searchQuery: urlSearchQuery,
+  });
+
+  const handleBuildRowClick = useCallback(
+    (build: BuildDetailsApiResponse) => {
+      trackAnalytics('preprod.builds.release.build_row_clicked', {
+        organization,
+        project_type: projectPlatform ?? null,
+        platform: build.app_info?.platform ?? null,
+        build_id: build.id,
+        project_slug: projectSlug,
+      });
+    },
+    [organization, projectPlatform, projectSlug]
+  );
 
   return (
     <Layout.Body>
-      <Layout.Main fullWidth>
+      <Layout.Main width="full">
         <SentryDocumentTitle
           title={t('Preprod Builds - Release %s', formatVersion(params.release))}
           orgSlug={organization.slug}
@@ -126,139 +184,29 @@ function PreprodBuildsList({organization, projectSlug}: PreprodBuildsProps) {
         />
         {buildsError && <LoadingError onRetry={refetch} />}
         <Container paddingBottom="md">
-          <SearchBar
-            placeholder={t('Search by build, SHA, branch name, or pull request')}
+          <PreprodBuildsSearchControls
+            initialQuery={localSearchQuery}
+            display={activeDisplay}
+            projects={[Number(projectId)]}
             onChange={handleSearch}
-            query={localSearchQuery}
+            onDisplayChange={handleDisplayChange}
           />
         </Container>
-        {isLoadingBuilds ? (
-          <LoadingIndicator />
-        ) : builds.length ? (
-          <Fragment>
-            <Panel>
-              <PanelBody>
-                <SimpleTableWithColumns>
-                  <SimpleTable.Header>
-                    <SimpleTable.HeaderCell>{t('APP')}</SimpleTable.HeaderCell>
-                    <SimpleTable.HeaderCell>{t('BUILD')}</SimpleTable.HeaderCell>
-                    <SimpleTable.HeaderCell>{t('INSTALL SIZE')}</SimpleTable.HeaderCell>
-                    <SimpleTable.HeaderCell>{t('DOWNLOAD SIZE')}</SimpleTable.HeaderCell>
-                    <SimpleTable.HeaderCell>{t('CREATED')}</SimpleTable.HeaderCell>
-                  </SimpleTable.Header>
-                  {builds.map((build: BuildDetailsApiResponse) => (
-                    <SimpleTable.Row key={build.id}>
-                      <Link
-                        to={`/organizations/${organization.slug}/preprod/${projectSlug}/${build.id}`}
-                        style={{
-                          display: 'contents',
-                          cursor: 'pointer',
-                          color: theme.textColor,
-                        }}
-                      >
-                        <InteractionStateLayer />
-                        <SimpleTable.RowCell justify="flex-start">
-                          <Flex direction="column" gap="xs">
-                            <Flex align="center" gap="sm">
-                              {build.app_info?.platform && (
-                                <PlatformIcon
-                                  platform={getPlatformIconFromPlatform(
-                                    build.app_info.platform
-                                  )}
-                                />
-                              )}
-                              <Text size="lg" bold>
-                                {build.app_info?.name || 'Unknown App'}
-                              </Text>
-                            </Flex>
-                            <Text size="sm" variant="muted">
-                              {build.app_info?.app_id || 'Unknown ID'}
-                            </Text>
-                          </Flex>
-                        </SimpleTable.RowCell>
-
-                        <SimpleTable.RowCell justify="flex-start">
-                          <Flex direction="column" gap="xs">
-                            <Flex align="center" gap="xs">
-                              <Text size="lg" bold>
-                                {build.app_info?.version || 'Unknown'}
-                              </Text>
-                              <Text size="lg" bold>
-                                ({build.app_info?.build_number || 'Unknown'})
-                              </Text>
-                              {build.state === 3 && (
-                                <IconCheckmark size="sm" color="green300" />
-                              )}
-                            </Flex>
-                            <Flex align="center" gap="xs">
-                              <IconCommit size="xs" />
-                              <Text size="sm" variant="muted">
-                                #{build.vcs_info?.head_sha?.slice(0, 7) || 'N/A'}
-                              </Text>
-                              <Text size="sm" variant="muted">
-                                -
-                              </Text>
-                              <Text size="sm" variant="muted">
-                                {build.vcs_info?.head_ref || 'main'}
-                              </Text>
-                            </Flex>
-                          </Flex>
-                        </SimpleTable.RowCell>
-
-                        <SimpleTable.RowCell>
-                          {build.size_info?.install_size_bytes
-                            ? formatBytesBase10(build.size_info.install_size_bytes)
-                            : '-'}
-                        </SimpleTable.RowCell>
-
-                        <SimpleTable.RowCell>
-                          {build.size_info?.download_size_bytes
-                            ? formatBytesBase10(build.size_info.download_size_bytes)
-                            : '-'}
-                        </SimpleTable.RowCell>
-
-                        <SimpleTable.RowCell>
-                          {build.app_info?.date_added ? (
-                            <TimeSince
-                              date={build.app_info.date_added}
-                              unitStyle="short"
-                            />
-                          ) : (
-                            '-'
-                          )}
-                        </SimpleTable.RowCell>
-                      </Link>
-                    </SimpleTable.Row>
-                  ))}
-                </SimpleTableWithColumns>
-              </PanelBody>
-            </Panel>
-            <Pagination pageLinks={pageLinks} />
-          </Fragment>
+        {showOnboarding ? (
+          <PreprodOnboarding projectPlatform={projectPlatform || null} />
         ) : (
-          <EmptyState>
-            {t('There are no preprod builds associated with this project.')}
-          </EmptyState>
+          <PreprodBuildsTable
+            builds={builds}
+            display={activeDisplay}
+            isLoading={isLoadingBuilds}
+            error={buildsError}
+            pageLinks={pageLinks}
+            organizationSlug={organization.slug}
+            onRowClick={handleBuildRowClick}
+            hasSearchQuery={hasSearchQuery}
+          />
         )}
       </Layout.Main>
     </Layout.Body>
   );
 }
-
-function PreprodBuilds() {
-  const organization = useOrganization();
-  const releaseContext = useContext(ReleaseContext);
-
-  return (
-    <PreprodBuildsList
-      organization={organization}
-      projectSlug={releaseContext.project.slug}
-    />
-  );
-}
-
-const SimpleTableWithColumns = styled(SimpleTable)`
-  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
-`;
-
-export default PreprodBuilds;

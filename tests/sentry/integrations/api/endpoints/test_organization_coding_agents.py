@@ -15,11 +15,13 @@ from sentry.integrations.services.integration.serial import serialize_integratio
 from sentry.seer.autofix.constants import AutofixStatus
 from sentry.seer.autofix.utils import (
     AutofixState,
+    AutofixTriggerSource,
     CodingAgentProviderType,
     CodingAgentState,
     CodingAgentStatus,
 )
-from sentry.seer.models import SeerRepoDefinition
+from sentry.seer.models import PreferenceResponse, SeerRepoDefinition
+from sentry.shared_integrations.exceptions import ApiError
 from sentry.testutils.cases import APITestCase
 
 
@@ -83,7 +85,7 @@ class BaseOrganizationCodingAgentsTest(APITestCase):
 
     endpoint = "sentry-api-0-organization-coding-agents"
 
-    def setUp(self):
+    def setUp(self) -> None:
         super().setUp()
         self.login_as(self.user)
         self._setup_mock_integration()
@@ -135,6 +137,8 @@ class BaseOrganizationCodingAgentsTest(APITestCase):
         if repos is None:
             repos = [
                 SeerRepoDefinition(
+                    organization_id=self.organization.id,
+                    integration_id=str(self.integration.id),
                     owner="test",
                     name="repo",
                     external_id="123",
@@ -182,7 +186,7 @@ class BaseOrganizationCodingAgentsTest(APITestCase):
                     return_value=integrations,
                 ),
                 patch(
-                    "sentry.integrations.coding_agent.utils.get_coding_agent_providers",
+                    "sentry.seer.autofix.coding_agent.get_coding_agent_providers",
                     return_value=["test_provider"],
                 ),
             ):
@@ -191,30 +195,65 @@ class BaseOrganizationCodingAgentsTest(APITestCase):
         return mock_context()
 
 
+class StoreCodingAgentStatesToSeerTest(APITestCase):
+    def test_batch_function_posts_correct_payload(self) -> None:
+        from datetime import UTC, datetime
+        from unittest.mock import MagicMock, patch
+
+        from sentry.seer.autofix.coding_agent import store_coding_agent_states_to_seer
+        from sentry.seer.autofix.utils import (
+            CodingAgentProviderType,
+            CodingAgentState,
+            CodingAgentStatus,
+        )
+
+        state1 = CodingAgentState(
+            id="a1",
+            status=CodingAgentStatus.PENDING,
+            provider=CodingAgentProviderType.CURSOR_BACKGROUND_AGENT,
+            name="Agent 1",
+            started_at=datetime.now(UTC),
+        )
+        state2 = CodingAgentState(
+            id="a2",
+            status=CodingAgentStatus.PENDING,
+            provider=CodingAgentProviderType.CURSOR_BACKGROUND_AGENT,
+            name="Agent 2",
+            started_at=datetime.now(UTC),
+        )
+
+        mocked_response = MagicMock()
+        mocked_response.status = 200
+        mocked_response.data = b"{}"
+
+        with patch(
+            "sentry.seer.autofix.coding_agent.make_store_coding_agent_states_request",
+            return_value=mocked_response,
+        ) as mocked_call:
+            store_coding_agent_states_to_seer(run_id=5, coding_agent_states=[state1, state2])
+
+            mocked_call.assert_called_once()
+            body = mocked_call.call_args[0][0]
+            assert body["run_id"] == 5
+            assert isinstance(body["coding_agent_states"], list)
+            assert len(body["coding_agent_states"]) == 2
+            ids = {s["id"] for s in body["coding_agent_states"]}
+            assert ids == {"a1", "a2"}
+
+
 class OrganizationCodingAgentsGetTest(BaseOrganizationCodingAgentsTest):
     """Test class for GET endpoint functionality."""
 
-    def test_feature_flag_disabled(self):
-        """Test GET request when feature flag is disabled."""
-        organization = self.create_organization(owner=self.user)
-
-        with self.feature({"organizations:seer-coding-agent-integrations": False}):
-            response = self.get_response(organization.slug)
-
-        assert response.status_code == 404
-        assert response.data["detail"] == "Feature not available"
-
-    def test_no_integrations(self):
+    def test_no_integrations(self) -> None:
         """Test GET request with no coding agent integrations."""
         organization = self.create_organization(owner=self.user)
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_response(organization.slug)
+        response = self.get_response(organization.slug)
 
         assert response.status_code == 200
         assert response.data["integrations"] == []
 
-    def test_with_mock_integration(self):
+    def test_with_mock_integration(self) -> None:
         """Test GET request with mocked coding agent integration."""
         organization = self.create_organization(owner=self.user)
 
@@ -224,7 +263,6 @@ class OrganizationCodingAgentsGetTest(BaseOrganizationCodingAgentsTest):
         mock_integration.provider = "test_provider"
 
         with (
-            self.feature({"organizations:seer-coding-agent-integrations": True}),
             self.mock_integration_service_calls(integrations=[mock_integration]),
         ):
             response = self.get_response(organization.slug)
@@ -247,29 +285,27 @@ class OrganizationCodingAgentsGetTest(BaseOrganizationCodingAgentsTest):
         mock_integration.provider = "github"
         mock_get_integrations.return_value = [mock_integration]
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
-            response = self.get_success_response(self.organization.slug)
+        response = self.get_success_response(self.organization.slug)
 
-            assert "integrations" in response.data
-            integrations = response.data["integrations"]
-            assert len(integrations) == 1
-            integration_data = integrations[0]
+        assert "integrations" in response.data
+        integrations = response.data["integrations"]
+        assert len(integrations) == 1
+        integration_data = integrations[0]
 
-            # The endpoint only returns basic integration data
-            assert integration_data["id"] == str(self.integration.id)
-            assert integration_data["name"] == "GitHub"
-            assert integration_data["provider"] == "github"
+        # The endpoint only returns basic integration data
+        assert integration_data["id"] == str(self.integration.id)
+        assert integration_data["name"] == "GitHub"
+        assert integration_data["provider"] == "github"
 
     @patch("sentry.integrations.services.integration.integration_service.get_integrations")
     def test_handles_integration_processing_error(self, mock_get_integrations):
         """Test GET endpoint handles empty integrations gracefully."""
         mock_get_integrations.return_value = []
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
-            response = self.get_success_response(self.organization.slug)
+        response = self.get_success_response(self.organization.slug)
 
-            assert "integrations" in response.data
-            assert len(response.data["integrations"]) == 0
+        assert "integrations" in response.data
+        assert len(response.data["integrations"]) == 0
 
     @patch("sentry.integrations.services.integration.integration_service.get_integrations")
     def test_handles_service_error(self, mock_get_integrations):
@@ -277,9 +313,8 @@ class OrganizationCodingAgentsGetTest(BaseOrganizationCodingAgentsTest):
         # Mock service to raise an exception
         mock_get_integrations.side_effect = Exception("Service unavailable")
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
-            response = self.get_error_response(self.organization.slug, status_code=500)
-            assert response.status_code == 500
+        response = self.get_error_response(self.organization.slug, status_code=500)
+        assert response.status_code == 500
 
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integrations"
@@ -291,47 +326,187 @@ class OrganizationCodingAgentsGetTest(BaseOrganizationCodingAgentsTest):
         mock_get_org_integrations.return_value = [self.rpc_org_integration]
         mock_get_integration.return_value = None
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
+        response = self.get_success_response(self.organization.slug)
+
+        # Should skip integrations that can't be found
+        assert "integrations" in response.data
+        assert len(response.data["integrations"]) == 0
+
+    def _mock_github_copilot_integration(self):
+        mock = Mock()
+        mock.id = 99
+        mock.name = "GitHub Copilot"
+        mock.provider = "github_copilot"
+        return mock
+
+    def test_github_copilot_shown_when_installed_and_feature_flag_enabled(self):
+        """Test GET endpoint shows GitHub Copilot when installed and feature flag is enabled."""
+        copilot = self._mock_github_copilot_integration()
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            self.mock_integration_service_calls(integrations=[copilot]),
+        ):
             response = self.get_success_response(self.organization.slug)
 
-            # Should skip integrations that can't be found
-            assert "integrations" in response.data
-            assert len(response.data["integrations"]) == 0
+            integrations = response.data["integrations"]
+            assert len(integrations) == 1
+            assert integrations[0]["id"] is None
+            assert integrations[0]["name"] == "GitHub Copilot"
+            assert integrations[0]["provider"] == "github_copilot"
+            assert integrations[0]["requires_identity"] is True
+            assert integrations[0]["has_identity"] is False
+
+    def test_github_copilot_not_shown_when_not_installed(self):
+        """Test GET endpoint does not show GitHub Copilot when feature flag is on but integration is not installed."""
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            self.mock_integration_service_calls(integrations=[]),
+        ):
+            response = self.get_success_response(self.organization.slug)
+            assert response.data["integrations"] == []
+
+    @patch(
+        "sentry.integrations.api.endpoints.organization_coding_agents.github_copilot_identity_service"
+    )
+    def test_github_copilot_has_identity_true_when_authenticated(self, mock_identity_service):
+        """Test GET endpoint returns has_identity: True when user has GitHub Copilot OAuth token."""
+        mock_identity_service.get_access_token_for_user.return_value = "mock-access-token"
+        copilot = self._mock_github_copilot_integration()
+
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            self.mock_integration_service_calls(integrations=[copilot]),
+        ):
+            response = self.get_success_response(self.organization.slug)
+
+            integrations = response.data["integrations"]
+            assert len(integrations) == 1
+            assert integrations[0]["provider"] == "github_copilot"
+            assert integrations[0]["has_identity"] is True
+            mock_identity_service.get_access_token_for_user.assert_called_once_with(
+                user_id=self.user.id
+            )
+
+    @patch(
+        "sentry.integrations.api.endpoints.organization_coding_agents.github_copilot_identity_service"
+    )
+    def test_github_copilot_has_identity_false_when_not_authenticated(self, mock_identity_service):
+        """Test GET endpoint returns has_identity: False when user doesn't have GitHub Copilot OAuth token."""
+        mock_identity_service.get_access_token_for_user.return_value = None
+        copilot = self._mock_github_copilot_integration()
+
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            self.mock_integration_service_calls(integrations=[copilot]),
+        ):
+            response = self.get_success_response(self.organization.slug)
+
+            integrations = response.data["integrations"]
+            assert len(integrations) == 1
+            assert integrations[0]["provider"] == "github_copilot"
+            assert integrations[0]["has_identity"] is False
+            mock_identity_service.get_access_token_for_user.assert_called_once_with(
+                user_id=self.user.id
+            )
+
+    @patch(
+        "sentry.integrations.api.endpoints.organization_coding_agents.github_copilot_identity_service"
+    )
+    def test_github_copilot_handles_rpc_exception_gracefully(self, mock_identity_service):
+        """Test GET endpoint handles RPC exceptions gracefully when checking GitHub Copilot identity."""
+        from sentry.hybridcloud.rpc.service import RpcRemoteException
+
+        mock_identity_service.get_access_token_for_user.side_effect = RpcRemoteException(
+            "github_copilot_identity", "get_access_token_for_user", "Service unavailable"
+        )
+        copilot = self._mock_github_copilot_integration()
+
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            self.mock_integration_service_calls(integrations=[copilot]),
+        ):
+            response = self.get_success_response(self.organization.slug)
+
+            integrations = response.data["integrations"]
+            assert len(integrations) == 1
+            assert integrations[0]["provider"] == "github_copilot"
+            assert integrations[0]["has_identity"] is False
+            mock_identity_service.get_access_token_for_user.assert_called_once_with(
+                user_id=self.user.id
+            )
+
+    def test_github_copilot_not_shown_without_feature_flag(self) -> None:
+        """Test GET endpoint does not show GitHub Copilot without feature flag."""
+        with (
+            self.feature({"organizations:integrations-github-copilot-agent": False}),
+            self.mock_integration_service_calls(integrations=[]),
+        ):
+            response = self.get_success_response(self.organization.slug)
+
+            integrations = response.data["integrations"]
+            assert len(integrations) == 0
+
+
+class OrganizationCodingAgentsPostCodingDisabledTest(BaseOrganizationCodingAgentsTest):
+    """Test that the endpoint returns 403 when code generation is disabled.
+
+    The check lives in launch_coding_agents_for_run() which raises PermissionDenied.
+    """
+
+    def test_post_blocked_when_coding_disabled(self):
+        self.organization.update_option("sentry:enable_seer_coding", False)
+
+        data = {"integration_id": str(self.integration.id), "run_id": 123}
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=403, **data
+        )
+        assert response.data["detail"] == "Code generation is disabled for this organization"
 
 
 class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCodingAgentsTest):
     """Test class for POST endpoint parameter validation."""
 
-    def test_feature_flag_disabled(self):
-        """Test POST endpoint when feature flag is disabled."""
-        data = {"integration_id": "123"}
+    def test_missing_integration_id_and_provider(self) -> None:
+        """Test POST endpoint with missing integration_id and provider."""
+        data = {"run_id": 123}
         response = self.get_error_response(
-            self.organization.slug, method="post", status_code=404, **data
+            self.organization.slug, method="post", status_code=400, **data
         )
-        # POST returns plain string for disabled feature
-        assert response.data["detail"] == "Feature not available"
+        assert "non_field_errors" in response.data
+        assert "Either 'integration_id' or 'provider' must be provided" in str(
+            response.data["non_field_errors"]
+        )
 
-    def test_missing_integration_id(self):
-        """Test POST endpoint with missing integration_id."""
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400
-            )
-            # Serializer returns field error mapping
-            assert "integration_id" in response.data
-            assert "run_id" in response.data
+    def test_both_integration_id_and_provider_provided(self) -> None:
+        """Test POST endpoint with both integration_id and provider provided."""
+        data = {"run_id": 123, "integration_id": "123", "provider": "github_copilot"}
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        assert "non_field_errors" in response.data
+        assert "Only one of 'integration_id' or 'provider' should be provided" in str(
+            response.data["non_field_errors"]
+        )
 
-    def test_invalid_integration_id(self):
+    def test_invalid_integration_id(self) -> None:
         """Test POST endpoint with invalid integration_id."""
-        data = {"integration_id": "invalid_id"}
+        data = {"integration_id": "invalid_id", "run_id": 123}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            assert "integration_id" in response.data
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        assert "integration_id" in response.data
 
-    def test_non_coding_agent_integration(self):
+    def test_invalid_provider(self) -> None:
+        """Test POST endpoint with invalid provider (not enabled)."""
+        data = {"provider": "github_copilot", "run_id": 123}
+
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=403, **data
+        )
+        assert "GitHub Copilot is not enabled" in response.data["detail"]
+
+    def test_non_coding_agent_integration(self) -> None:
         """Test POST endpoint with non-coding agent integration."""
         # Create a non-coding agent integration (e.g., Slack)
         slack_integration = self.create_integration(
@@ -343,16 +518,13 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": str(slack_integration.id), "run_id": 123}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            # DRF ValidationError returns a list for non-field errors
-            assert response.data[0] == "Not a coding agent integration"
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        # DRF ValidationError returns a list for non-field errors
+        assert response.data[0] == "Not a coding agent integration"
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -363,15 +535,12 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": "999", "run_id": 123}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=404, **data
-            )
-            assert response.data["detail"] == "Integration not found"
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=404, **data
+        )
+        assert response.data["detail"] == "Integration not found"
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -386,15 +555,12 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=404, **data
-            )
-            assert response.data["detail"] == "Integration not found"
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=404, **data
+        )
+        assert response.data["detail"] == "Integration not found"
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -409,15 +575,12 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": str(self.integration.id), "run_id": ""}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            assert "run_id" in response.data
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        assert "run_id" in response.data
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -437,15 +600,12 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": str(self.integration.id), "run_id": None}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            assert "run_id" in response.data
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        assert "run_id" in response.data
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -462,15 +622,12 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": str(self.integration.id), "run_id": "not_a_number"}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            assert "run_id" in response.data
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        assert "run_id" in response.data
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -493,22 +650,20 @@ class OrganizationCodingAgentsPostParameterValidationTest(BaseOrganizationCoding
 
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
-        with self.feature({"organizations:seer-coding-agent-integrations": True}):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            # DRF ValidationError returns a list for non-field errors
-            assert response.data[0] == "Invalid coding agent integration"
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        # DRF ValidationError returns a list for non-field errors
+        assert response.data[0] == "Invalid coding agent integration"
 
 
 class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
     """Test class for POST endpoint launch functionality."""
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -517,6 +672,7 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -525,6 +681,9 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         # Mock coding agent providers to include github
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Test coding agent prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -537,22 +696,22 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
+            assert response.data["launched_count"] >= 0
+            assert response.data["failed_count"] >= 0
 
-            # Verify prompt was called with default trigger_source
-            mock_get_prompt.assert_called_with(123, "solution")
+            # Verify prompt was called with default trigger_source and no instruction
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.SOLUTION, None, None)
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -561,6 +720,7 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -568,6 +728,9 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         """Test POST endpoint with all launch parameters."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Test prompt for all parameters"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -580,18 +743,15 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -615,18 +775,16 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
 
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            # POST returns plain string for this error path
-            assert response.data["detail"] == "Autofix state not found"
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=404, **data
+        )
+        # POST returns 404 NotFound for this error path
+        assert response.data["detail"] == "Autofix state not found"
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -635,6 +793,7 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -642,6 +801,9 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         """Test POST endpoint launches agents for multiple repositories."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Multi-repo test prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -649,12 +811,16 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
 
         multi_repo_list = [
             SeerRepoDefinition(
+                organization_id=self.organization.id,
+                integration_id=str(self.integration.id),
                 owner="owner1",
                 name="repo1",
                 external_id="123",
                 provider="github",
             ),
             SeerRepoDefinition(
+                organization_id=self.organization.id,
+                integration_id=str(self.integration.id),
                 owner="owner2",
                 name="repo2",
                 external_id="456",
@@ -676,19 +842,19 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
+            assert response.data["launched_count"] >= 0
+            assert response.data["failed_count"] >= 0
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -697,6 +863,7 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -704,6 +871,9 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         """Test POST endpoint continues with other repos when one repo fails."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Test prompt for repo launch error"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         # Create mock installation that fails for first repo
         failing_installation = MagicMock(spec=MockCodingAgentInstallation)
@@ -726,12 +896,16 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
 
         multi_repo_list = [
             SeerRepoDefinition(
+                organization_id=self.organization.id,
+                integration_id=str(self.integration.id),
                 owner="owner1",
                 name="repo1",
                 external_id="123",
                 provider="github",
             ),
             SeerRepoDefinition(
+                organization_id=self.organization.id,
+                integration_id=str(self.integration.id),
                 owner="owner2",
                 name="repo2",
                 external_id="456",
@@ -753,34 +927,44 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             # Should succeed because at least one repo launched successfully
             assert response.data["success"] is True
+            assert response.data["launched_count"] == 1
+            assert response.data["failed_count"] == 1
+            # Should have failure details
+            assert "failures" in response.data
+            assert len(response.data["failures"]) == 1
+            # One of the two repos should have failed
+            assert response.data["failures"][0]["repo_name"] in ["owner1/repo1", "owner2/repo2"]
+            assert "error_message" in response.data["failures"][0]
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
     @patch("sentry.integrations.services.integration.integration_service.get_integration")
-    def test_all_repos_fail_returns_error(
+    def test_all_repos_fail_returns_failures(
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
     ):
-        """Test POST endpoint returns error when all repos fail to launch."""
+        """Test POST endpoint returns failures when all repos fail to launch."""
         mock_get_providers.return_value = ["github"]
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         # Create mock installation that always fails
         failing_installation = MagicMock(spec=MockCodingAgentInstallation)
@@ -795,8 +979,22 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
 
         # Create multi-repo autofix state
         multi_repo_list = [
-            SeerRepoDefinition(owner="owner1", name="repo1", external_id="123", provider="github"),
-            SeerRepoDefinition(owner="owner2", name="repo2", external_id="456", provider="github"),
+            SeerRepoDefinition(
+                organization_id=self.organization.id,
+                integration_id=str(self.integration.id),
+                owner="owner1",
+                name="repo1",
+                external_id="123",
+                provider="github",
+            ),
+            SeerRepoDefinition(
+                organization_id=self.organization.id,
+                integration_id=str(self.integration.id),
+                owner="owner2",
+                name="repo2",
+                external_id="456",
+                provider="github",
+            ),
         ]
         mock_autofix_state = self._create_mock_autofix_state(repos=multi_repo_list)
         mock_autofix_state.steps = [
@@ -812,29 +1010,37 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
 
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=500, **data
-            )
-            assert response.data["detail"] == "No agents were launched"
+        response = self.get_success_response(self.organization.slug, method="post", **data)
+        # All repos failed, so success is False (but HTTP 200 is still returned)
+        assert response.data["success"] is False
+        assert response.data["launched_count"] == 0
+        assert response.data["failed_count"] == 2
+        # Should have failure details
+        assert "failures" in response.data
+        assert len(response.data["failures"]) == 2
+        # Check both repos failed
+        failed_repos = {f["repo_name"] for f in response.data["failures"]}
+        assert failed_repos == {"owner1/repo1", "owner2/repo2"}
+        # Each failure should have an error message
+        for failure in response.data["failures"]:
+            assert "error_message" in failure
+            assert failure["error_message"] != ""
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
     @patch("sentry.integrations.services.integration.integration_service.get_integration")
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer"
-    )
+    @patch("sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer")
     def test_seer_storage_failure_continues(
         self,
         mock_store_to_seer,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -842,6 +1048,9 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
         """Test POST endpoint continues when Seer storage fails."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Test prompt for seer storage failure"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
         mock_store_to_seer.return_value = False  # Simulate Seer storage failure
 
         mock_rpc_integration = self._create_mock_rpc_integration()
@@ -851,22 +1060,214 @@ class OrganizationCodingAgentsPostLaunchTest(BaseOrganizationCodingAgentsTest):
 
         data = {"integration_id": str(self.integration.id), "run_id": 123}
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
+        response = self.get_success_response(self.organization.slug, method="post", **data)
+        # Should still succeed even if Seer storage fails
+        assert response.data["success"] is True
+        assert response.data["launched_count"] >= 0
+        assert response.data["failed_count"] >= 0
+        # Verify Seer storage was attempted once in batch
+        mock_store_to_seer.assert_called_once()
+
+
+class OrganizationCodingAgentsPost403PermissionTest(BaseOrganizationCodingAgentsTest):
+    """Test class for POST endpoint 403 permission error handling."""
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_org_installation_403_returns_generic_failure_type(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint returns failure_type=generic for org installation 403s.
+
+        Only Copilot 403s indicate a GitHub App permissions issue. A 403 from an
+        org-installed integration (e.g. Cursor) is unrelated to Sentry GitHub App
+        permissions and should surface as a generic error.
+        """
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        failing_installation = MagicMock(spec=MockCodingAgentInstallation)
+        failing_installation.launch.side_effect = ApiError(
+            "Resource not accessible by integration", code=403
+        )
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_rpc_integration.get_installation = MagicMock(return_value=failing_installation)
+
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {"integration_id": str(self.integration.id), "run_id": 123}
+
+        response = self.get_success_response(self.organization.slug, method="post", **data)
+        assert response.data["success"] is False
+        assert response.data["failed_count"] >= 1
+        failure = response.data["failures"][0]
+        assert failure["failure_type"] == "generic"
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch("sentry.seer.autofix.coding_agent.GithubCopilotAgentClient")
+    @patch("sentry.seer.autofix.coding_agent.github_copilot_identity_service")
+    def test_copilot_403_returns_github_app_permissions_failure_type(
+        self,
+        mock_identity_service,
+        mock_copilot_client_class,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint returns failure_type=github_app_permissions for Copilot 403s.
+
+        When GitHub Copilot returns a 403, it indicates the Sentry GitHub App installation
+        lacks the required permissions (e.g. contents:write). The OAuth token permissions
+        are the intersection of the user's GitHub permissions and the Sentry GitHub App's
+        installation permissions.
+        """
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+        mock_identity_service.get_access_token_for_user.return_value = "test-copilot-token"
+
+        mock_client_instance = MagicMock()
+        mock_copilot_client_class.return_value = mock_client_instance
+        mock_client_instance.launch.side_effect = ApiError("Permission denied", code=403)
+
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {"provider": "github_copilot", "run_id": 123}
+
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            patch("sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer"),
+        ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
-            # Should still succeed even if Seer storage fails
-            assert response.data["success"] is True
-            # Verify Seer storage was attempted
-            mock_store_to_seer.assert_called_once()
+            assert response.data["success"] is False
+            assert response.data["failed_count"] >= 1
+            failure = response.data["failures"][0]
+            assert failure["failure_type"] == "github_app_permissions"
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch("sentry.seer.autofix.coding_agent.GithubCopilotAgentClient")
+    @patch("sentry.seer.autofix.coding_agent.github_copilot_identity_service")
+    def test_copilot_not_licensed_403_returns_github_copilot_not_licensed_failure_type(
+        self,
+        mock_identity_service,
+        mock_copilot_client_class,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint returns failure_type=github_copilot_not_licensed for Copilot 403s with a licensing error.
+
+        When GitHub Copilot returns a 403 with "not licensed to use Copilot", the user's
+        account lacks an active Copilot subscription. This is distinct from a GitHub App
+        permissions issue, so we should NOT show the permissions modal.
+        """
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+        mock_identity_service.get_access_token_for_user.return_value = "test-copilot-token"
+
+        mock_client_instance = MagicMock()
+        mock_copilot_client_class.return_value = mock_client_instance
+        mock_client_instance.launch.side_effect = ApiError(
+            "unauthorized: not licensed to use Copilot", code=403
+        )
+
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {"provider": "github_copilot", "run_id": 123}
+
+        with (
+            self.feature("organizations:integrations-github-copilot-agent"),
+            patch("sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer"),
+        ):
+            response = self.get_success_response(self.organization.slug, method="post", **data)
+            assert response.data["success"] is False
+            assert response.data["failed_count"] >= 1
+            failure = response.data["failures"][0]
+            assert failure["failure_type"] == "github_copilot_not_licensed"
+            assert "Copilot license" in failure["error_message"]
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_non_403_error_returns_generic_failure_type(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint returns failure_type=generic for non-403 errors."""
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        failing_installation = MagicMock(spec=MockCodingAgentInstallation)
+        failing_installation.launch.side_effect = ApiError("Server error", code=500)
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_rpc_integration.get_installation = MagicMock(return_value=failing_installation)
+
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {"integration_id": str(self.integration.id), "run_id": 123}
+
+        response = self.get_success_response(self.organization.slug, method="post", **data)
+        assert response.data["success"] is False
+        assert response.data["failed_count"] >= 1
+        assert "failures" in response.data
+        failure = response.data["failures"][0]
+        assert failure["failure_type"] == "generic"
 
 
 class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgentsTest):
     """Test class for POST endpoint trigger source functionality."""
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -875,6 +1276,7 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -882,6 +1284,9 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         """Test POST endpoint with root_cause trigger_source."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Root cause prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -895,22 +1300,22 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
+            assert response.data["launched_count"] >= 0
+            assert response.data["failed_count"] >= 0
 
-            # Verify prompt was called with root_cause trigger_source
-            mock_get_prompt.assert_called_with(123, "root_cause")
+            # Verify prompt was called with root_cause trigger_source and no instruction
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.ROOT_CAUSE, None, None)
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -919,6 +1324,7 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -926,6 +1332,9 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         """Root cause repos are extracted, de-duplicated, and used for launch."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Root cause prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -935,10 +1344,20 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         mock_autofix_state = self._create_mock_autofix_state(
             repos=[
                 SeerRepoDefinition(
-                    owner="owner1", name="repo1", external_id="123", provider="github"
+                    organization_id=self.organization.id,
+                    integration_id=str(self.integration.id),
+                    owner="owner1",
+                    name="repo1",
+                    external_id="123",
+                    provider="github",
                 ),
                 SeerRepoDefinition(
-                    owner="owner2", name="repo2", external_id="456", provider="github"
+                    organization_id=self.organization.id,
+                    integration_id=str(self.integration.id),
+                    owner="owner2",
+                    name="repo2",
+                    external_id="456",
+                    provider="github",
                 ),
             ]
         )
@@ -962,20 +1381,18 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
-            mock_get_prompt.assert_called_with(123, "root_cause")
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.ROOT_CAUSE, None, None)
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -984,6 +1401,7 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -991,6 +1409,9 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         """If root cause has no relevant_repos, fallback to request repos path executes."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Root cause prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -1000,7 +1421,12 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         mock_autofix_state = self._create_mock_autofix_state(
             repos=[
                 SeerRepoDefinition(
-                    owner="owner1", name="repo1", external_id="123", provider="github"
+                    organization_id=self.organization.id,
+                    integration_id=str(self.integration.id),
+                    owner="owner1",
+                    name="repo1",
+                    external_id="123",
+                    provider="github",
                 ),
             ]
         )
@@ -1024,20 +1450,20 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
-            mock_get_prompt.assert_called_with(123, "root_cause")
+            assert response.data["launched_count"] >= 0
+            assert response.data["failed_count"] >= 0
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.ROOT_CAUSE, None, None)
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -1046,6 +1472,7 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -1053,6 +1480,9 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         """Test POST endpoint with solution trigger_source."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = "Solution prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -1066,21 +1496,20 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.store_coding_agent_state_to_seer",
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
             ),
         ):
             response = self.get_success_response(self.organization.slug, method="post", **data)
             assert response.data["success"] is True
+            assert response.data["launched_count"] >= 0
+            assert response.data["failed_count"] >= 0
 
-            # Verify prompt was called with solution trigger_source
-            mock_get_prompt.assert_called_with(123, "solution")
+            # Verify prompt was called with solution trigger_source and no instruction
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.SOLUTION, None, None)
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -1106,18 +1535,16 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
             "trigger_source": "invalid_source",
         }
 
-        with self.feature("organizations:seer-coding-agent-integrations"):
-            response = self.get_error_response(
-                self.organization.slug, method="post", status_code=400, **data
-            )
-            # Serializer field error shape
-            assert "trigger_source" in response.data
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        # Serializer field error shape
+        assert "trigger_source" in response.data
 
-    @patch(
-        "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_providers"
-    )
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_autofix_state")
-    @patch("sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
     @patch(
         "sentry.integrations.services.integration.integration_service.get_organization_integration"
     )
@@ -1126,6 +1553,7 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         self,
         mock_get_integration,
         mock_get_org_integration,
+        mock_get_preferences,
         mock_get_prompt,
         mock_get_autofix_state,
         mock_get_providers,
@@ -1133,6 +1561,9 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         """Test POST endpoint when prompt is not available."""
         mock_get_providers.return_value = ["github"]
         mock_get_prompt.return_value = None  # Prompt not available
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
 
         mock_rpc_integration = self._create_mock_rpc_integration()
         mock_get_org_integration.return_value = self.rpc_org_integration
@@ -1146,13 +1577,291 @@ class OrganizationCodingAgentsPostTriggerSourceTest(BaseOrganizationCodingAgents
         }
 
         with (
-            self.feature("organizations:seer-coding-agent-integrations"),
             patch(
-                "sentry.integrations.api.endpoints.organization_coding_agents.get_coding_agent_prompt",
+                "sentry.seer.autofix.coding_agent.get_coding_agent_prompt",
                 return_value=None,
             ),
         ):
             response = self.get_error_response(
                 self.organization.slug, method="post", status_code=500, **data
             )
-            assert response.data["detail"] == "No prompt to send to agents."
+            assert response.data["detail"] == "Issue fetching prompt to send to coding agents."
+
+
+class OrganizationCodingAgentsPostInstructionTest(BaseOrganizationCodingAgentsTest):
+    """Test class for POST endpoint instruction parameter functionality."""
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_launch_with_custom_instruction(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint with custom instruction."""
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt with custom instruction"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {
+            "integration_id": str(self.integration.id),
+            "run_id": 123,
+            "instruction": "Use TypeScript instead of JavaScript",
+        }
+
+        with (
+            patch(
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
+            ),
+        ):
+            response = self.get_success_response(self.organization.slug, method="post", **data)
+            assert response.data["success"] is True
+            assert response.data["launched_count"] >= 0
+            assert response.data["failed_count"] >= 0
+
+            # Verify prompt was called with the instruction
+            mock_get_prompt.assert_called_with(
+                123, AutofixTriggerSource.SOLUTION, "Use TypeScript instead of JavaScript", None
+            )
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_launch_with_blank_instruction(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint with blank instruction gets trimmed to empty string."""
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt without instruction"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {
+            "integration_id": str(self.integration.id),
+            "run_id": 123,
+            "instruction": "   ",
+        }
+
+        with (
+            patch(
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
+            ),
+        ):
+            response = self.get_success_response(self.organization.slug, method="post", **data)
+            assert response.data["success"] is True
+
+            # CharField trims whitespace by default, so blank instruction becomes empty string
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.SOLUTION, "", None)
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_launch_with_empty_instruction(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint with empty instruction."""
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {
+            "integration_id": str(self.integration.id),
+            "run_id": 123,
+            "instruction": "",
+        }
+
+        with (
+            patch(
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
+            ),
+        ):
+            response = self.get_success_response(self.organization.slug, method="post", **data)
+            assert response.data["success"] is True
+
+            # Verify prompt was called with empty string instruction
+            mock_get_prompt.assert_called_with(123, AutofixTriggerSource.SOLUTION, "", None)
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_launch_with_max_length_instruction(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint with max length instruction."""
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Test prompt with long instruction"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        # Create instruction at max length (4096 characters)
+        long_instruction = "a" * 4096
+
+        data = {
+            "integration_id": str(self.integration.id),
+            "run_id": 123,
+            "instruction": long_instruction,
+        }
+
+        with (
+            patch(
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
+            ),
+        ):
+            response = self.get_success_response(self.organization.slug, method="post", **data)
+            assert response.data["success"] is True
+
+            # Verify prompt was called with the long instruction
+            mock_get_prompt.assert_called_with(
+                123, AutofixTriggerSource.SOLUTION, long_instruction, None
+            )
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_launch_with_too_long_instruction(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_providers,
+    ):
+        """Test POST endpoint with instruction exceeding max length."""
+        mock_get_providers.return_value = ["github"]
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+
+        # Create instruction exceeding max length (4096 + 1 characters)
+        too_long_instruction = "a" * 4097
+
+        data = {
+            "integration_id": str(self.integration.id),
+            "run_id": 123,
+            "instruction": too_long_instruction,
+        }
+
+        response = self.get_error_response(
+            self.organization.slug, method="post", status_code=400, **data
+        )
+        # Serializer should return field error
+        assert "instruction" in response.data
+
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_providers")
+    @patch("sentry.seer.autofix.coding_agent.get_autofix_state")
+    @patch("sentry.seer.autofix.coding_agent.get_coding_agent_prompt")
+    @patch("sentry.seer.autofix.coding_agent.get_project_seer_preferences")
+    @patch(
+        "sentry.integrations.services.integration.integration_service.get_organization_integration"
+    )
+    @patch("sentry.integrations.services.integration.integration_service.get_integration")
+    def test_launch_with_instruction_and_root_cause_trigger(
+        self,
+        mock_get_integration,
+        mock_get_org_integration,
+        mock_get_preferences,
+        mock_get_prompt,
+        mock_get_autofix_state,
+        mock_get_providers,
+    ):
+        """Test POST endpoint with custom instruction and root_cause trigger."""
+        mock_get_providers.return_value = ["github"]
+        mock_get_prompt.return_value = "Root cause prompt with instruction"
+        mock_get_preferences.return_value = PreferenceResponse(
+            preference=None, code_mapping_repos=[]
+        )
+
+        mock_rpc_integration = self._create_mock_rpc_integration()
+        mock_get_org_integration.return_value = self.rpc_org_integration
+        mock_get_integration.return_value = mock_rpc_integration
+        mock_get_autofix_state.return_value = self._create_mock_autofix_state()
+
+        data = {
+            "integration_id": str(self.integration.id),
+            "run_id": 123,
+            "trigger_source": "root_cause",
+            "instruction": "Focus on the database queries",
+        }
+
+        with (
+            patch(
+                "sentry.seer.autofix.coding_agent.store_coding_agent_states_to_seer",
+            ),
+        ):
+            response = self.get_success_response(self.organization.slug, method="post", **data)
+            assert response.data["success"] is True
+
+            # Verify prompt was called with both trigger_source and instruction
+            mock_get_prompt.assert_called_with(
+                123, AutofixTriggerSource.ROOT_CAUSE, "Focus on the database queries", None
+            )

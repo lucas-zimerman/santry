@@ -3,6 +3,7 @@ import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {ComboBoxState} from '@react-stately/combobox';
 import type {Node} from '@react-types/shared';
 
+import {useAnalyticsArea} from 'sentry/components/analyticsArea';
 import {useSeerAcknowledgeMutation} from 'sentry/components/events/autofix/useSeerAcknowledgeMutation';
 import {useSearchQueryBuilder} from 'sentry/components/searchQueryBuilder/context';
 import type {CustomComboboxMenu} from 'sentry/components/searchQueryBuilder/tokens/combobox';
@@ -18,10 +19,13 @@ import {
   ALL_CATEGORY,
   ALL_CATEGORY_VALUE,
   createAskSeerItem,
+  createLogicFilterItem,
   createRecentFilterItem,
   createRecentFilterOptionKey,
   createRecentQueryItem,
   createSection,
+  LOGIC_CATEGORY,
+  LOGIC_CATEGORY_VALUE,
   RECENT_SEARCH_CATEGORY,
   RECENT_SEARCH_CATEGORY_VALUE,
 } from 'sentry/components/searchQueryBuilder/tokens/filterKeyListBox/utils';
@@ -31,9 +35,9 @@ import type {Token, TokenResult} from 'sentry/components/searchSyntax/parser';
 import {getKeyName} from 'sentry/components/searchSyntax/utils';
 import type {RecentSearch, TagCollection} from 'sentry/types/group';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import clamp from 'sentry/utils/number/clamp';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePrevious from 'sentry/utils/usePrevious';
+import {clamp} from 'sentry/utils/number/clamp';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {usePrevious} from 'sentry/utils/usePrevious';
 
 const MAX_OPTIONS_WITHOUT_SEARCH = 100;
 const MAX_OPTIONS_WITH_SEARCH = 8;
@@ -76,7 +80,7 @@ function findNextMatchingItem(
   predicate: (item: Node<FilterKeyItem>) => boolean,
   direction: 'after' | 'before'
 ): Node<FilterKeyItem> | null {
-  let nextItem: Node<FilterKeyItem> | null = item;
+  let nextItem = item;
 
   do {
     const nextKey = direction === 'after' ? nextItem?.nextKey : nextItem?.prevKey;
@@ -94,9 +98,10 @@ function useFilterKeyItems() {
 
     const categorizedItems = filterKeySections
       .flatMap(section => section.children)
-      .reduce<
-        Record<string, boolean>
-      >((acc, nextFilterKey) => ({...acc, [nextFilterKey]: true}), {});
+      .reduce<Record<string, boolean>>(function reduceKeys(acc, nextFilterKey) {
+        acc[nextFilterKey] = true;
+        return acc;
+      }, {});
 
     const uncategorizedFilterKeys = flatFilterKeys.filter(
       filterKey => !categorizedItems[filterKey]
@@ -129,8 +134,7 @@ function useFilterKeySections({
 }: {
   recentSearches: RecentSearch[] | undefined;
 }) {
-  const {filterKeySections, query} = useSearchQueryBuilder();
-
+  const {filterKeySections, query, disallowLogicalOperators} = useSearchQueryBuilder();
   const sections = useMemo<Section[]>(() => {
     const definedSections = filterKeySections.map(section => ({
       value: section.value,
@@ -142,11 +146,25 @@ function useFilterKeySections({
     }
 
     if (recentSearches?.length && !query) {
-      return [RECENT_SEARCH_CATEGORY, ALL_CATEGORY, ...definedSections];
+      const recentSearchesSections: Section[] = [
+        RECENT_SEARCH_CATEGORY,
+        ALL_CATEGORY,
+        ...definedSections,
+      ];
+
+      if (!disallowLogicalOperators) {
+        recentSearchesSections.push(LOGIC_CATEGORY);
+      }
+      return recentSearchesSections;
     }
 
-    return [ALL_CATEGORY, ...definedSections];
-  }, [filterKeySections, query, recentSearches?.length]);
+    const customSections: Section[] = [ALL_CATEGORY, ...definedSections];
+    if (!disallowLogicalOperators) {
+      customSections.push(LOGIC_CATEGORY);
+    }
+
+    return customSections;
+  }, [disallowLogicalOperators, filterKeySections, query, recentSearches?.length]);
 
   const [selectedSection, setSelectedSection] = useState<string>(
     sections[0]?.value ?? ''
@@ -156,22 +174,36 @@ function useFilterKeySections({
   const previousNumSections = usePrevious(numSections);
   useEffect(() => {
     if (previousNumSections !== numSections) {
+      // eslint-disable-next-line react-you-might-not-need-an-effect/no-derived-state
       setSelectedSection(sections[0]!.value);
     }
   }, [numSections, previousNumSections, sections]);
 
   return {sections, selectedSection, setSelectedSection};
 }
-export function useFilterKeyListBox({filterValue}: {filterValue: string}) {
+
+const logicFilterItems = [
+  createLogicFilterItem({value: 'AND'}),
+  createLogicFilterItem({value: 'OR'}),
+  createLogicFilterItem({value: '('}),
+  createLogicFilterItem({value: ')'}),
+];
+
+interface UseFilterKeyListBoxArgs {
+  filterValue: string;
+}
+
+export function useFilterKeyListBox({filterValue}: UseFilterKeyListBoxArgs) {
   const {
     filterKeys,
     getFieldDefinition,
     setAutoSubmitSeer,
     setDisplayAskSeer,
     enableAISearch,
-    gaveSeerConsent,
     currentInputValueRef,
+    disallowLogicalOperators,
   } = useSearchQueryBuilder();
+  const analyticsArea = useAnalyticsArea();
   const {sectionedItems} = useFilterKeyItems();
   const recentFilters = useRecentSearchFilters();
   const {data: recentSearches} = useRecentSearches();
@@ -201,6 +233,10 @@ export function useFilterKeyListBox({filterValue}: {filterValue: string}) {
       ];
     }
 
+    if (!disallowLogicalOperators && selectedSection === LOGIC_CATEGORY_VALUE) {
+      return [...askSeerItem, ...logicFilterItems];
+    }
+
     const filteredByCategory = sectionedItems.filter(item => {
       if (itemIsSection(item)) {
         if (selectedSection === ALL_CATEGORY_VALUE) {
@@ -214,6 +250,7 @@ export function useFilterKeyListBox({filterValue}: {filterValue: string}) {
 
     return [...askSeerItem, ...recentFilterItems, ...filteredByCategory];
   }, [
+    disallowLogicalOperators,
     enableAISearch,
     filterKeys,
     getFieldDefinition,
@@ -384,17 +421,13 @@ export function useFilterKeyListBox({filterValue}: {filterValue: string}) {
   const handleOptionSelected = useCallback(
     (option: FilterKeyItem) => {
       if (option.type === 'ask-seer') {
-        if (!gaveSeerConsent) {
-          trackAnalytics('trace.explorer.ai_query_interface', {
-            organization,
-            action: 'consent_accepted',
-          });
-          seerAcknowledgeMutate();
-          return;
-        }
-
         trackAnalytics('trace.explorer.ai_query_interface', {
           organization,
+          action: 'opened',
+        });
+        trackAnalytics('ai_query.interface', {
+          organization,
+          area: analyticsArea,
           action: 'opened',
         });
         setDisplayAskSeer(true);
@@ -407,10 +440,24 @@ export function useFilterKeyListBox({filterValue}: {filterValue: string}) {
 
         return;
       }
+
+      if (option.type === 'ask-seer-consent') {
+        trackAnalytics('trace.explorer.ai_query_interface', {
+          organization,
+          action: 'consent_accepted',
+        });
+        trackAnalytics('ai_query.interface', {
+          organization,
+          area: analyticsArea,
+          action: 'consent_accepted',
+        });
+        seerAcknowledgeMutate();
+        return;
+      }
     },
     [
+      analyticsArea,
       currentInputValueRef,
-      gaveSeerConsent,
       organization,
       seerAcknowledgeMutate,
       setAutoSubmitSeer,

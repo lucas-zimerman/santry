@@ -1,6 +1,6 @@
 import type {Location} from 'history';
 
-import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
+import {ALL_ACCESS_PROJECTS} from 'sentry/components/pageFilters/constants';
 import {backend, frontend, mobile} from 'sentry/data/platformCategories';
 import {t} from 'sentry/locale';
 import type {PageFilters} from 'sentry/types/core';
@@ -11,23 +11,23 @@ import type {
 } from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import type {ReleaseProject} from 'sentry/types/release';
-import toArray from 'sentry/utils/array/toArray';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {toArray} from 'sentry/utils/array/toArray';
 import type {EventData} from 'sentry/utils/discover/eventView';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {TRACING_FIELDS} from 'sentry/utils/discover/fields';
 import {SavedQueryDatasets} from 'sentry/utils/discover/types';
 import {statsPeriodToDays} from 'sentry/utils/duration/statsPeriodToDays';
-import getCurrentSentryReactRootSpan from 'sentry/utils/getCurrentSentryReactRootSpan';
+import {getCurrentSentryReactRootSpan} from 'sentry/utils/getCurrentSentryReactRootSpan';
 import {useApiQuery} from 'sentry/utils/queryClient';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
-import useOrganization from 'sentry/utils/useOrganization';
-import useProjects from 'sentry/utils/useProjects';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
 import {hasDatasetSelector} from 'sentry/views/dashboards/utils';
 import {DOMAIN_VIEW_BASE_URL} from 'sentry/views/insights/pages/settings';
 import type {DomainView} from 'sentry/views/insights/pages/useFilters';
-import {DEFAULT_MAX_DURATION} from 'sentry/views/performance/trends/utils';
 
 export const QUERY_KEYS = [
   'environment',
@@ -225,32 +225,7 @@ export function trendsTargetRoute({
     ...additionalQuery,
   };
 
-  const query = decodeScalar(location.query.query, '');
-  const conditions = new MutableSearch(query);
-
   const modifiedConditions = initialConditions ?? new MutableSearch([]);
-
-  // Trends on metrics don't need these conditions
-  if (!organization.features.includes('performance-new-trends')) {
-    // No need to carry over tpm filters to transaction summary
-    if (conditions.hasFilter('tpm()')) {
-      modifiedConditions.setFilterValues('tpm()', conditions.getFilterValues('tpm()'));
-    } else {
-      modifiedConditions.setFilterValues('tpm()', ['>0.01']);
-    }
-
-    if (conditions.hasFilter('transaction.duration')) {
-      modifiedConditions.setFilterValues(
-        'transaction.duration',
-        conditions.getFilterValues('transaction.duration')
-      );
-    } else {
-      modifiedConditions.setFilterValues('transaction.duration', [
-        '>0',
-        `<${DEFAULT_MAX_DURATION}`,
-      ]);
-    }
-  }
   newQuery.query = modifiedConditions.formatString();
 
   return {pathname: getPerformanceTrendsUrl(organization, view), query: {...newQuery}};
@@ -269,21 +244,37 @@ export function removeTracingKeysFromSearch(
   }
 ) {
   currentFilter.getFilterKeys().forEach(tagKey => {
-    const searchKey = tagKey.startsWith('!') ? tagKey.substring(1) : tagKey;
-    // Remove aggregates and transaction event fields
-    if (
-      // aggregates
-      searchKey.match(/\w+\(.*\)/) ||
-      // transaction event fields
-      TRACING_FIELDS.includes(searchKey) ||
-      // tags that we don't want to pass to pass to issue search
-      options.excludeTagKeys.has(searchKey)
-    ) {
+    if (shouldExcludeTracingKeys(tagKey, options)) {
       currentFilter.removeFilter(tagKey);
     }
   });
 
   return currentFilter;
+}
+
+export function shouldExcludeTracingKeys(
+  tagKey: string,
+  options: {excludeTagKeys: Set<string>} = {
+    excludeTagKeys: new Set([
+      // event type can be "transaction" but we're searching for issues
+      'event.type',
+      // the project is already determined by the transaction,
+      // and issue search does not support the project filter
+      'project',
+    ]),
+  }
+): boolean {
+  // Remove aggregates and transaction event fields
+  const searchKey = tagKey.startsWith('!') ? tagKey.substring(1) : tagKey;
+
+  // aggregates
+  const condAggregates = searchKey.match(/\w+\(.*\)/) !== null;
+  // transaction event fields
+  const condTransactionEventFields = TRACING_FIELDS.includes(searchKey);
+  // tags that we don't want to pass to pass to issue search
+  const condExcludeTagKeys = options.excludeTagKeys.has(searchKey);
+
+  return condAggregates || condTransactionEventFields || condExcludeTagKeys;
 }
 
 export function addRoutePerformanceContext(selection: PageFilters) {
@@ -326,10 +317,7 @@ export function getIsMultiProject(projects: readonly number[] | number[]) {
   return false;
 }
 
-export function getSelectedProjectPlatformsArray(
-  location: Location,
-  projects: Project[]
-) {
+function getSelectedProjectPlatformsArray(location: Location, projects: Project[]) {
   const projectQuery = location.query.project;
   const selectedProjectIdSet = new Set(toArray(projectQuery));
 
@@ -372,7 +360,17 @@ export function usePerformanceGeneralProjectSettings(projectId?: number) {
   const project = projects.find(p => p.id === stringProjectId);
 
   return useApiQuery<{enable_images: boolean}>(
-    [`/projects/${organization.slug}/${project?.slug}/performance/configure/`],
+    [
+      getApiUrl(
+        '/projects/$organizationIdOrSlug/$projectIdOrSlug/performance/configure/',
+        {
+          path: {
+            organizationIdOrSlug: organization.slug,
+            projectIdOrSlug: project?.slug!,
+          },
+        }
+      ),
+    ],
     {
       staleTime: 0,
       enabled: Boolean(project),

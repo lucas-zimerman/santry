@@ -3,13 +3,14 @@ from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases import OrganizationEndpoint
 from sentry.api.permissions import StaffPermission
 from sentry.api.utils import get_date_range_from_params
 from sentry.constants import ObjectStatus
 from sentry.models.organization import Organization
 from sentry.models.project import Project
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.sentry_metrics.querying.data import (
     MetricsAPIQueryResultsTransformer,
     MQLQuery,
@@ -24,7 +25,7 @@ from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.utils.dates import parse_stats_period
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationDynamicSamplingAdminMetricsEndpoint(OrganizationEndpoint):
     """
     The purpose of this endpoint is to provide a way to query metrics for
@@ -41,13 +42,15 @@ class OrganizationDynamicSamplingAdminMetricsEndpoint(OrganizationEndpoint):
     # 60 req/s to allow for metric dashboard loading
     default_rate_limit = RateLimit(limit=60, window=1)
 
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: default_rate_limit,
-            RateLimitCategory.USER: default_rate_limit,
-            RateLimitCategory.ORGANIZATION: default_rate_limit,
-        },
-    }
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: default_rate_limit,
+                RateLimitCategory.USER: default_rate_limit,
+                RateLimitCategory.ORGANIZATION: default_rate_limit,
+            },
+        }
+    )
 
     default_per_page = 50
 

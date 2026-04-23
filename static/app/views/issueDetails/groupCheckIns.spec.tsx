@@ -3,11 +3,10 @@ import {EventFixture} from 'sentry-fixture/event';
 import {GroupFixture} from 'sentry-fixture/group';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 import {ProjectFixture} from 'sentry-fixture/project';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
-import {render, screen} from 'sentry-test/reactTestingLibrary';
+import {render, screen, type RouterConfig} from 'sentry-test/reactTestingLibrary';
 
-import GroupStore from 'sentry/stores/groupStore';
+import {GroupStore} from 'sentry/stores/groupStore';
 import {IssueCategory, IssueType} from 'sentry/types/group';
 import {statusToText} from 'sentry/views/insights/crons/utils';
 import GroupCheckIns from 'sentry/views/issueDetails/groupCheckIns';
@@ -29,7 +28,12 @@ describe('GroupCheckIns', () => {
     project,
   });
   const organization = OrganizationFixture();
-  const router = RouterFixture({params: {groupId: group.id}});
+  const initialRouterConfig: RouterConfig = {
+    location: {
+      pathname: `/organizations/${organization.slug}/issues/${group.id}/check-ins/`,
+    },
+    route: '/organizations/:orgId/issues/:groupId/check-ins/',
+  };
 
   beforeEach(() => {
     GroupStore.init();
@@ -53,12 +57,11 @@ describe('GroupCheckIns', () => {
 
     render(<GroupCheckIns />, {
       organization,
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(await screen.findByText('All Check-Ins')).toBeInTheDocument();
     expect(
-      screen.getByText('No check-ins have been recorded for this time period.')
+      await screen.findByText('No check-ins have been recorded for this time period.')
     ).toBeInTheDocument();
   });
 
@@ -71,12 +74,11 @@ describe('GroupCheckIns', () => {
 
     render(<GroupCheckIns />, {
       organization,
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(await screen.findByText('All Check-Ins')).toBeInTheDocument();
     expect(screen.queryByText('No matching check-ins found')).not.toBeInTheDocument();
-    expect(screen.getByText('Showing 1-1 matching check-ins')).toBeInTheDocument();
+    expect(await screen.findByText('Showing 1-1 matching check-ins')).toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'Previous Page'})).toBeInTheDocument();
     expect(screen.getByRole('button', {name: 'Next Page'})).toBeInTheDocument();
 

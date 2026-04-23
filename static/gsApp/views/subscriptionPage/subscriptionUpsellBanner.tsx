@@ -2,11 +2,11 @@ import styled from '@emotion/styled';
 import businessUpgrade from 'getsentry-images/product_trial/business-upgrade-notrial.svg';
 import businessTrial from 'getsentry-images/product_trial/try-sentry-business-present.svg';
 
+import {Button} from '@sentry/scraps/button';
+
 import {usePrompt} from 'sentry/actionCreators/prompts';
-import {Button} from 'sentry/components/core/button';
 import {IconClose} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
 
 import {openUpsellModal} from 'getsentry/actionCreators/modal';
@@ -18,7 +18,7 @@ import {
   hasPerformance,
   isBizPlanFamily,
 } from 'getsentry/utils/billing';
-import TrialBadge from 'getsentry/views/subscriptionPage/trial/badge';
+import {TrialBadge} from 'getsentry/views/subscriptionPage/trial/badge';
 
 const getSubscriptionBannerText = (
   organization: Organization,
@@ -37,7 +37,7 @@ const getSubscriptionBannerText = (
           ? t('Try Sentry Business for Free')
           : t('Try Performance for Free'),
         tct(
-          `Activate your trial to take advantage of Sentry's [featuresName] features.`,
+          "Activate your trial to take advantage of Sentry's [featuresName] features.",
           {featuresName}
         ),
       ];
@@ -170,10 +170,9 @@ export function SubscriptionUpsellBanner({
       </div>
       <BannerImage src={subscription.canTrial ? businessTrial : businessUpgrade} />
       <CloseBannerButton
-        borderless
         priority="link"
         aria-label={t('Dismiss')}
-        icon={<IconClose color="subText" />}
+        icon={<IconClose variant="muted" />}
         size="xs"
         onClick={dismissPrompt}
       />
@@ -183,39 +182,38 @@ export function SubscriptionUpsellBanner({
 
 const BusinessTrialBannerWrapper = styled('div')`
   position: relative;
-  border: 1px solid ${p => p.theme.border};
-  border-radius: ${p => p.theme.borderRadius};
-  padding: ${space(2)};
-  margin: ${space(1)} 0;
+  border: 1px solid ${p => p.theme.tokens.border.primary};
+  border-radius: ${p => p.theme.radius.md};
+  padding: ${p => p.theme.space.xl};
   background: linear-gradient(
     90deg,
-    ${p => p.theme.backgroundSecondary}00 0%,
-    ${p => p.theme.backgroundSecondary}FF 70%,
-    ${p => p.theme.backgroundSecondary}FF 100%
+    color-mix(in srgb, ${p => p.theme.tokens.background.secondary} 0%, transparent) 0%,
+    ${p => p.theme.tokens.background.secondary} 70%,
+    ${p => p.theme.tokens.background.secondary} 100%
   );
-  margin-bottom: 24px;
+  margin-bottom: 0;
 `;
 
 const IntegationBannerTitle = styled('div')`
   display: flex;
   align-items: baseline;
-  gap: ${space(1)};
-  font-size: ${p => p.theme.fontSize.xl};
-  margin-bottom: ${space(1)};
+  gap: ${p => p.theme.space.md};
+  font-size: ${p => p.theme.font.size.xl};
+  margin-bottom: ${p => p.theme.space.md};
   font-weight: 600;
 `;
 
 const IntegationBannerDescription = styled('div')`
-  margin-bottom: ${space(1.5)};
+  margin-bottom: ${p => p.theme.space.lg};
   max-width: 440px;
 `;
 
 const CloseBannerButton = styled(Button)`
   position: absolute;
   display: block;
-  top: ${space(2)};
-  right: ${space(2)};
-  color: ${p => p.theme.white};
+  top: ${p => p.theme.space.xl};
+  right: ${p => p.theme.space.xl};
+  color: ${p => p.theme.colors.white};
   cursor: pointer;
   z-index: 1;
 `;

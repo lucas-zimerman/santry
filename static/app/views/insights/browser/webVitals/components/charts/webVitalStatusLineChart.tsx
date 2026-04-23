@@ -1,6 +1,6 @@
 import styled from '@emotion/styled';
 
-import {space} from 'sentry/styles/space';
+import {useFetchSpanTimeSeries} from 'sentry/utils/timeSeries/useFetchEventsTimeSeries';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import type {Plottable} from 'sentry/views/dashboards/widgets/timeSeriesWidget/plottables/plottable';
 import {Thresholds} from 'sentry/views/dashboards/widgets/timeSeriesWidget/plottables/thresholds';
@@ -18,8 +18,6 @@ import {
 } from 'sentry/views/insights/browser/webVitals/utils/scoreThresholds';
 // eslint-disable-next-line no-restricted-imports
 import {InsightsLineChartWidget} from 'sentry/views/insights/common/components/insightsLineChartWidget';
-import type {DiscoverSeries} from 'sentry/views/insights/common/queries/useDiscoverSeries';
-import {useSpanSeries} from 'sentry/views/insights/common/queries/useDiscoverSeries';
 import type {SubregionCode} from 'sentry/views/insights/types';
 import {SpanFields} from 'sentry/views/insights/types';
 
@@ -56,24 +54,25 @@ export function WebVitalStatusLineChart({
     data: timeseriesData,
     isLoading: isTimeseriesLoading,
     error: timeseriesError,
-  } = useSpanSeries(
+  } = useFetchSpanTimeSeries(
     {
-      search,
+      query: search,
       yAxis: webVital ? [`p75(measurements.${webVital})`] : [],
       enabled: !!webVital,
     },
     referrer
   );
 
-  const webVitalSeries: DiscoverSeries = webVital
-    ? timeseriesData?.[`p75(measurements.${webVital})`]
-    : {data: [], meta: {fields: {}, units: {}}, seriesName: ''};
+  const timeSeries = timeseriesData?.timeSeries || [];
+  const webVitalTimeSeries = webVital
+    ? timeSeries.find(ts => ts.yAxis === `p75(measurements.${webVital})`)
+    : undefined;
 
-  const includePoorThreshold = webVitalSeries.data?.some(
-    ({value}) => value > webVitalMedian
+  const includePoorThreshold = webVitalTimeSeries?.values.some(
+    ({value}) => (value || 0) > webVitalMedian
   );
-  const includeMehThreshold = webVitalSeries.data?.some(
-    ({value}) => value >= webVitalP90
+  const includeMehThreshold = webVitalTimeSeries?.values.some(
+    ({value}) => (value || 0) >= webVitalP90
   );
 
   const thresholdsPlottable = new Thresholds({
@@ -84,6 +83,7 @@ export function WebVitalStatusLineChart({
       },
       unit: 'ms',
     },
+    showLabels: true,
   });
 
   const extraPlottables: Plottable[] = isTimeseriesLoading ? [] : [thresholdsPlottable];
@@ -98,7 +98,7 @@ export function WebVitalStatusLineChart({
           showLegend="never"
           isLoading={isTimeseriesLoading}
           error={timeseriesError}
-          series={[webVitalSeries]}
+          timeSeries={webVitalTimeSeries ? [webVitalTimeSeries] : []}
           extraPlottables={extraPlottables}
           queryInfo={{
             search,
@@ -114,5 +114,5 @@ export function WebVitalStatusLineChart({
 const ChartContainer = styled('div')`
   position: relative;
   flex: 1;
-  padding-bottom: ${space(2)};
+  padding-bottom: ${p => p.theme.space.xl};
 `;

@@ -1,31 +1,32 @@
 import {Fragment, useState} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
+
+import {Button} from '@sentry/scraps/button';
+import {Checkbox} from '@sentry/scraps/checkbox';
+import {Flex, Grid, type GridProps} from '@sentry/scraps/layout';
+import {Text} from '@sentry/scraps/text';
 
 import type {ModalRenderProps} from 'sentry/actionCreators/modal';
 import type {BulkEditOperation} from 'sentry/actionCreators/monitors';
 import {bulkEditMonitors} from 'sentry/actionCreators/monitors';
-import {Button} from 'sentry/components/core/button';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {Checkbox} from 'sentry/components/core/checkbox';
-import {Text} from 'sentry/components/core/text';
-import Pagination from 'sentry/components/pagination';
+import {Pagination} from 'sentry/components/pagination';
 import {PanelTable} from 'sentry/components/panels/panelTable';
-import Placeholder from 'sentry/components/placeholder';
-import SearchBar from 'sentry/components/searchBar';
+import {Placeholder} from 'sentry/components/placeholder';
+import {SearchBar} from 'sentry/components/searchBar';
 import {t, tct, tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import {setApiQueryData, useApiQuery, useQueryClient} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
+import {useApi} from 'sentry/utils/useApi';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {
   MonitorSortOption,
   MonitorSortOrder,
   SortSelector,
 } from 'sentry/views/insights/crons/components/overviewTimeline/sortSelector';
 import type {Monitor} from 'sentry/views/insights/crons/types';
-import {makeMonitorListQueryKey} from 'sentry/views/insights/crons/utils';
+import {monitorListApiOptions} from 'sentry/views/insights/crons/utils';
 import {scheduleAsText} from 'sentry/views/insights/crons/utils/scheduleAsText';
 
 interface Props extends ModalRenderProps {}
@@ -46,10 +47,12 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
     sort: MonitorSortOption;
   }>({sort: MonitorSortOption.STATUS, order: MonitorSortOrder.ASCENDING});
 
-  const queryKey = makeMonitorListQueryKey(organization, {
-    ...location.query,
-    query: searchQuery,
+  const monitorListOptions = monitorListApiOptions(organization, {
     cursor,
+    query: searchQuery,
+    project: location.query.project,
+    environment: location.query.environment,
+    owner: location.query.owner,
     sort: sortSelection.sort,
     asc: sortSelection.order,
   });
@@ -84,24 +87,28 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
     setSelectedMonitors([]);
 
     if (resp?.updated) {
-      setApiQueryData<Monitor[]>(queryClient, queryKey, oldMonitorList => {
-        return oldMonitorList?.map(
-          monitor =>
-            resp.updated.find(newMonitor => newMonitor.slug === monitor.slug) ?? monitor
-        );
+      queryClient.setQueryData(monitorListOptions.queryKey, previous => {
+        if (!previous) {
+          return previous;
+        }
+        return {
+          ...previous,
+          json: previous.json.map(
+            monitor =>
+              resp.updated.find(newMonitor => newMonitor.slug === monitor.slug) ?? monitor
+          ),
+        };
       });
     }
     setIsUpdating(false);
   };
 
-  const {
-    data: monitorList,
-    getResponseHeader: monitorListHeaders,
-    isPending,
-  } = useApiQuery<Monitor[]>(queryKey, {
-    staleTime: 0,
+  const {data, isPending} = useQuery({
+    ...monitorListOptions,
+    select: selectJsonWithHeaders,
   });
-  const monitorPageLinks = monitorListHeaders?.('Link');
+  const monitorList = data?.json;
+  const monitorPageLinks = data?.headers.Link;
 
   const headers = [t('Monitor'), t('State'), t('Muted'), t('Schedule')];
   const shouldDisable = selectedMonitors.every(monitor => monitor.status !== 'disabled');
@@ -126,7 +133,7 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
         <h3>{t('Manage Monitors')}</h3>
       </Header>
       <Body>
-        <Actions>
+        <Flex justify="between" wrap="wrap" marginBottom="xl" gap="md">
           <ActionButtons>
             {[disableEnableBtnParams, muteUnmuteBtnParams].map(
               ({operation, actionText, ...analyticsProps}, i) => (
@@ -135,10 +142,11 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
                   size="sm"
                   onClick={() => handleBulkEdit(operation)}
                   disabled={isUpdating || selectedMonitors.length === 0}
-                  title={
-                    selectedMonitors.length === 0 &&
-                    tct('Please select monitors to [actionText]', {actionText})
-                  }
+                  tooltipProps={{
+                    title:
+                      selectedMonitors.length === 0 &&
+                      tct('Please select monitors to [actionText]', {actionText}),
+                  }}
                   aria-label={actionText}
                   {...analyticsProps}
                 >
@@ -153,7 +161,7 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
               )
             )}
           </ActionButtons>
-          <ButtonBar>
+          <Grid flow="column" align="center" gap="md">
             <SearchBar
               size="sm"
               placeholder={t('Search Monitors')}
@@ -168,8 +176,8 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
               onChangeSort={({value: sort}) => setSortSelection({...sortSelection, sort})}
               {...sortSelection}
             />
-          </ButtonBar>
-        </Actions>
+          </Grid>
+        </Flex>
         <StyledPanelTable
           headers={headers}
           stickyHeaders
@@ -177,7 +185,7 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
           emptyMessage={t('No monitors found')}
         >
           {isPending || !monitorList
-            ? [...new Array(NUM_PLACEHOLDER_ROWS)].map((_, i) => (
+            ? [...Array.from({length: NUM_PLACEHOLDER_ROWS})].map((_, i) => (
                 <RowPlaceholder key={i}>
                   <Placeholder height="20px" />
                 </RowPlaceholder>
@@ -193,9 +201,17 @@ export function BulkEditMonitorsModal({Header, Body, Footer, closeModal}: Props)
                     />
                     <Text>{monitor.slug}</Text>
                   </MonitorSlug>
-                  <Text>{monitor.status === 'active' ? t('Active') : t('Disabled')}</Text>
-                  <Text>{monitor.isMuted ? t('Yes') : t('No')}</Text>
-                  <Text>{scheduleAsText(monitor.config)}</Text>
+                  <div>
+                    <Text>
+                      {monitor.status === 'active' ? t('Active') : t('Disabled')}
+                    </Text>
+                  </div>
+                  <div>
+                    <Text>{monitor.isMuted ? t('Yes') : t('No')}</Text>
+                  </div>
+                  <div>
+                    <Text>{scheduleAsText(monitor.config)}</Text>
+                  </div>
                 </Fragment>
               ))}
         </StyledPanelTable>
@@ -215,15 +231,9 @@ export const modalCss = css`
   max-width: 900px;
 `;
 
-const Actions = styled('div')`
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: ${space(1)};
-  margin-bottom: ${space(2)};
-`;
-
-const ActionButtons = styled(ButtonBar)`
+const ActionButtons = styled((props: GridProps) => (
+  <Grid flow="column" align="center" gap="md" {...props} />
+))`
   margin-right: auto;
 `;
 
@@ -234,16 +244,16 @@ const StyledPanelTable = styled(PanelTable)`
 
 const RowPlaceholder = styled('div')`
   grid-column: 1 / -1;
-  padding: ${space(2)};
+  padding: ${p => p.theme.space.xl};
 
   &:not(:last-child) {
-    border-bottom: 1px solid ${p => p.theme.border};
+    border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
   }
 `;
 
 const MonitorSlug = styled('div')`
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   align-items: center;
 `;

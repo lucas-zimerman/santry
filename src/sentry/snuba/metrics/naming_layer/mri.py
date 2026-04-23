@@ -41,7 +41,6 @@ __all__ = (
     "SpanMRI",
     "MRI_SCHEMA_REGEX",
     "MRI_EXPRESSION_REGEX",
-    "ErrorsMRI",
     "parse_mri",
     "get_available_operations",
     "is_mri_field",
@@ -82,6 +81,9 @@ class SessionMRI(Enum):
     UNHANDLED_RATE = "e:sessions/unhandled_rate@ratio"  # unhandled, does not include crashed
     CRASH_RATE = "e:sessions/crash_rate@ratio"
     CRASH_FREE_RATE = "e:sessions/crash_free_rate@ratio"  # includes handled and unhandled
+    ERRORED_RATE = "e:sessions/errored_rate@ratio"
+    ABNORMAL_RATE = "e:sessions/abnormal_rate@ratio"
+    UNHEALTHY_RATE = "e:sessions/unhealthy_rate@ratio"
     ALL_USER = "e:sessions/user.all@none"
     HEALTHY_USER = "e:sessions/user.healthy@none"
     ERRORED_USER = "e:sessions/user.errored@none"
@@ -104,6 +106,8 @@ class SessionMRI(Enum):
     ANR_RATE = "e:sessions/user.anr_rate@ratio"
     FOREGROUND_ANR_USER = "e:sessions/user.foreground_anr@none"
     FOREGROUND_ANR_RATE = "e:sessions/user.foreground_anr_rate@ratio"
+    ERRORED_USER_RATE = "e:sessions/user.errored_rate@ratio"
+    ABNORMAL_USER_RATE = "e:sessions/user.abnormal_rate@ratio"
     DURATION = "d:sessions/duration.exited@second"
 
 
@@ -201,10 +205,6 @@ class SpanMRI(Enum):
     HTTP_ERROR_RATE = "e:spans/http_error_rate@ratio"
     HTTP_ERROR_COUNT_LIGHT = "e:spans/http_error_count_light@none"
     HTTP_ERROR_RATE_LIGHT = "e:spans/http_error_rate_light@ratio"
-
-
-class ErrorsMRI(Enum):
-    EVENT_INGESTED = "c:escalating_issues/event_ingested@none"
 
 
 @dataclass

@@ -1,32 +1,19 @@
-import type {ReactNode} from 'react';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
 
-import {makeTestQueryClient} from 'sentry-test/queryClient';
-import {renderHook, waitFor} from 'sentry-test/reactTestingLibrary';
+import {renderHookWithProviders, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import {QueryClientProvider} from 'sentry/utils/queryClient';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
 import type {NonDefaultSpanSampleFields} from 'sentry/views/insights/common/queries/useSpanSamples';
 import {useSpanSamples} from 'sentry/views/insights/http/queries/useSpanSamples';
-import {OrganizationContext} from 'sentry/views/organizationContext';
 
-jest.mock('sentry/utils/usePageFilters');
+jest.mock('sentry/components/pageFilters/usePageFilters');
 jest.mock('sentry/utils/useLocation');
 
 describe('useSpanSamples', () => {
   const organization = OrganizationFixture();
-
-  function Wrapper({children}: {children?: ReactNode}) {
-    return (
-      <QueryClientProvider client={makeTestQueryClient()}>
-        <OrganizationContext value={organization}>{children}</OrganizationContext>
-      </QueryClientProvider>
-    );
-  }
-
   jest.mocked(usePageFilters).mockReturnValue(
     PageFilterStateFixture({
       selection: {
@@ -63,10 +50,9 @@ describe('useSpanSamples', () => {
       body: {data: []},
     });
 
-    const {result} = renderHook(
+    const {result} = renderHookWithProviders(
       ({fields, enabled}) => useSpanSamples({fields, enabled}),
       {
-        wrapper: Wrapper,
         initialProps: {
           fields: [] satisfies NonDefaultSpanSampleFields[],
           enabled: false,
@@ -80,7 +66,7 @@ describe('useSpanSamples', () => {
 
   it('queries for current selection', async () => {
     const request = MockApiClient.addMockResponse({
-      url: `/api/0/organizations/${organization.slug}/spans-samples/`,
+      url: `/organizations/${organization.slug}/spans-samples/`,
       method: 'GET',
       body: {
         data: [
@@ -102,7 +88,7 @@ describe('useSpanSamples', () => {
       },
     });
 
-    const {result} = renderHook(
+    const {result} = renderHookWithProviders(
       ({filters, fields, referrer}) =>
         useSpanSamples({
           search: MutableSearch.fromQueryObject(filters),
@@ -112,7 +98,6 @@ describe('useSpanSamples', () => {
           max: 900,
         }),
       {
-        wrapper: Wrapper,
         initialProps: {
           filters: {
             'span.group': '221aa7ebd216',
@@ -127,7 +112,7 @@ describe('useSpanSamples', () => {
     expect(result.current.isPending).toBe(true);
 
     expect(request).toHaveBeenCalledWith(
-      '/api/0/organizations/org-slug/spans-samples/',
+      '/organizations/org-slug/spans-samples/',
       expect.objectContaining({
         method: 'GET',
         query: {
@@ -135,7 +120,7 @@ describe('useSpanSamples', () => {
           project: [],
           dataset: 'spans',
           sampling: 'NORMAL',
-          query: `span.group:221aa7ebd216 release:0.0.1`,
+          query: 'span.group:221aa7ebd216 release:0.0.1',
           referrer: 'api-spec',
           statsPeriod: '10d',
           environment: ['prod'],

@@ -4,7 +4,6 @@ import logging
 import random
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
-from time import time
 from typing import Any
 
 import orjson
@@ -12,7 +11,7 @@ import sentry_sdk
 from sentry_relay.processing import StoreNormalizer
 
 from sentry import options, reprocessing2
-from sentry.attachments import attachment_cache
+from sentry.attachments import delete_cached_and_ratelimited_attachments, get_attachments_for_event
 from sentry.constants import DEFAULT_STORE_NORMALIZER_ARGS
 from sentry.feedback.usecases.ingest.save_event_feedback import (
     save_event_feedback as save_event_feedback_impl,
@@ -27,7 +26,6 @@ from sentry.services.eventstore import processing
 from sentry.silo.base import SiloMode
 from sentry.stacktraces.processing import process_stacktraces, should_process_for_stacktraces
 from sentry.tasks.base import instrumented_task
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import (
     ingest_attachments_tasks,
     ingest_errors_tasks,
@@ -120,7 +118,7 @@ def submit_save_event(
         "project_id": project_id,
     }
 
-    task.delay(**task_kwargs)
+    task.delay(**task_kwargs)  # type: ignore[arg-type]
 
 
 def _do_preprocess_event(
@@ -369,6 +367,8 @@ def do_process_event(
         has_changed = True
         data = new_data
 
+    attachments = data.get("_attachments", None)
+
     # Second round of datascrubbing after stacktrace and language-specific
     # processing. First round happened as part of ingest.
     #
@@ -427,6 +427,8 @@ def do_process_event(
         # - store event timestamps that are older than our retention window
         #   (also happening with minidumps)
         data = normalize_event(data)
+        if attachments:
+            data["_attachments"] = attachments
         cache_key = processing.event_processing_store.store(data)
 
     return _continue_to_save_event()
@@ -434,14 +436,9 @@ def do_process_event(
 
 @instrumented_task(
     name="sentry.tasks.store.process_event",
-    queue="events.process_event",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=ingest_errors_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=ingest_errors_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 def process_event(
     cache_key: str,
@@ -475,14 +472,9 @@ def process_event(
 
 @instrumented_task(
     name="sentry.tasks.store.process_event_from_reprocessing",
-    queue="events.reprocessing.process_event",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=issues_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=issues_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 def process_event_from_reprocessing(
     cache_key: str,
@@ -520,7 +512,7 @@ def _do_save_event(
 
     set_current_event_project(project_id)
 
-    from sentry.event_manager import EventManager
+    from sentry.event_manager import EventManager, resolve_project
     from sentry.exceptions import HashDiscarded
 
     event_type = "none"
@@ -540,7 +532,7 @@ def _do_save_event(
         event_data=data,
     )
 
-    with metrics.global_tags(event_type=event_type):
+    with metrics.global_tags(tags={"event_type": event_type}):
         if event_id is None and data is not None:
             event_id = data["event_id"]
 
@@ -567,7 +559,17 @@ def _do_save_event(
             )
             return
 
+        all_attachments = []
+        attachments = []
+        project = None
         try:
+            if cache_key and has_attachments:
+                all_attachments = list(get_attachments_for_event(data))
+                # we won’t be needing the transient attachments after this anymore
+                data.pop("_attachments", None)
+                attachments = [a for a in all_attachments if not a.rate_limited]
+            project = resolve_project(project_id)
+
             if killswitch_matches_context(
                 "store.load-shed-save-event-projects",
                 {
@@ -581,11 +583,11 @@ def _do_save_event(
             manager = EventManager(data)
             # event.project.organization is populated after this statement.
             manager.save(
-                project_id,
+                project=project,
                 assume_normalized=True,
                 start_time=start_time,
                 cache_key=cache_key,
-                has_attachments=has_attachments,
+                attachments=attachments,
             )
             # Put the updated event back into the cache so that post_process
             # has the most recent data.
@@ -602,6 +604,10 @@ def _do_save_event(
             # Delete the event payload from cache since it won't show up in post-processing.
             if cache_key:
                 processing_store.delete_by_key(cache_key)
+
+            # Mark all the attachments as `rate_limited`, so they are being properly cleaned up in the `finally` block:
+            for attachment in all_attachments:
+                attachment.rate_limited = True
         except Exception:
             metrics.incr("events.save_event.exception", tags={"event_type": event_type})
             raise
@@ -619,20 +625,8 @@ def _do_save_event(
                     )
 
             reprocessing2.mark_event_reprocessed(data)
-            if cache_key and has_attachments:
-                attachment_cache.delete(cache_key)
-
-            if start_time:
-                metrics.timing(
-                    "events.time-to-process",
-                    time() - start_time,
-                    instance=data["platform"],
-                    tags={
-                        "is_reprocessing2": (
-                            "true" if reprocessing2.is_reprocessed_event(data) else "false"
-                        ),
-                    },
-                )
+            if all_attachments and project:
+                delete_cached_and_ratelimited_attachments(project, all_attachments)
 
             track_event_since_received(
                 step="end_save_event",
@@ -642,14 +636,9 @@ def _do_save_event(
 
 @instrumented_task(
     name="sentry.tasks.store.save_event",
-    queue="events.save_event",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=ingest_errors_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=ingest_errors_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 def save_event(
     cache_key: str | None = None,
@@ -672,13 +661,9 @@ def save_event(
 
 @instrumented_task(
     name="sentry.tasks.store.save_event_transaction",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=ingest_transactions_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=ingest_transactions_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 def save_event_transaction(
     cache_key: str | None = None,
@@ -709,13 +694,9 @@ def save_event_transaction(
 
 @instrumented_task(
     name="sentry.tasks.store.save_event_feedback",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=issues_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=issues_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 @metrics.wraps("feedback_consumer.save_event_feedback_task")
 def save_event_feedback(
@@ -732,14 +713,9 @@ def save_event_feedback(
 
 @instrumented_task(
     name="sentry.tasks.store.save_event_attachments",
-    queue="events.save_event_attachments",
-    time_limit=65,
-    soft_time_limit=60,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=ingest_attachments_tasks,
-        processing_deadline_duration=65,
-    ),
+    namespace=ingest_attachments_tasks,
+    processing_deadline_duration=65,
+    silo_mode=SiloMode.CELL,
 )
 def save_event_attachments(
     cache_key: str | None = None,

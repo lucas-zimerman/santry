@@ -1,11 +1,20 @@
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, ClassVar, NotRequired, Self, TypedDict
 
 from sentry.models.grouphash import GroupHash
 
 logger = logging.getLogger(__name__)
+
+
+class GroupingVersion(StrEnum):
+    """Model version for similarity grouping."""
+
+    V1 = "v1"
+    V2 = "v2"
+    V2_1 = "v2.1"
 
 
 class IncompleteSeerDataError(Exception):
@@ -30,7 +39,9 @@ class SimilarIssuesEmbeddingsRequest(TypedDict):
     read_only: NotRequired[bool]
     event_id: NotRequired[str]
     referrer: NotRequired[str]
-    use_reranking: NotRequired[bool]
+    model: NotRequired[GroupingVersion]  # Model version, defaults to V1 for backward compatibility
+    training_mode: NotRequired[bool]  # whether to just insert embedding without querying
+    platform: NotRequired[str]
 
 
 class RawSeerSimilarIssueData(TypedDict):
@@ -41,6 +52,7 @@ class RawSeerSimilarIssueData(TypedDict):
 
 class SimilarIssuesEmbeddingsResponse(TypedDict):
     responses: list[RawSeerSimilarIssueData]
+    model_used: NotRequired[str]
 
 
 # Like the data that comes back from seer, but guaranteed to have an existing parent hash
@@ -58,7 +70,7 @@ class SeerSimilarIssueData:
         "should_group",
         "parent_hash",
     }
-    optional_incoming_keys: ClassVar = {}
+    optional_incoming_keys: ClassVar[set[str]] = set()
     expected_incoming_keys: ClassVar = {*required_incoming_keys, *optional_incoming_keys}
 
     @classmethod

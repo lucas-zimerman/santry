@@ -3,11 +3,13 @@ import {useTheme, type Theme} from '@emotion/react';
 import type {Location} from 'history';
 
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
-import GridEditable, {
+import {Pagination} from 'sentry/components/pagination';
+import {
   COL_WIDTH_UNDEFINED,
+  GridEditable,
   type GridColumnHeader,
 } from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import type {EventsMetaType} from 'sentry/utils/discover/eventView';
@@ -15,7 +17,7 @@ import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
 import {RATE_UNIT_TITLE, RateUnit, type Sort} from 'sentry/utils/discover/fields';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
 import {DataTitles} from 'sentry/views/insights/common/views/spans/types';
@@ -57,22 +59,22 @@ const COLUMN_ORDER: Column[] = [
     width: COL_WIDTH_UNDEFINED,
   },
   {
-    key: `http_response_rate(3)`,
+    key: 'http_response_rate(3)',
     name: t('3XXs'),
     width: 50,
   },
   {
-    key: `http_response_rate(4)`,
+    key: 'http_response_rate(4)',
     name: t('4XXs'),
     width: 50,
   },
   {
-    key: `http_response_rate(5)`,
+    key: 'http_response_rate(5)',
     name: t('5XXs'),
     width: 50,
   },
   {
-    key: `avg(span.self_time)`,
+    key: 'avg(span.self_time)',
     name: DataTitles.avg,
     width: COL_WIDTH_UNDEFINED,
   },
@@ -130,6 +132,9 @@ export function DomainTransactionsTable({
       query: {...query, [QueryParameterNames.TRANSACTIONS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...COLUMN_ORDER],
+  });
 
   return (
     <Fragment>
@@ -138,7 +143,7 @@ export function DomainTransactionsTable({
         isLoading={isLoading}
         error={error}
         data={data}
-        columnOrder={COLUMN_ORDER}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -155,6 +160,7 @@ export function DomainTransactionsTable({
             }),
           renderBodyCell: (column, row) =>
             renderBodyCell(column, row, meta, domain, location, organization, theme),
+          onResizeColumn: handleResizeColumn,
         }}
       />
 

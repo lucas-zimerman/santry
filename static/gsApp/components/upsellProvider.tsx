@@ -1,23 +1,25 @@
 import {useState} from 'react';
 
+import {Button} from '@sentry/scraps/button';
+
 import {addErrorMessage} from 'sentry/actionCreators/indicator';
 import type {Client} from 'sentry/api';
-import Confirm from 'sentry/components/confirm';
-import {Button} from 'sentry/components/core/button';
+import {Confirm} from 'sentry/components/confirm';
 import {t, tct} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
-import {browserHistory} from 'sentry/utils/browserHistory';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
-import withApi from 'sentry/utils/withApi';
-import withOrganization from 'sentry/utils/withOrganization';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {withApi} from 'sentry/utils/withApi';
+import {withOrganization} from 'sentry/utils/withOrganization';
 
 import {openUpsellModal} from 'getsentry/actionCreators/modal';
 import {sendTrialRequest, sendUpgradeRequest} from 'getsentry/actionCreators/upsell';
 import TrialStarter from 'getsentry/components/trialStarter';
-import withSubscription from 'getsentry/components/withSubscription';
+import {withSubscription} from 'getsentry/components/withSubscription';
 import type {Subscription} from 'getsentry/types';
 import {getTrialLength} from 'getsentry/utils/billing';
-import trackGetsentryAnalytics, {
+import {
+  trackGetsentryAnalytics,
   type GetsentryEventKey,
 } from 'getsentry/utils/trackGetsentryAnalytics';
 
@@ -50,7 +52,6 @@ type Props = {
    * if true, non-billing users clicking will trigger trial and plan upgrade requests
    */
   triggerMemberRequests?: boolean;
-  upsellDefaultSelection?: string;
 };
 
 function LoadingButton(props: {
@@ -84,9 +85,9 @@ function UpsellProvider({
   extraAnalyticsParams,
   triggerMemberRequests,
   showConfirmation,
-  upsellDefaultSelection,
   children,
 }: Props) {
+  const navigate = useNavigate();
   // if the org or subscription isn't loaded yet, don't render anything
   if (!organization || !subscription) {
     return null;
@@ -157,7 +158,7 @@ function UpsellProvider({
       return (
         <div data-test-id="confirm-content">
           {tct(
-            `Your organization is about to start a [trialLength]-day free trial. Click confirm to start your trial.`,
+            'Your organization is about to start a [trialLength]-day free trial. Click confirm to start your trial.',
             {
               trialLength,
             }
@@ -213,9 +214,9 @@ function UpsellProvider({
               } else {
                 // for self-serve can send them to checkout
                 const baseUrl = subscription.canSelfServe
-                  ? `/settings/${organization.slug}/billing/checkout/`
+                  ? `/checkout/${organization.slug}/`
                   : `/settings/${organization.slug}/billing/overview/`;
-                browserHistory.push(`${normalizeUrl(baseUrl)}?referrer=upsell-${source}`);
+                navigate(`${normalizeUrl(baseUrl)}?referrer=upsell-${source}`);
               }
             } else {
               if (triggerMemberRequests) {
@@ -224,7 +225,6 @@ function UpsellProvider({
                 openUpsellModal({
                   organization,
                   source,
-                  defaultSelection: upsellDefaultSelection,
                 });
               }
             }

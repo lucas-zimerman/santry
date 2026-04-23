@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def get_jwt(github_id: str | None = None, github_private_key: str | None = None) -> str:
     if github_id is None:
-        github_id = options.get("github-app.id")
+        github_id = str(options.get("github-app.id"))
     if github_private_key is None:
         github_private_key = options.get("github-app.private-key")
     exp_ = datetime.datetime.utcnow() + datetime.timedelta(minutes=10)
@@ -78,3 +78,8 @@ def parse_github_blob_url(repo_url: str, source_url: str) -> tuple[str, str]:
 
     branch, _, remainder = after_blob.partition("/")
     return branch, remainder.lstrip("/")
+
+
+def is_github_rate_limit_sensitive(organization_slug: str) -> bool:
+    """Check if an organization is in the list of GitHub rate-limit sensitive organizations."""
+    return organization_slug in options.get("github-app.rate-limit-sensitive-orgs")

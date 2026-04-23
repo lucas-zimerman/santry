@@ -3,11 +3,10 @@ import {useCallback, useReducer} from 'react';
 import type {Location} from 'history';
 
 import type {Organization} from 'sentry/types/organization';
-import {browserHistory} from 'sentry/utils/browserHistory';
-import localStorage from 'sentry/utils/localStorage';
 import {MEPDataProvider} from 'sentry/utils/performance/contexts/metricsEnhancedPerformanceDataContext';
 import {decodeScalar} from 'sentry/utils/queryString';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 import {createDefinedContext} from './utils';
 
@@ -51,38 +50,11 @@ export enum MEPState {
 const METRIC_SETTING_PARAM = 'metricSetting';
 export const METRIC_SEARCH_SETTING_PARAM = 'metricSearchSetting'; // TODO: Clean this up since we don't need multiple params in practice.
 
-const storageKey = 'performance.metrics-enhanced-setting';
-export const MEPSetting = {
-  get(): MEPState | null {
-    const value = localStorage.getItem(storageKey);
-    if (value) {
-      if (!(value in MEPState)) {
-        localStorage.removeItem(storageKey);
-        return null;
-      }
-      // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-      return MEPState[value];
-    }
-    return null;
-  },
-
-  set(value: MEPState) {
-    localStorage.setItem(storageKey, value);
-  },
-};
-
-function canUseMetricsDevUI(organization: Organization) {
-  return organization.features.includes('performance-use-metrics');
-}
-
 export function canUseMetricsData(organization: Organization) {
-  const isDevFlagOn = canUseMetricsDevUI(organization); // Forces metrics data on as well.
   const isInternalViewOn = organization.features.includes(
     'performance-transaction-name-only-search'
   );
-  const samplingFeatureFlag = organization.features.includes('dynamic-sampling'); // Exists on AM2 plans only.
-  const isRollingOut =
-    samplingFeatureFlag && organization.features.includes('mep-rollout-flag');
+  const isRollingOut = organization.features.includes('dynamic-sampling'); // Exists on AM2 plans only.
 
   // For plans transitioning from AM2 to AM3, we still want to show metrics
   // until 90d after 100% transaction ingestion to avoid spikes in charts
@@ -91,7 +63,7 @@ export function canUseMetricsData(organization: Organization) {
     'dashboards-metrics-transition'
   );
 
-  return isDevFlagOn || isInternalViewOn || isRollingOut || isTransitioningPlan;
+  return isInternalViewOn || isRollingOut || isTransitioningPlan;
 }
 
 export function MEPSettingProvider({
@@ -106,6 +78,7 @@ export function MEPSettingProvider({
   location?: Location;
 }) {
   const organization = useOrganization();
+  const navigate = useNavigate();
 
   const canUseMEP = canUseMetricsData(organization);
 
@@ -134,16 +107,19 @@ export function MEPSettingProvider({
       if (!location) {
         return;
       }
-      browserHistory.replace({
-        ...location,
-        query: {
-          ...location.query,
-          [METRIC_SETTING_PARAM]: settingState,
+      navigate(
+        {
+          ...location,
+          query: {
+            ...location.query,
+            [METRIC_SETTING_PARAM]: settingState,
+          },
         },
-      });
+        {replace: true}
+      );
       _setMetricSettingState(settingState);
     },
-    [location, _setMetricSettingState]
+    [location, navigate, _setMetricSettingState]
   );
 
   const [autoSampleState, setAutoSampleState] = useReducer(
@@ -160,7 +136,7 @@ export function MEPSettingProvider({
   const shouldQueryProvideMEPTransactionParams =
     canUseMEP && metricSettingState === MEPState.TRANSACTIONS_ONLY;
 
-  const memoizationKey = `${metricSettingState}`;
+  const memoizationKey = metricSettingState;
 
   return (
     <_MEPSettingProvider

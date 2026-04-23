@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from django.urls import reverse
 
-from sentry.api.endpoints.organization_events_timeseries import INGESTION_DELAY_MESSAGE
+from sentry.api.endpoints.timeseries import INGESTION_DELAY_MESSAGE
 from sentry.testutils.cases import APITestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now, freeze_time
 from sentry.utils.samples import load_data
@@ -83,6 +83,19 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
         with self.feature(features):
             return self.client.get(self.url if url is None else url, data=data, format="json")
 
+    def test_no_projects(self) -> None:
+        org = self.create_organization(owner=self.user)
+        self.login_as(user=self.user)
+
+        url = reverse(self.endpoint, kwargs={"organization_id_or_slug": org.slug})
+        response = self.do_request({}, url)
+
+        assert response.status_code == 200, response.content
+        data = response.data
+        assert "timeSeries" in data
+        assert len(data["timeSeries"]) == 0
+        assert "meta" not in data
+
     @pytest.mark.querybuilder
     def test_simple(self) -> None:
         response = self.do_request(
@@ -122,6 +135,7 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
         ]
         assert timeseries["meta"] == {
             "valueType": "integer",
+            "valueUnit": None,
             "interval": 3_600_000,
         }
 
@@ -165,6 +179,7 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
         ]
         assert timeseries["meta"] == {
             "valueType": "integer",
+            "valueUnit": None,
             "interval": 3_600_000,
         }
 
@@ -190,6 +205,7 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
         ]
         assert timeseries["meta"] == {
             "valueType": "integer",
+            "valueUnit": None,
             "interval": 3_600_000,
         }
 
@@ -222,6 +238,7 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
             "order": 0,
             "isOther": False,
             "valueType": "integer",
+            "valueUnit": None,
             "interval": 3_600_000,
         }
         assert timeseries["values"] == [
@@ -279,6 +296,7 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
             "order": 1,
             "isOther": False,
             "valueType": "integer",
+            "valueUnit": None,
             "interval": 3_600_000,
         }
         assert timeseries["values"] == [
@@ -369,5 +387,6 @@ class OrganizationEventsTimeseriesEndpointTest(APITestCase, SnubaTestCase, Searc
         ]
         assert timeseries["meta"] == {
             "valueType": "integer",
+            "valueUnit": None,
             "interval": 3_600_000,
         }

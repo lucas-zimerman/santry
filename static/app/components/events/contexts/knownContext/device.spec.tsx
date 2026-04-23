@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {getDeviceContextData} from 'sentry/components/events/contexts/knownContext/device';
 import type {DeviceContext} from 'sentry/types/event';
 
@@ -143,8 +143,8 @@ describe('DeviceContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'device'}
-        alias={'device'}
+        type="device"
+        alias="device"
         value={{...MOCK_DEVICE_CONTEXT, name: ''}}
       />
     );

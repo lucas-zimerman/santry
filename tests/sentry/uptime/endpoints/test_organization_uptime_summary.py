@@ -2,10 +2,9 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sentry.testutils.cases import APITestCase, UptimeCheckSnubaTestCase
+from sentry.testutils.cases import APITestCase, SnubaTestCase, UptimeResultEAPTestCase
 from sentry.testutils.helpers.datetime import freeze_time
 from sentry.uptime.types import IncidentStatus
-from tests.sentry.uptime.endpoints.test_base import UptimeResultEAPTestCase
 
 MOCK_DATETIME = datetime.now(tz=timezone.utc) - timedelta(days=1)
 
@@ -292,59 +291,10 @@ class OrganizationUptimeSummaryBaseTest(APITestCase):
 
 
 @freeze_time(MOCK_DATETIME)
-class OrganizationUptimeSummarySnubaTest(
-    OrganizationUptimeSummaryBaseTest, UptimeCheckSnubaTestCase
+class OrganizationUptimeSummaryEAPTest(
+    OrganizationUptimeSummaryBaseTest, SnubaTestCase, UptimeResultEAPTestCase
 ):
     __test__ = True
-
-    def store_uptime_data(
-        self,
-        subscription_id,
-        check_status,
-        incident_status=IncidentStatus.NO_INCIDENT,
-        scheduled_check_time=None,
-        check_duration_us=None,
-    ):
-        duration_ms = None
-        if check_duration_us is not None:
-            duration_ms = check_duration_us // 1000
-        self.store_snuba_uptime_check(
-            subscription_id=subscription_id,
-            check_status=check_status,
-            incident_status=incident_status,
-            scheduled_check_time=scheduled_check_time,
-            duration_ms=duration_ms,
-        )
-
-    def test_average_duration_not_available(self) -> None:
-        """
-        Test that average duration is null for legacy uptime checks.
-        """
-        with self.feature(self.features):
-            response = self.get_success_response(
-                self.organization.slug,
-                project=[self.project.id],
-                uptimeDetectorId=[str(self.detector.id)],
-                since=(datetime.now(timezone.utc) - timedelta(days=7)).timestamp(),
-                until=datetime.now(timezone.utc).timestamp(),
-            )
-            assert response.data is not None
-            data = response.data
-
-            stats = data[self.detector.id]
-            assert stats["avgDurationUs"] is None
-
-
-@freeze_time(MOCK_DATETIME)
-class OrganizationUptimeSummaryEAPTest(OrganizationUptimeSummaryBaseTest, UptimeResultEAPTestCase):
-    __test__ = True
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.features = {
-            "organizations:uptime-eap-enabled": True,
-            "organizations:uptime-eap-uptime-results-query": True,
-        }
 
     def store_uptime_data(
         self,
@@ -366,7 +316,7 @@ class OrganizationUptimeSummaryEAPTest(OrganizationUptimeSummaryBaseTest, Uptime
             kwargs["check_duration_us"] = check_duration_us
 
         uptime_result = self.create_eap_uptime_result(**kwargs)
-        self.store_uptime_results([uptime_result])
+        self.store_eap_items([uptime_result])
 
     def test_average_duration_available(self) -> None:
         """Test that average duration is available and correctly calculated for EAP uptime results."""

@@ -1,13 +1,12 @@
 import pick from 'lodash/pick';
 import {ConfigFixture} from 'sentry-fixture/config';
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 import {VercelProviderFixture} from 'sentry-fixture/vercelIntegration';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
-import selectEvent from 'sentry-test/selectEvent';
+import {selectEvent} from 'sentry-test/selectEvent';
 
-import ConfigStore from 'sentry/stores/configStore';
+import {ConfigStore} from 'sentry/stores/configStore';
 import type {Organization} from 'sentry/types/organization';
 import {generateOrgSlugUrl} from 'sentry/utils';
 import {testableWindowLocation} from 'sentry/utils/testableWindowLocation';
@@ -46,9 +45,12 @@ describe('IntegrationOrganizationLink', () => {
   });
   let getOrgsMock: jest.Mock;
 
-  const router = RouterFixture({
-    params: {integrationSlug: 'vercel'},
-  });
+  const initialRouterConfig = {
+    location: {
+      pathname: '/extensions/vercel/link/',
+    },
+    route: '/extensions/:integrationSlug/link/',
+  };
 
   beforeEach(() => {
     MockApiClient.clearMockResponses();
@@ -83,16 +85,13 @@ describe('IntegrationOrganizationLink', () => {
     });
 
     render(<IntegrationOrganizationLink />, {
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
     expect(getOrgsMock).toHaveBeenCalled();
     expect(getOrgMock).toHaveBeenCalled();
 
     // Select organization
-    await selectEvent.select(screen.getByRole('textbox'), org2.name);
+    await selectEvent.select(await screen.findByRole('textbox'), org2.name);
     expect(testableWindowLocation.assign).toHaveBeenCalledWith(
       generateOrgSlugUrl(org2.slug)
     );
@@ -113,13 +112,10 @@ describe('IntegrationOrganizationLink', () => {
     });
 
     render(<IntegrationOrganizationLink />, {
-      router,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
     // Select the same organization as the domain
-    await selectEvent.select(screen.getByRole('textbox'), org2.name);
+    await selectEvent.select(await screen.findByRole('textbox'), org2.name);
     expect(testableWindowLocation.assign).not.toHaveBeenCalled();
 
     expect(screen.getByRole('button', {name: 'Install Vercel'})).toBeEnabled();

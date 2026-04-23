@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import field
 from typing import Any
@@ -16,14 +17,18 @@ from sentry_sdk.api import isolation_scope
 from sentry import analytics, audit_log
 from sentry.analytics.events.internal_integration_created import InternalIntegrationCreatedEvent
 from sentry.analytics.events.sentry_app_created import SentryAppCreatedEvent
+from sentry.analytics.events.sentry_app_updated import SentryAppUpdatedEvent
 from sentry.api.helpers.slugs import sentry_slugify
 from sentry.auth.staff import has_staff_option
 from sentry.constants import SentryAppStatus
 from sentry.db.postgres.transactions import in_test_hide_transaction_boundary
+from sentry.hybridcloud.models.outbox import ControlOutbox, outbox_context
+from sentry.hybridcloud.outbox.category import OutboxCategory, OutboxScope
 from sentry.integrations.models.integration_feature import IntegrationFeature, IntegrationTypes
 from sentry.models.apiapplication import ApiApplication
 from sentry.models.apiscopes import add_scope_hierarchy
 from sentry.models.apitoken import ApiToken
+from sentry.models.organizationmapping import OrganizationMapping
 from sentry.sentry_apps.installations import (
     SentryAppInstallationCreator,
     SentryAppInstallationTokenCreator,
@@ -41,15 +46,13 @@ from sentry.sentry_apps.models.sentry_app import (
 )
 from sentry.sentry_apps.models.sentry_app_component import SentryAppComponent
 from sentry.sentry_apps.models.sentry_app_installation import SentryAppInstallation
-from sentry.sentry_apps.tasks.sentry_apps import create_or_update_service_hooks_for_sentry_app
 from sentry.sentry_apps.utils.webhooks import EVENT_EXPANSION, SentryAppResourceType
 from sentry.users.models.user import User
 from sentry.users.services.user.model import RpcUser
-from sentry.utils.sentry_apps.service_hook_manager import (
-    create_or_update_service_hooks_for_installation,
-)
 
 Schema = Mapping[str, Any]
+
+logger = logging.getLogger(__name__)
 
 
 def _get_schema_types(schema: Schema | None) -> set[str]:
@@ -159,13 +162,14 @@ class SentryAppUpdater:
             self.sentry_app.author = self.author
 
     def _update_status(self, user: User | RpcUser) -> None:
-        if self.status is not None:
-            if _is_elevated_user(user):
-                if self.status == SentryAppStatus.PUBLISHED_STR:
-                    self.sentry_app.status = SentryAppStatus.PUBLISHED
-                    self.sentry_app.date_published = timezone.now()
-                if self.status == SentryAppStatus.UNPUBLISHED_STR:
-                    self.sentry_app.status = SentryAppStatus.UNPUBLISHED
+        # All status changes require elevated permissions (superuser/staff).
+        # The publish request endpoint handles its own status change directly.
+        if self.status is not None and _is_elevated_user(user):
+            if self.status == SentryAppStatus.PUBLISHED_STR:
+                self.sentry_app.status = SentryAppStatus.PUBLISHED
+                self.sentry_app.date_published = timezone.now()
+            if self.status == SentryAppStatus.UNPUBLISHED_STR:
+                self.sentry_app.status = SentryAppStatus.UNPUBLISHED
             if self.status == SentryAppStatus.PUBLISH_REQUEST_INPROGRESS_STR:
                 self.sentry_app.status = SentryAppStatus.PUBLISH_REQUEST_INPROGRESS
 
@@ -206,30 +210,48 @@ class SentryAppUpdater:
             self.sentry_app.events = expand_events(self.events)
 
     def _update_service_hooks(self) -> None:
-        if self.sentry_app.is_published:
-            # if it's a published integration, we need to do many updates so we have to do it in a task so we don't time out
-            # the client won't know it succeeds but there's not much we can do about that unfortunately
-            create_or_update_service_hooks_for_sentry_app.apply_async(
-                kwargs={
-                    "sentry_app_id": self.sentry_app.id,
-                    "webhook_url": self.sentry_app.webhook_url,
-                    "events": self.sentry_app.events,
-                }
-            )
-            return
+        self._update_service_hooks_via_outbox()
 
-        # for unpublished integrations that aren't installed yet, we may not have an installation
-        # if we don't, then won't have any service hooks
-        try:
-            installation = SentryAppInstallation.objects.get(sentry_app_id=self.sentry_app.id)
-        except SentryAppInstallation.DoesNotExist:
-            return
+    def _update_service_hooks_via_outbox(self) -> None:
+        if installations := SentryAppInstallation.objects.filter(sentry_app_id=self.sentry_app.id):
+            org_ids_and_cell_names = OrganizationMapping.objects.filter(
+                organization_id__in=installations.values_list("organization_id", flat=True)
+            ).values_list("organization_id", "cell_name")
 
-        create_or_update_service_hooks_for_installation(
-            installation=installation,
-            webhook_url=self.sentry_app.webhook_url,
-            events=self.sentry_app.events,
-        )
+            installation_org_id_to_cell_name = {
+                org_id: cell_name for org_id, cell_name in org_ids_and_cell_names
+            }
+
+            with outbox_context(
+                transaction.atomic(router.db_for_write(ControlOutbox)), flush=False
+            ):
+                for installation in installations:
+                    assert (
+                        installation_org_id_to_cell_name.get(installation.organization_id)
+                        is not None
+                    ), (
+                        f"OrganizationMapping must exist for installation {installation.id} and organization {installation.organization_id}"
+                    )
+
+                    ControlOutbox(
+                        shard_scope=OutboxScope.APP_SCOPE,
+                        shard_identifier=self.sentry_app.id,
+                        object_identifier=installation.id,
+                        category=OutboxCategory.SERVICE_HOOK_UPDATE,
+                        cell_name=installation_org_id_to_cell_name[installation.organization_id],
+                    ).save()
+                    logger.info(
+                        "_update_service_hooks_via_outbox.created_outbox_entry",
+                        extra={
+                            "installation_id": installation.id,
+                            "sentry_app_id": self.sentry_app.id,
+                            "events": self.sentry_app.events,
+                            "application_id": self.sentry_app.application_id,
+                            "cell_name": installation_org_id_to_cell_name[
+                                installation.organization_id
+                            ],
+                        },
+                    )
 
     def _update_webhook_url(self) -> None:
         if self.webhook_url is not None:
@@ -289,12 +311,14 @@ class SentryAppUpdater:
                 )
 
     def record_analytics(self, user: User | RpcUser, new_schema_elements: set[str] | None) -> None:
+        created_alert_rule_ui_component = "alert-rule-action" in (new_schema_elements or set())
         analytics.record(
-            "sentry_app.updated",
-            user_id=user.id,
-            organization_id=self.sentry_app.owner_id,
-            sentry_app=self.sentry_app.slug,
-            created_alert_rule_ui_component="alert-rule-action" in (new_schema_elements or set()),
+            SentryAppUpdatedEvent(
+                user_id=user.id,
+                organization_id=self.sentry_app.owner_id,
+                sentry_app=self.sentry_app.slug,
+                created_alert_rule_ui_component=created_alert_rule_ui_component,
+            )
         )
 
 
@@ -318,9 +342,9 @@ class SentryAppCreator:
 
     def __post_init__(self) -> None:
         if self.is_internal:
-            assert (
-                not self.verify_install
-            ), "Internal apps should not require installation verification"
+            assert not self.verify_install, (
+                "Internal apps should not require installation verification"
+            )
 
     def run(
         self,
@@ -329,7 +353,6 @@ class SentryAppCreator:
         request: HttpRequest | None = None,
         skip_default_auth_token: bool = False,
     ) -> SentryApp:
-
         with SentryAppInteractionEvent(
             operation_type=SentryAppInteractionType.MANAGEMENT,
             event_type=SentryAppEventType.APP_CREATE,

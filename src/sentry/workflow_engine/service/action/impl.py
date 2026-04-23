@@ -26,3 +26,41 @@ class DatabaseBackedActionService(ActionService):
             integration_id=integration_id,
             dataconditiongroupaction__condition_group__organization_id=organization_id,
         ).update(status=status)
+
+    def update_action_status_for_sentry_app_installation(
+        self,
+        *,
+        cell_name: str,
+        status: int,
+        organization_id: int,
+        sentry_app_id: int,
+    ) -> None:
+        Action.objects.filter(
+            config__target_identifier=str(sentry_app_id),
+            type=Action.Type.SENTRY_APP,
+            dataconditiongroupaction__condition_group__organization_id=organization_id,
+        ).update(status=status)
+
+    def update_action_status_for_sentry_app_via_sentry_app_id(
+        self,
+        *,
+        cell_name: str,
+        status: int,
+        sentry_app_id: int,
+    ) -> None:
+        Action.objects.filter(
+            config__target_identifier=str(sentry_app_id),
+            type=Action.Type.SENTRY_APP,
+        ).update(status=status)
+
+    def update_action_status_for_webhook_via_sentry_app_slug(
+        self,
+        *,
+        cell_name: str,
+        status: int,
+        sentry_app_slug: str,
+    ) -> None:
+        Action.objects.filter(
+            type=Action.Type.WEBHOOK,
+            config__target_identifier=sentry_app_slug,
+        ).update(status=status)

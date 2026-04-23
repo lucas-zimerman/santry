@@ -1,5 +1,8 @@
+import {useQuery} from '@tanstack/react-query';
+
 import type {Organization} from 'sentry/types/organization';
-import {fetchDataQuery, useQuery, type ApiQueryKey} from 'sentry/utils/queryClient';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {fetchDataQuery, type ApiQueryKey} from 'sentry/utils/queryClient';
 import type {OrganizationWithRegion} from 'sentry/views/setupWizard/types';
 
 export function useOrganizationDetails({
@@ -9,7 +12,9 @@ export function useOrganizationDetails({
 }) {
   return useQuery({
     queryKey: [
-      `/organizations/${organization?.slug}/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/', {
+        path: {organizationIdOrSlug: organization?.slug!},
+      }),
       {
         host: organization?.region.url,
         query: {

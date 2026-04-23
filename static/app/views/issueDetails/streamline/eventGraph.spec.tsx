@@ -7,8 +7,8 @@ import {TagsFixture} from 'sentry-fixture/tags';
 
 import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {EventGraph} from 'sentry/views/issueDetails/streamline/eventGraph';
 
 import {EventDetailsHeader} from './eventDetailsHeader';
@@ -21,7 +21,7 @@ describe('EventGraph', () => {
   const group = GroupFixture();
   const event = EventFixture({id: 'event-id'});
   const persistantQuery = `issue:${group.shortId}`;
-  const defaultProps = {group, event, project};
+  const defaultProps = {group, event, project, showReleasesAs: 'bubble' as const};
 
   let mockEventStats: jest.Mock;
 
@@ -45,14 +45,11 @@ describe('EventGraph', () => {
       body: [project],
     });
     PageFiltersStore.init();
-    PageFiltersStore.onInitializeUrlState(
-      {
-        projects: [],
-        environments: [],
-        datetime: {start: null, end: null, period: '14d', utc: null},
-      },
-      new Set(['environments'])
-    );
+    PageFiltersStore.onInitializeUrlState({
+      projects: [],
+      environments: [],
+      datetime: {start: null, end: null, period: '14d', utc: null},
+    });
     ProjectsStore.loadInitialData([project]);
     mockEventStats = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/events-stats/`,
@@ -193,7 +190,9 @@ describe('EventGraph', () => {
         },
       },
     });
-    expect(await screen.findByTestId('event-graph-loading')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByTestId('event-graph-loading')).not.toBeInTheDocument();
+    });
 
     expect(mockEventStats).toHaveBeenCalledWith(
       '/organizations/org-slug/events-stats/',

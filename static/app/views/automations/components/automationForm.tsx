@@ -1,31 +1,20 @@
-import {useCallback, useState} from 'react';
-import styled from '@emotion/styled';
+import {useCallback} from 'react';
 
-import {Flex} from 'sentry/components/core/layout';
-import SelectField from 'sentry/components/forms/fields/selectField';
-import type FormModel from 'sentry/components/forms/model';
-import {DebugForm} from 'sentry/components/workflowEngine/form/debug';
+import {Flex} from '@sentry/scraps/layout';
+
+import type {FormModel} from 'sentry/components/forms/model';
 import {EnvironmentSelector} from 'sentry/components/workflowEngine/form/environmentSelector';
 import {useFormField} from 'sentry/components/workflowEngine/form/useFormField';
 import {Card} from 'sentry/components/workflowEngine/ui/card';
+import {FormSection} from 'sentry/components/workflowEngine/ui/formSection';
 import {t} from 'sentry/locale';
 import type {Automation} from 'sentry/types/workflowEngine/automations';
-import AutomationBuilder from 'sentry/views/automations/components/automationBuilder';
-import EditConnectedMonitors from 'sentry/views/automations/components/editConnectedMonitors';
+import {AutomationBuilder} from 'sentry/views/automations/components/automationBuilder';
+import {EditConnectedMonitors} from 'sentry/views/automations/components/editConnectedMonitors';
+import {ActionThrottleSelectField} from 'sentry/views/automations/components/forms/actionThrottleSelectField';
+import {useSetAutomaticAutomationName} from 'sentry/views/automations/components/forms/useSetAutomaticAutomationName';
 
-const FREQUENCY_OPTIONS = [
-  {value: 5, label: t('5 minutes')},
-  {value: 10, label: t('10 minutes')},
-  {value: 30, label: t('30 minutes')},
-  {value: 60, label: t('60 minutes')},
-  {value: 180, label: t('3 hours')},
-  {value: 720, label: t('12 hours')},
-  {value: 1440, label: t('24 hours')},
-  {value: 10080, label: t('1 week')},
-  {value: 43200, label: t('30 days')},
-];
-
-export default function AutomationForm({model}: {model: FormModel}) {
+export function AutomationForm({model}: {model: FormModel}) {
   const initialConnectedIds = useFormField<Automation['detectorIds']>('detectorIds');
   const setConnectedIds = useCallback(
     (ids: Automation['detectorIds']) => {
@@ -34,11 +23,7 @@ export default function AutomationForm({model}: {model: FormModel}) {
     [model]
   );
 
-  const [environment, setEnvironment] = useState<string>('');
-  const updateEnvironment = (env: string) => {
-    setEnvironment(env);
-    model.setValue('environment', env || null);
-  };
+  useSetAutomaticAutomationName();
 
   return (
     <Flex direction="column" gap="lg">
@@ -47,49 +32,26 @@ export default function AutomationForm({model}: {model: FormModel}) {
         setConnectedIds={setConnectedIds}
       />
       <Card>
-        <Flex direction="column" gap="xs">
-          <Heading>{t('Choose Environment')}</Heading>
-          <Description>
-            {t(
-              'If you select environments different than your monitors then the automation will not fire.'
-            )}
-          </Description>
-        </Flex>
-        <EnvironmentSelector value={environment} onChange={updateEnvironment} />
+        <FormSection
+          title={t('Filter Issues')}
+          description={t('Only get alerted on Issues from these environments.')}
+        >
+          <EnvironmentSelector />
+        </FormSection>
       </Card>
       <Card>
-        <Heading>{t('Automation Builder')}</Heading>
-        <AutomationBuilder />
+        <FormSection title={t('Alert Builder')}>
+          <AutomationBuilder />
+        </FormSection>
       </Card>
       <Card>
-        <Heading>{t('Action Interval')}</Heading>
-        <EmbeddedSelectField
-          required
-          name="frequency"
-          inline={false}
-          clearable={false}
-          options={FREQUENCY_OPTIONS}
-        />
+        <FormSection
+          title={t('Throttling')}
+          description={t('Set how often this alert can be triggered for a given issue.')}
+        >
+          <ActionThrottleSelectField />
+        </FormSection>
       </Card>
-      <DebugForm />
     </Flex>
   );
 }
-
-const Heading = styled('h2')`
-  font-size: ${p => p.theme.fontSize.xl};
-  margin: 0;
-`;
-
-const Description = styled('span')`
-  font-size: ${p => p.theme.fontSize.md};
-  color: ${p => p.theme.subText};
-  margin: 0;
-  padding: 0;
-`;
-
-const EmbeddedSelectField = styled(SelectField)`
-  padding: 0;
-  font-weight: ${p => p.theme.fontWeight.normal};
-  text-transform: none;
-`;

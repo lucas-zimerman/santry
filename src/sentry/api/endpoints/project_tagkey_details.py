@@ -4,17 +4,18 @@ from rest_framework.response import Response
 from sentry import audit_log, tagstore
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.helpers.environments import get_environment_id
 from sentry.api.serializers import serialize
 from sentry.constants import PROTECTED_TAG_KEYS
 from sentry.models.environment import Environment
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectTagKeyDetailsEndpoint(ProjectEndpoint):
     owner = ApiOwner.UNOWNED
     publish_status = {
@@ -23,18 +24,20 @@ class ProjectTagKeyDetailsEndpoint(ProjectEndpoint):
     }
 
     enforce_rate_limit = True
-    rate_limits = {
-        "DELETE": {
-            RateLimitCategory.IP: RateLimit(limit=1, window=1),
-            RateLimitCategory.USER: RateLimit(limit=1, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=1, window=1),
-        },
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=10, window=1, concurrent_limit=10),
-            RateLimitCategory.USER: RateLimit(limit=10, window=1, concurrent_limit=10),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1, concurrent_limit=5),
-        },
-    }
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "DELETE": {
+                RateLimitCategory.IP: RateLimit(limit=1, window=1),
+                RateLimitCategory.USER: RateLimit(limit=1, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=1, window=1),
+            },
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=10, window=1, concurrent_limit=10),
+                RateLimitCategory.USER: RateLimit(limit=10, window=1, concurrent_limit=10),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1, concurrent_limit=5),
+            },
+        }
+    )
 
     def get(self, request: Request, project, key) -> Response:
         lookup_key = tagstore.backend.prefix_reserved_key(key)

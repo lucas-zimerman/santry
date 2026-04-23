@@ -3,31 +3,30 @@ import {useCallback, useMemo} from 'react';
 import {defined} from 'sentry/utils';
 import {dedupeArray} from 'sentry/utils/dedupeArray';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
+import {useChartInterval} from 'sentry/utils/useChartInterval';
 import {determineSeriesSampleCountAndIsSampled} from 'sentry/views/alerts/rules/metric/utils/determineSeriesSampleCount';
-import {
-  useExploreAggregateSortBys,
-  useExploreDataset,
-} from 'sentry/views/explore/contexts/pageParamsContext';
 import {formatSort} from 'sentry/views/explore/contexts/pageParamsContext/sortBys';
 import {DEFAULT_VISUALIZATION} from 'sentry/views/explore/contexts/pageParamsContext/visualizes';
-import {useChartInterval} from 'sentry/views/explore/hooks/useChartInterval';
 import {
   useProgressiveQuery,
-  type SpansRPCQueryExtras,
+  type RPCQueryExtras,
 } from 'sentry/views/explore/hooks/useProgressiveQuery';
 import {useTopEvents} from 'sentry/views/explore/hooks/useTopEvents';
 import {
+  useQueryParamsAggregateSortBys,
+  useQueryParamsExtrapolate,
   useQueryParamsGroupBys,
   useQueryParamsVisualizes,
 } from 'sentry/views/explore/queryParams/context';
 import type {Visualize} from 'sentry/views/explore/queryParams/visualize';
+import {useSpansDataset} from 'sentry/views/explore/spans/spansQueryParams';
 import {computeVisualizeSampleTotals} from 'sentry/views/explore/utils';
 import {useSortedTimeSeries} from 'sentry/views/insights/common/queries/useSortedTimeSeries';
 
 interface UseExploreTimeseriesOptions {
   enabled: boolean;
   query: string;
-  queryExtras?: SpansRPCQueryExtras;
+  queryExtras?: RPCQueryExtras;
 }
 
 interface UseExploreTimeseriesResults {
@@ -37,11 +36,10 @@ interface UseExploreTimeseriesResults {
 export const useExploreTimeseries = ({
   query,
   enabled,
-}: {
-  enabled: boolean;
-  query: string;
-}) => {
+  queryExtras,
+}: UseExploreTimeseriesOptions) => {
   const visualizes = useQueryParamsVisualizes();
+  const extrapolate = useQueryParamsExtrapolate();
   const topEvents = useTopEvents();
   const isTopN = topEvents ? topEvents > 0 : false;
 
@@ -54,9 +52,10 @@ export const useExploreTimeseries = ({
 
   return useProgressiveQuery<typeof useExploreTimeseriesImpl>({
     queryHookImplementation: useExploreTimeseriesImpl,
-    queryHookArgs: {query, enabled},
+    queryHookArgs: {query, enabled, queryExtras},
     queryOptions: {
       canTriggerHighAccuracy,
+      disableExtrapolation: !extrapolate,
     },
   });
 };
@@ -66,9 +65,9 @@ function useExploreTimeseriesImpl({
   query,
   queryExtras,
 }: UseExploreTimeseriesOptions): UseExploreTimeseriesResults {
-  const dataset = useExploreDataset();
+  const dataset = useSpansDataset();
   const groupBys = useQueryParamsGroupBys();
-  const sortBys = useExploreAggregateSortBys();
+  const sortBys = useQueryParamsAggregateSortBys();
   const visualizes = useQueryParamsVisualizes({validate: true});
   const [interval] = useChartInterval();
   const topEvents = useTopEvents();
@@ -77,7 +76,7 @@ function useExploreTimeseriesImpl({
     return visualizes.map(visualize => visualize.yAxis);
   }, [visualizes]);
 
-  const fields: string[] = useMemo(() => {
+  const fields = useMemo(() => {
     return [...groupBys, ...validYAxes].filter(Boolean);
   }, [groupBys, validYAxes]);
 
@@ -112,16 +111,20 @@ function useExploreTimeseriesImpl({
       enabled,
       ...queryExtras,
     };
-  }, [query, yAxes, interval, fields, orderby, topEvents, enabled, queryExtras]);
+  }, [enabled, fields, interval, orderby, query, queryExtras, topEvents, yAxes]);
 
-  const timeseriesResult = useSortedTimeSeries(options, 'api.explorer.stats', dataset);
+  const timeseriesResult = useSortedTimeSeries(
+    options,
+    `api.explore.${dataset}-timeseries`,
+    dataset
+  );
 
   return {
     result: timeseriesResult,
   };
 }
 
-function shouldTriggerHighAccuracy(
+export function shouldTriggerHighAccuracy(
   data: ReturnType<typeof useSortedTimeSeries>['data'],
   visualizes: readonly Visualize[],
   isTopN: boolean

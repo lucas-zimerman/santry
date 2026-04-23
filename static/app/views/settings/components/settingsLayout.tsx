@@ -1,44 +1,56 @@
-import {isValidElement} from 'react';
+import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
-import * as Layout from 'sentry/components/layouts/thirds';
-import {space} from 'sentry/styles/space';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
+import {Container, Flex} from '@sentry/scraps/layout';
 
-import SettingsBreadcrumb from './settingsBreadcrumb';
-import SettingsHeader from './settingsHeader';
-import SettingsSearch from './settingsSearch';
+import {useParams} from 'sentry/utils/useParams';
+import {useRoutes} from 'sentry/utils/useRoutes';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 
-type Props = {
+import {SettingsBreadcrumb} from './settingsBreadcrumb';
+import {SettingsHeader} from './settingsHeader';
+import {SettingsSearch} from './settingsSearch';
+
+interface Props {
   children: React.ReactNode;
-  renderNavigation?: (opts: {isMobileNavVisible: boolean}) => React.ReactNode;
-} & RouteComponentProps;
+}
 
-function SettingsLayout(props: Props) {
-  const {children, params, routes, route} = props;
+export function SettingsLayout({children}: Props) {
+  const params = useParams();
+  const routes = useRoutes();
 
-  // We want child's view's props
-  const childProps =
-    children && isValidElement(children) ? (children.props as Props) : props;
-  const childRoutes = childProps.routes || routes || [];
-  const childRoute = childProps.route || route || {};
+  const hasPageFrame = useHasPageFrameFeature();
 
   return (
     <SettingsColumn>
-      <SettingsHeader>
-        <HeaderContent>
-          <StyledSettingsBreadcrumb
-            params={params}
-            routes={childRoutes}
-            route={childRoute}
-          />
-          <SettingsSearch />
-        </HeaderContent>
-      </SettingsHeader>
+      {hasPageFrame ? (
+        <Fragment>
+          <TopBar.Slot name="title">
+            <StyledSettingsBreadcrumb params={params} routes={routes} />
+          </TopBar.Slot>
+          <TopBar.Slot name="actions">
+            <SettingsSearch />
+          </TopBar.Slot>
+        </Fragment>
+      ) : (
+        <SettingsHeader>
+          <Flex align="center" justify="between">
+            <StyledSettingsBreadcrumb params={params} routes={routes} />
+            <SettingsSearch />
+          </Flex>
+        </SettingsHeader>
+      )}
 
-      <MaxWidthContainer>
-        <Content>{children}</Content>
-      </MaxWidthContainer>
+      <Flex flex="1" maxWidth={hasPageFrame ? undefined : '1440px'}>
+        <Container
+          flex="1"
+          padding={hasPageFrame ? {sm: 'xl', md: 'md xl'} : {xs: 'xl', md: '3xl'}}
+          minWidth="0"
+        >
+          {children}
+        </Container>
+      </Flex>
     </SettingsColumn>
   );
 }
@@ -53,43 +65,6 @@ const SettingsColumn = styled('div')`
   }
 `;
 
-const HeaderContent = styled('div')`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-`;
-
 const StyledSettingsBreadcrumb = styled(SettingsBreadcrumb)`
   flex: 1;
 `;
-
-const MaxWidthContainer = styled('div')`
-  display: flex;
-  /* @TODO(jonasbadalic) 1440px used to be defined as theme.settings.containerWidth and only used here */
-  max-width: 1440px;
-  flex: 1;
-`;
-
-/**
- * Note: `overflow: hidden` will cause some buttons in `SettingsPageHeader` to be cut off because it has negative margin.
- * Will also cut off tooltips.
- */
-const Content = styled('div')`
-  flex: 1;
-  padding: ${space(4)};
-  min-width: 0; /* keep children from stretching container */
-
-  @media (max-width: ${p => p.theme.breakpoints.md}) {
-    padding: ${space(2)};
-  }
-
-  /**
-   * Layout.Page is not normally used in settings but <PermissionDenied /> uses
-   * it under the hood. This prevents double padding.
-   */
-  ${Layout.Page} {
-    padding: 0;
-  }
-`;
-
-export default SettingsLayout;

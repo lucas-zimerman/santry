@@ -40,7 +40,7 @@ class ExpectedCodeMapping(TypedDict):
 
 
 def _repo_info(name: str, branch: str) -> dict[str, str]:
-    return {"full_name": name, "default_branch": branch}
+    return {"full_name": name, "default_branch": branch, "external_id": name}
 
 
 def _repo_tree_files(files: Sequence[str]) -> list[dict[str, Any]]:
@@ -176,10 +176,11 @@ class BaseDeriveCodeMappings(TestCase):
                         expected_new_code_mappings
                     )
                     for expected_cm in expected_new_code_mappings:
-                        code_mapping = current_code_mappings.filter(
+                        code_mapping = current_code_mappings.get(
+                            project_id=self.project.id,
                             stack_root=expected_cm["stack_root"],
                             source_root=expected_cm["source_root"],
-                        ).first()
+                        )
                         assert code_mapping is not None
                         assert code_mapping.repository.name == expected_cm["repo_name"]
                 else:
@@ -301,6 +302,15 @@ class TestGenericBehaviour(BaseDeriveCodeMappings):
         assert len(all_cm) == 1
         assert all_cm[0].automatically_generated is False
 
+    def test_single_file_path(self) -> None:
+        """Test that single-file paths like Program.cs are handled correctly."""
+        self._process_and_assert_configuration_changes(
+            repo_trees={REPO1: ["src/foo/bar.py"]},
+            frames=[self.frame("bar.py", True)],
+            platform="python",
+            expected_new_code_mappings=[self.code_mapping("", "src/foo/")],
+        )
+
     def test_dry_run_platform(self) -> None:
         frame_filename = "foo/bar.py"
         file_in_repo = "src/foo/bar.py"
@@ -337,13 +347,22 @@ class TestGenericBehaviour(BaseDeriveCodeMappings):
                 platform=platform,
             )
 
-            with patch(f"{REPO_TREES_CODE}.get_supported_extensions", return_value=["tbd"]):
-                self._process_and_assert_configuration_changes(
-                    repo_trees={REPO1: [file_in_repo]},
-                    frames=[self.frame(frame_filename, True)],
-                    platform=platform,
-                    expected_new_code_mappings=[self.code_mapping("foo/", "src/foo/")],
-                )
+    def test_extension_is_included(self) -> None:
+        frame_filename = "foo/bar.tbd"
+        file_in_repo = "src/foo/bar.tbd"
+        platform = "other"
+        self.event = self.create_event([{"filename": frame_filename, "in_app": True}], platform)
+
+        with (
+            patch(f"{CODE_ROOT}.utils.platform.get_platform_config", return_value={}),
+            patch(f"{REPO_TREES_CODE}.get_supported_extensions", return_value=["tbd"]),
+        ):
+            self._process_and_assert_configuration_changes(
+                repo_trees={REPO1: [file_in_repo]},
+                frames=[self.frame(frame_filename, True)],
+                platform=platform,
+                expected_new_code_mappings=[self.code_mapping("foo/", "src/foo/")],
+            )
 
     def test_multiple_calls(self) -> None:
         platform = "other"
@@ -622,6 +641,31 @@ class TestPythonDeriveCodeMappings(LanguageSpecificDeriveCodeMappings):
 class TestJavaDeriveCodeMappings(LanguageSpecificDeriveCodeMappings):
     platform = "java"
 
+    def test_extension_in_the_wrong_configuration(self) -> None:
+        # We do not include the extension in the configuration to demostrate
+        # that the correct platform -> extension mapping is needed
+        with patch(
+            "sentry.issues.auto_source_code_config.utils.platform.PLATFORMS_CONFIG",
+            {"java": {"extensions": []}},
+        ):
+            self._process_and_assert_configuration_changes(
+                repo_trees={REPO1: ["src/com/example/foo/Bar.sc"]},
+                frames=[self.frame_from_module("com.example.foo.Bar", "Bar.sc")],
+                platform=self.platform,
+                expected_new_code_mappings=[],  # Not expected
+                expected_new_in_app_stack_trace_rules=[],  # Not expected,
+            )
+
+        self._process_and_assert_configuration_changes(
+            repo_trees={REPO1: ["src/com/example/foo/Bar.sc"]},
+            frames=[self.frame_from_module("com.example.foo.Bar", "Bar.sc")],
+            platform=self.platform,
+            expected_new_code_mappings=[
+                self.code_mapping("com/example/foo/", "src/com/example/foo/")
+            ],
+            expected_new_in_app_stack_trace_rules=["stack.module:com.example.** +app"],
+        )
+
     def test_marked_in_app_already(self) -> None:
         self._process_and_assert_configuration_changes(
             repo_trees={REPO1: ["src/com/example/foo/Bar.kt"]},
@@ -843,7 +887,7 @@ class TestJavaDeriveCodeMappings(LanguageSpecificDeriveCodeMappings):
 
         # Let's pretend that we have already added the two level tld rule
         # This means that the uk.co.not-example.baz.qux will be in-app
-        repo = RepoAndBranch(name="repo1", branch="default")
+        repo = RepoAndBranch(name="repo1", branch="default", external_id="1")
         # The source root will only work for the foo package
         cm = CodeMapping(repo=repo, stacktrace_root="uk/co/", source_path="src/main/uk/co/")
         create_code_mapping(self.organization, cm, self.project)
@@ -896,13 +940,26 @@ class TestJavaDeriveCodeMappings(LanguageSpecificDeriveCodeMappings):
         self.project.update_option("sentry:grouping_enhancements", "stack.module:foo.bar.** +app")
         # Manually created code mapping
         self.create_repo_and_code_mapping(REPO1, "foo/bar/", "src/foo/")
-        # We do not expect code mappings or in-app rules to be created since
-        # the developer already created the code mapping and in-app rule
+        # We do not expect in-app rules to be created since the developer
+        # already created the in-app rule. A new code mapping is created
+        # because the source_root differs (src/foo/ vs src/foo/bar/).
         self._process_and_assert_configuration_changes(
             repo_trees={REPO1: ["src/foo/bar/Baz.java"]},
             frames=[self.frame_from_module("foo.bar.Baz", "Baz.java")],
             platform=self.platform,
+            expected_new_code_mappings=[
+                self.code_mapping(stack_root="foo/bar/", source_root="src/foo/bar/"),
+            ],
         )
+        # Both mappings should coexist: the manual one and the auto-created one
+        mappings = RepositoryProjectPathConfig.objects.filter(
+            project=self.project, stack_root="foo/bar/"
+        )
+        assert mappings.count() == 2
+        assert set(mappings.values_list("source_root", flat=True)) == {
+            "src/foo/",
+            "src/foo/bar/",
+        }
 
     def test_basic_case(self) -> None:
         repo_trees = {REPO1: ["src/com/example/foo/Bar.kt"]}
@@ -977,4 +1034,64 @@ class TestJavaDeriveCodeMappings(LanguageSpecificDeriveCodeMappings):
                 platform=self.platform,
                 expected_new_code_mappings=[self.code_mapping("android/app/", "src/android/app/")],
                 expected_new_in_app_stack_trace_rules=["stack.module:android.app.** +app"],
+            )
+
+    def test_multi_module(self) -> None:
+        # Some Java projects have all modules under the same com/foo/bar directory
+        # however, some projects have different modules under different directories
+        # Case 1:
+        # com.example.multi.foo -> modules/com/example/multi/foo/Bar.kt
+        # com.example.multi.bar -> modules/com/example/multi/bar/Baz.kt
+        # Case 2:
+        # com.example.multi.foo -> modules/modX/com/example/multi/foo/Bar.kt (Notice modX infix)
+        # com.example.multi.bar -> modules/modY/com/example/multi/bar/Baz.kt (Notice modY infix)
+        java_module_prefix = "com.example.multi"
+        module_prefix = java_module_prefix.replace(".", "/") + "/"
+        repo_trees = {
+            REPO1: [
+                f"modules/modX/{module_prefix}foo/Bar.kt",
+                f"modules/modY/{module_prefix}bar/Baz.kt",
+            ]
+        }
+        frames = [
+            self.frame_from_module(f"{java_module_prefix}.foo.Bar", "Bar.kt"),
+            self.frame_from_module(f"{java_module_prefix}.bar.Baz", "Baz.kt"),
+        ]
+        self._process_and_assert_configuration_changes(
+            repo_trees=repo_trees,
+            frames=frames,
+            platform=self.platform,
+            expected_new_code_mappings=[
+                self.code_mapping(f"{module_prefix}foo/", f"modules/modX/{module_prefix}foo/"),
+                self.code_mapping(f"{module_prefix}bar/", f"modules/modY/{module_prefix}bar/"),
+            ],
+            expected_new_in_app_stack_trace_rules=[f"stack.module:{java_module_prefix}.** +app"],
+        )
+
+    def test_same_package_in_multiple_gradle_subprojects(self) -> None:
+        with patch(f"{CODE_ROOT}.stacktraces._check_not_categorized", return_value=True):
+            self._process_and_assert_configuration_changes(
+                repo_trees={
+                    REPO1: [
+                        "sentry-graphql/src/main/java/io/sentry/graphql/GraphQLFetcher.java",
+                        "sentry-graphql-core/src/main/java/io/sentry/graphql/GraphQLFetcher.java",
+                    ]
+                },
+                frames=[
+                    self.frame_from_module(
+                        "io.sentry.graphql.GraphQLFetcher", "GraphQLFetcher.java"
+                    )
+                ],
+                platform=self.platform,
+                expected_new_code_mappings=[
+                    self.code_mapping(
+                        "io/sentry/graphql/",
+                        "sentry-graphql/src/main/java/io/sentry/graphql/",
+                    ),
+                    self.code_mapping(
+                        "io/sentry/graphql/",
+                        "sentry-graphql-core/src/main/java/io/sentry/graphql/",
+                    ),
+                ],
+                expected_new_in_app_stack_trace_rules=["stack.module:io.sentry.** +app"],
             )

@@ -3,22 +3,22 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import override
+from typing import Any, override
 
-from django.utils import timezone as django_timezone
+from django.db.models import Q
 from sentry_kafka_schemas.schema_types.uptime_results_v1 import CheckResult, CheckStatus
 
-from sentry import features, options
+from sentry import options
 from sentry.issues.grouptype import GroupCategory, GroupType
 from sentry.issues.issue_occurrence import IssueEvidence, IssueOccurrence
-from sentry.issues.producer import PayloadType, produce_occurrence_to_kafka
 from sentry.issues.status_change_message import StatusChangeMessage
-from sentry.models.group import GroupStatus
 from sentry.ratelimits.sliding_windows import Quota
 from sentry.types.group import PriorityLevel
-from sentry.uptime.models import UptimeStatus, UptimeSubscription
+from sentry.uptime.endpoints.validators import UptimeDomainCheckFailureValidator
+from sentry.uptime.models import UptimeResponseCapture, UptimeSubscription
 from sentry.uptime.types import GROUP_TYPE_UPTIME_DOMAIN_CHECK_FAILURE, UptimeMonitorMode
-from sentry.utils import metrics
+from sentry.uptime.utils import build_fingerprint, generate_scheduled_check_times_ms
+from sentry.utils import json, metrics
 from sentry.workflow_engine.handlers.detector.base import DetectorOccurrence, EventData
 from sentry.workflow_engine.handlers.detector.stateful import (
     DetectorThresholds,
@@ -36,23 +36,6 @@ from sentry.workflow_engine.types import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_uptime_issue(detector: Detector) -> None:
-    """
-    Sends an update to the issue platform to resolve the uptime issue for this
-    monitor.
-    """
-    status_change = StatusChangeMessage(
-        fingerprint=build_fingerprint(detector),
-        project_id=detector.project_id,
-        new_status=GroupStatus.RESOLVED,
-        new_substatus=None,
-    )
-    produce_occurrence_to_kafka(
-        payload_type=PayloadType.STATUS_CHANGE,
-        status_change=status_change,
-    )
-
-
 @dataclass(frozen=True)
 class UptimePacketValue:
     """
@@ -64,30 +47,6 @@ class UptimePacketValue:
     metric_tags: dict[str, str]
 
 
-def build_detector_fingerprint_component(detector: Detector) -> str:
-    return f"uptime-detector:{detector.id}"
-
-
-def build_fingerprint(detector: Detector) -> list[str]:
-    return [build_detector_fingerprint_component(detector)]
-
-
-def get_active_failure_threshold() -> int:
-    """
-    When in active monitoring mode, overrides how many failures in a row we
-    need to see to mark the monitor as down
-    """
-    return options.get("uptime.active-failure-threshold")
-
-
-def get_active_recovery_threshold() -> int:
-    """
-    When in active monitoring mode, how many successes in a row do we need to
-    mark it as up
-    """
-    return options.get("uptime.active-recovery-threshold")
-
-
 def build_evidence_display(result: CheckResult) -> list[IssueEvidence]:
     evidence_display: list[IssueEvidence] = []
 
@@ -95,14 +54,14 @@ def build_evidence_display(result: CheckResult) -> list[IssueEvidence]:
     if status_reason:
         reason_evidence = IssueEvidence(
             name="Failure reason",
-            value=f'{status_reason["type"]} - {status_reason["description"]}',
+            value=f"{status_reason['type']} - {status_reason['description']}",
             important=True,
         )
         evidence_display.extend([reason_evidence])
 
     duration_evidence = IssueEvidence(
         name="Duration",
-        value=f"{result["duration_ms"]}ms",
+        value=f"{result['duration_ms']}ms",
         important=False,
     )
     evidence_display.append(duration_evidence)
@@ -147,9 +106,12 @@ class UptimeDetectorHandler(StatefulDetectorHandler[UptimePacketValue, CheckStat
     @override
     @property
     def thresholds(self) -> DetectorThresholds:
+        recovery_threshold = self.detector.config["recovery_threshold"]
+        downtime_threshold = self.detector.config["downtime_threshold"]
+
         return {
-            DetectorPriorityLevel.OK: get_active_recovery_threshold(),
-            DetectorPriorityLevel.HIGH: get_active_failure_threshold(),
+            DetectorPriorityLevel.OK: recovery_threshold,
+            DetectorPriorityLevel.HIGH: downtime_threshold,
         }
 
     @override
@@ -181,30 +143,14 @@ class UptimeDetectorHandler(StatefulDetectorHandler[UptimePacketValue, CheckStat
         uptime_subscription = data_packet.packet.subscription
         metric_tags = data_packet.packet.metric_tags
 
-        issue_creation_flag_enabled = features.has(
-            "organizations:uptime-create-issues",
-            self.detector.project.organization,
-        )
+        issue_creation_enabled = options.get("uptime.create-issues")
         restricted_host_provider_ids = options.get(
             "uptime.restrict-issue-creation-by-hosting-provider-id"
         )
         host_provider_id = uptime_subscription.host_provider_id
         host_provider_enabled = host_provider_id not in restricted_host_provider_ids
 
-        issue_creation_allowed = issue_creation_flag_enabled and host_provider_enabled
-
-        # XXX(epurkhiser): We currently are duplicating the detector state onto
-        # the uptime_subscription when the detector changes state. Once we stop
-        # using this field we can drop this update logic.
-        if evaluation.priority == DetectorPriorityLevel.OK:
-            uptime_status = UptimeStatus.OK
-        elif evaluation.priority != DetectorPriorityLevel.OK:
-            uptime_status = UptimeStatus.FAILED
-
-        uptime_subscription.update(
-            uptime_status=uptime_status,
-            uptime_status_update_date=django_timezone.now(),
-        )
+        issue_creation_allowed = issue_creation_enabled and host_provider_enabled
 
         if not host_provider_enabled:
             metrics.incr(
@@ -268,9 +214,40 @@ class UptimeDetectorHandler(StatefulDetectorHandler[UptimePacketValue, CheckStat
         result = data_packet.packet.check_result
         uptime_subscription = data_packet.packet.subscription
 
+        evidence_data: dict[str, Any] = {}
+
+        # Find the most recent response capture for this failure sequence
+        threshold = self.detector.config["downtime_threshold"]
+        failure_times = generate_scheduled_check_times_ms(
+            base_time_ms=int(result["scheduled_check_time_ms"]),
+            interval_ms=uptime_subscription.interval_seconds * 1000,
+            count=threshold,
+            forward=False,
+        )
+        capture = (
+            UptimeResponseCapture.objects.filter(
+                uptime_subscription=uptime_subscription,
+                scheduled_check_time_ms__gte=failure_times[0],
+                scheduled_check_time_ms__lte=failure_times[-1],
+            )
+            .order_by("-scheduled_check_time_ms")
+            .first()
+        )
+        if capture:
+            evidence_data["response_capture_id"] = capture.id
+
+        assertion_failure_data = result.get("assertion_failure_data")
+        if assertion_failure_data is not None:
+            evidence_data["assertion_failure_data"] = json.dumps(assertion_failure_data)
+
+        check_id = result.get("guid")
+        if check_id:
+            evidence_data["check_id"] = check_id
+
         occurrence = DetectorOccurrence(
             issue_title=f"Downtime detected for {uptime_subscription.url}",
             subtitle="Your monitored domain is down",
+            evidence_data=evidence_data,
             evidence_display=build_evidence_display(result),
             type=UptimeDomainCheckFailure,
             level="error",
@@ -297,18 +274,30 @@ class UptimeDomainCheckFailure(GroupType):
     enable_escalation_detection = False
     detector_settings = DetectorSettings(
         handler=UptimeDetectorHandler,
+        validator=UptimeDomainCheckFailureValidator,
         config_schema={
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "description": "A representation of an uptime alert",
             "type": "object",
-            "required": ["mode", "environment"],
+            "required": ["mode", "environment", "recovery_threshold", "downtime_threshold"],
             "properties": {
                 "mode": {
                     "type": ["integer"],
                     "enum": [mode.value for mode in UptimeMonitorMode],
                 },
                 "environment": {"type": ["string", "null"]},
+                "recovery_threshold": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Number of consecutive successful checks required to mark monitor as recovered",
+                },
+                "downtime_threshold": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Number of consecutive failed checks required to mark monitor as down",
+                },
             },
             "additionalProperties": False,
         },
+        filter=~Q(config__mode=UptimeMonitorMode.AUTO_DETECTED_ONBOARDING),
     )

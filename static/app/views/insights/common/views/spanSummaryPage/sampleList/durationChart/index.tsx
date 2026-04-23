@@ -3,6 +3,7 @@ import keyBy from 'lodash/keyBy';
 
 import {t} from 'sentry/locale';
 import {usePageAlert} from 'sentry/utils/performance/contexts/pageAlert';
+import {useFetchSpanTimeSeries} from 'sentry/utils/timeSeries/useFetchEventsTimeSeries';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import type {TabularData} from 'sentry/views/dashboards/widgets/common/types';
 import {Samples} from 'sentry/views/dashboards/widgets/timeSeriesWidget/plottables/samples';
@@ -10,7 +11,6 @@ import {Samples} from 'sentry/views/dashboards/widgets/timeSeriesWidget/plottabl
 // eslint-disable-next-line no-restricted-imports
 import {InsightsLineChartWidget} from 'sentry/views/insights/common/components/insightsLineChartWidget';
 import {useSpans} from 'sentry/views/insights/common/queries/useDiscover';
-import {useSpanSeries} from 'sentry/views/insights/common/queries/useDiscoverSeries';
 import type {
   NonDefaultSpanSampleFields,
   SpanSample,
@@ -38,7 +38,7 @@ type Props = {
   transactionMethod?: string;
 };
 
-function DurationChart({
+export function DurationChart({
   groupId,
   transactionName,
   onClickSample,
@@ -53,7 +53,7 @@ function DurationChart({
   subregions,
   additionalFilters,
 }: Props) {
-  const {setPageError} = usePageAlert();
+  const {setPageDanger} = usePageAlert();
 
   const filters: SpanQueryFilters = {
     'span.group': groupId,
@@ -87,14 +87,13 @@ function DurationChart({
     isPending,
     data: spanMetricsSeriesData,
     error: spanMetricsSeriesError,
-  } = useSpanSeries(
+  } = useFetchSpanTimeSeries(
     {
-      search,
+      query: search,
       yAxis: [`avg(${SPAN_SELF_TIME})`],
       enabled: Object.values({...filters, ...additionalFilters}).every(value =>
         Boolean(value)
       ),
-      transformAliasToInputFormat: true,
     },
     referrer
   );
@@ -109,7 +108,7 @@ function DurationChart({
   );
 
   if (spanMetricsSeriesError || spanMetricsError) {
-    setPageError(t('An error has occurred while loading chart data'));
+    setPageDanger(t('An error has occurred while loading chart data'));
   }
 
   const avg = data.at(0)?.[`avg(${SPAN_SELF_TIME})`] ?? 0;
@@ -178,10 +177,8 @@ function DurationChart({
       title={t('Average Duration')}
       isLoading={isPending}
       error={spanMetricsSeriesError}
-      series={[spanMetricsSeriesData[`avg(${SpanFields.SPAN_SELF_TIME})`]]}
+      timeSeries={spanMetricsSeriesData?.timeSeries}
       samples={samplesPlottable}
     />
   );
 }
-
-export default DurationChart;

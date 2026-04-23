@@ -16,11 +16,6 @@ from sentry.dynamic_sampling.rules.utils import (
     RuleType,
 )
 from sentry.dynamic_sampling.types import DynamicSamplingMode
-from sentry.models.dynamicsampling import (
-    CUSTOM_RULE_DATE_FORMAT,
-    CUSTOM_RULE_START,
-    CustomDynamicSamplingRule,
-)
 from sentry.models.projectteam import ProjectTeam
 from sentry.testutils.factories import Factories
 from sentry.testutils.helpers import Feature
@@ -115,19 +110,18 @@ def test_generate_rules_return_only_always_allowed_rules_if_sample_rate_is_100_a
         0.5,
     )
 
-    with Feature("organizations:ds-org-recalibration"):
-        assert generate_rules(default_old_project) == [
-            {
-                "condition": {"inner": [], "op": "and"},
-                "id": 1000,
-                "samplingValue": {"type": "sampleRate", "value": 1.0},
-                "type": "trace",
-            },
-        ]
-        get_blended_sample_rate.assert_called_with(
-            organization_id=default_old_project.organization.id, project=default_old_project
-        )
-        _validate_rules(default_old_project)
+    assert generate_rules(default_old_project) == [
+        {
+            "condition": {"inner": [], "op": "and"},
+            "id": 1000,
+            "samplingValue": {"type": "sampleRate", "value": 1.0},
+            "type": "trace",
+        },
+    ]
+    get_blended_sample_rate.assert_called_with(
+        organization_id=default_old_project.organization.id, project=default_old_project
+    )
+    _validate_rules(default_old_project)
 
 
 @django_db_all
@@ -516,9 +510,12 @@ def test_generate_rules_return_uniform_rules_and_low_volume_transactions_rules(
     t1_rate = 0.7
     implicit_rate = 0.037
     get_blended_sample_rate.return_value = project_sample_rate
-    get_transactions_resampling_rates.return_value = {
-        "t1": t1_rate,
-    }, implicit_rate
+    get_transactions_resampling_rates.return_value = (
+        {
+            "t1": t1_rate,
+        },
+        implicit_rate,
+    )
     boost_low_transactions_id = RESERVED_IDS[RuleType.BOOST_LOW_VOLUME_TRANSACTIONS_RULE]
     uniform_id = RESERVED_IDS[RuleType.BOOST_LOW_VOLUME_PROJECTS_RULE]
     default_old_project.update_option(
@@ -588,9 +585,12 @@ def test_low_volume_transactions_rules_not_returned_when_inactive(
     get_transactions_resampling_rates, get_blended_sample_rate, default_old_project, default_team
 ):
     get_blended_sample_rate.return_value = 0.1
-    get_transactions_resampling_rates.return_value = {
-        "t1": 0.7,
-    }, 0.037
+    get_transactions_resampling_rates.return_value = (
+        {
+            "t1": 0.7,
+        },
+        0.037,
+    )
     uniform_id = RESERVED_IDS[RuleType.BOOST_LOW_VOLUME_PROJECTS_RULE]
 
     default_old_project.update_option(
@@ -647,22 +647,21 @@ def test_generate_rules_return_uniform_rules_and_recalibrate_orgs_rule(
         default_factor,
     )
 
-    with Feature("organizations:ds-org-recalibration"):
-        assert generate_rules(default_old_project) == [
-            {
-                "condition": {"inner": [], "op": "and"},
-                "id": 1004,
-                "samplingValue": {"type": "factor", "value": default_factor},
-                "type": "trace",
-            },
-            {
-                "condition": {"inner": [], "op": "and"},
-                "id": 1000,
-                "samplingValue": {"type": "sampleRate", "value": 0.1},
-                "type": "trace",
-            },
-        ]
-        _validate_rules(default_project)
+    assert generate_rules(default_old_project) == [
+        {
+            "condition": {"inner": [], "op": "and"},
+            "id": 1004,
+            "samplingValue": {"type": "factor", "value": default_factor},
+            "type": "trace",
+        },
+        {
+            "condition": {"inner": [], "op": "and"},
+            "id": 1000,
+            "samplingValue": {"type": "sampleRate", "value": 0.1},
+            "type": "trace",
+        },
+    ]
+    _validate_rules(default_project)
 
 
 @django_db_all
@@ -733,7 +732,7 @@ def test_generate_rules_return_minimum_sample_rate_when_enabled(
                 "condition": {"inner": [], "op": "and"},
                 "id": 1006,
                 "samplingValue": {"type": "minimumSampleRate", "value": 0.3},
-                "type": "transaction",
+                "type": "project",
             },
             {
                 "condition": {"inner": [], "op": "and"},
@@ -819,7 +818,6 @@ def test_generate_rules_minimum_sample_rate_correct_order(
     get_blended_sample_rate, default_old_project
 ):
     with Feature({"organizations:dynamic-sampling-minimum-sample-rate": True}):
-
         get_blended_sample_rate.return_value = 0.4
         default_old_project.update_option(
             "sentry:dynamic_sampling_biases",
@@ -891,17 +889,15 @@ def test_generate_rules_minimum_sample_rate_with_100_percent_sample_rate(
 
 @django_db_all
 @patch("sentry.dynamic_sampling.rules.base.quotas.backend.get_blended_sample_rate")
-def test_generate_rules_return_custom_rules(get_blended_sample_rate, default_old_project) -> None:
-    """
-    Tests the generation of custom rules ( from CustomDynamicSamplingRule models )
-    """
-    get_blended_sample_rate.return_value = 0.5
-    # turn off other biases
+def test_generate_rules_trace_health_checks_feature_enabled(
+    get_blended_sample_rate, default_old_project
+):
+    get_blended_sample_rate.return_value = 0.4
     default_old_project.update_option(
         "sentry:dynamic_sampling_biases",
         [
             {"id": RuleType.BOOST_ENVIRONMENTS_RULE.value, "active": False},
-            {"id": RuleType.IGNORE_HEALTH_CHECKS_RULE.value, "active": False},
+            {"id": RuleType.IGNORE_HEALTH_CHECKS_RULE.value, "active": True},
             {"id": RuleType.BOOST_LATEST_RELEASES_RULE.value, "active": False},
             {"id": RuleType.BOOST_KEY_TRANSACTIONS_RULE.value, "active": False},
             {"id": RuleType.BOOST_LOW_VOLUME_TRANSACTIONS_RULE.value, "active": False},
@@ -909,76 +905,24 @@ def test_generate_rules_return_custom_rules(get_blended_sample_rate, default_old
         ],
     )
 
-    # no custom rule requests ==> no custom rules
     rules = generate_rules(default_old_project)
-    # only the BOOST_LOW_VOLUME_PROJECTS_RULE should be around (always on)
-    assert len(rules) == 1
-    assert rules[0]["id"] == 1000
+    assert len(rules) == 2
+    assert rules[0]["id"] == 1002
+    assert rules[0]["type"] == "transaction"
+    assert rules[0]["condition"]["op"] == "or"
+    assert rules[0]["condition"]["inner"][0]["op"] == "glob"
+    assert rules[0]["condition"]["inner"][0]["name"] == "event.transaction"
+    assert rules[0]["condition"]["inner"][0]["value"] == HEALTH_CHECK_GLOBS
 
-    # create some custom rules for the project
-    start = datetime.now(tz=timezone.utc) - timedelta(hours=1)
-    end = datetime.now(tz=timezone.utc) + timedelta(hours=1)
-    start_str = start.strftime(CUSTOM_RULE_DATE_FORMAT)
-    end_str = end.strftime(CUSTOM_RULE_DATE_FORMAT)
-
-    # a project rule
-    condition = {"op": "eq", "name": "environment", "value": "prod1"}
-    CustomDynamicSamplingRule.update_or_create(
-        condition=condition,
-        start=start,
-        end=end,
-        project_ids=[default_old_project.id],
-        organization_id=default_old_project.organization.id,
-        num_samples=100,
-        sample_rate=0.5,
-        query="environment:prod1",
-    )
-    # and an organization rule
-    condition = {"op": "eq", "name": "environment", "value": "prod2"}
-    CustomDynamicSamplingRule.update_or_create(
-        condition=condition,
-        start=start,
-        end=end,
-        project_ids=[],
-        organization_id=default_old_project.organization.id,
-        num_samples=100,
-        sample_rate=0.5,
-        query="environment:prod2",
-    )
-
-    rules = generate_rules(default_old_project)
-    # now we should have 3 rules the 2 custom rules and the BOOST_LOW_VOLUME_PROJECTS_RULE
-    assert len(rules) == 3
-
-    # check which is the org rule and which is the proj rule:
-    # project rule should have the first id (i.e. 3001) since it was the first created
-
-    if rules[0]["id"] == CUSTOM_RULE_START + 1:
-        project_rule = rules[0]
-        org_rule = rules[1]
-    else:
-        project_rule = rules[1]
-        org_rule = rules[0]
-
-    # we have the project rule correctly built
-    assert project_rule == {
-        "samplingValue": {"type": "reservoir", "limit": 100},
-        "type": "transaction",
-        "id": CUSTOM_RULE_START + 1,
-        "condition": {"op": "eq", "name": "environment", "value": "prod1"},
-        "timeRange": {"start": start_str, "end": end_str},
-    }
-    # we have the org rule correctly built
-    assert org_rule == {
-        "samplingValue": {"type": "reservoir", "limit": 100},
-        "type": "transaction",
-        "id": CUSTOM_RULE_START + 2,
-        "condition": {"op": "eq", "name": "environment", "value": "prod2"},
-        "timeRange": {"start": start_str, "end": end_str},
-    }
-
-    # check the last one is the BOOST_LOW_VOLUME_PROJECTS_RULE
-    assert rules[2]["id"] == 1000
+    with Feature({"organizations:ds-health-checks-trace-based": True}):
+        rules = generate_rules(default_old_project)
+        assert len(rules) == 2
+        assert rules[0]["id"] == 1002
+        assert rules[0]["type"] == "trace"
+        assert rules[0]["condition"]["op"] == "or"
+        assert rules[0]["condition"]["inner"][0]["op"] == "glob"
+        assert rules[0]["condition"]["inner"][0]["name"] == "trace.transaction"
+        assert rules[0]["condition"]["inner"][0]["value"] == HEALTH_CHECK_GLOBS
 
     _validate_rules(default_old_project)
 
@@ -997,9 +941,7 @@ def test_generate_rules_project_mode(
     )
     default_old_project.update_option("sentry:target_sample_rate", 0.2)
 
-    with Feature(
-        {"organizations:ds-org-recalibration": True, "organizations:dynamic-sampling-custom": True}
-    ):
+    with Feature({"organizations:dynamic-sampling-custom": True}):
         assert generate_rules(default_old_project) == [
             {
                 "condition": {"inner": [], "op": "and"},

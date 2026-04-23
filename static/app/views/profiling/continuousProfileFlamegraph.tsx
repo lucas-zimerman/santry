@@ -2,9 +2,11 @@ import {useEffect, useMemo, useRef} from 'react';
 import styled from '@emotion/styled';
 import * as qs from 'query-string';
 
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {Stack} from '@sentry/scraps/layout';
+
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {ContinuousFlamegraph} from 'sentry/components/profiling/flamegraph/continuousFlamegraph';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
 import type {DeepPartial} from 'sentry/types/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
@@ -21,7 +23,7 @@ import {FlamegraphThemeProvider} from 'sentry/utils/profiling/flamegraph/flamegr
 import {useFlamegraphPreferences} from 'sentry/utils/profiling/flamegraph/hooks/useFlamegraphPreferences';
 import {useCurrentProjectFromRouteParam} from 'sentry/utils/profiling/hooks/useCurrentProjectFromRouteParam';
 import {useLocalStorageState} from 'sentry/utils/useLocalStorageState';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
 import {ProfileGroupProvider} from 'sentry/views/profiling/profileGroupProvider';
 
@@ -111,9 +113,9 @@ export default function ContinuousProfileFlamegraphWrapper() {
             <FlamegraphStateLocalStorageSync />
             <FlamegraphContainer>
               {profiles.type === 'loading' ? (
-                <LoadingIndicatorContainer>
+                <Stack justify="center" width="100%" height="100%" position="absolute">
                   <LoadingIndicator />
-                </LoadingIndicatorContainer>
+                </Stack>
               ) : null}
               <ContinuousProfileFlamegraph />
             </FlamegraphContainer>
@@ -149,26 +151,8 @@ function ProfileGroupTypeProvider({
   );
 }
 
-const LoadingIndicatorContainer = styled('div')`
-  position: absolute;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-`;
-
 const FlamegraphContainer = styled('div')`
   display: flex;
   flex-direction: column;
   flex: 1 1 100%;
-
-  /*
-   * The footer component is a sibling of this div.
-   * Remove it so the flamegraph can take up the
-   * entire screen.
-   */
-  ~ footer {
-    display: none;
-  }
 `;

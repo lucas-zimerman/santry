@@ -1,24 +1,27 @@
 import styled from '@emotion/styled';
+import {useQueryClient} from '@tanstack/react-query';
+
+import {Button} from '@sentry/scraps/button';
+import {Stack} from '@sentry/scraps/layout';
+import {ExternalLink, Link} from '@sentry/scraps/link';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {Button} from 'sentry/components/core/button';
-import {ExternalLink, Link} from 'sentry/components/core/link';
-import EmptyMessage from 'sentry/components/emptyMessage';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import PanelItem from 'sentry/components/panels/panelItem';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
+import {PanelItem} from 'sentry/components/panels/panelItem';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {IconDelete} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
 import type {ApiApplication} from 'sentry/types/user';
-import {setApiQueryData, useApiQuery, useQueryClient} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
-import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {setApiQueryData, useApiQuery} from 'sentry/utils/queryClient';
+import {useApi} from 'sentry/utils/useApi';
+import {SettingsPageHeader} from 'sentry/views/settings/components/settingsPageHeader';
 
 type Authorization = {
   application: ApiApplication;
@@ -31,7 +34,7 @@ type Authorization = {
 function AccountAuthorizations() {
   const api = useApi();
   const queryClient = useQueryClient();
-  const ENDPOINT = '/api-authorizations/';
+  const ENDPOINT = getApiUrl('/api-authorizations/');
 
   const {data, isPending, isError, refetch} = useApiQuery<Authorization[]>([ENDPOINT], {
     staleTime: 0,
@@ -65,12 +68,15 @@ function AccountAuthorizations() {
   const isEmpty = data.length === 0;
   return (
     <SentryDocumentTitle title={t('Approved Applications')}>
-      <SettingsPageHeader title="Authorized Applications" />
-      <Description>
-        {tct('You can manage your own applications via the [link:API dashboard].', {
-          link: <Link to="/settings/account/api/" />,
-        })}
-      </Description>
+      <SettingsPageHeader
+        title="Authorized Applications"
+        subtitle={tct(
+          'You can manage your own applications via the [link:API dashboard].',
+          {
+            link: <Link to="/settings/account/api/" />,
+          }
+        )}
+      />
 
       <Panel>
         <PanelHeader>{t('Approved Applications')}</PanelHeader>
@@ -86,7 +92,7 @@ function AccountAuthorizations() {
             <div>
               {data.map(authorization => (
                 <PanelItemCenter key={authorization.id}>
-                  <ApplicationDetails>
+                  <Stack flex="1">
                     <ApplicationName>{authorization.application.name}</ApplicationName>
                     {authorization.homepageUrl && (
                       <Url>
@@ -102,7 +108,7 @@ function AccountAuthorizations() {
                         {authorization.organization.slug}
                       </DetailRow>
                     )}
-                  </ApplicationDetails>
+                  </Stack>
                   <Button
                     size="sm"
                     onClick={() => handleRevoke(authorization)}
@@ -122,24 +128,13 @@ function AccountAuthorizations() {
 
 export default AccountAuthorizations;
 
-const Description = styled('p')`
-  font-size: ${p => p.theme.fontSizeRelativeSmall};
-  margin-bottom: ${space(4)};
-`;
-
 const PanelItemCenter = styled(PanelItem)`
   align-items: center;
 `;
 
-const ApplicationDetails = styled('div')`
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-`;
-
 const ApplicationName = styled('div')`
-  font-weight: ${p => p.theme.fontWeight.bold};
-  margin-bottom: ${space(0.5)};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
+  margin-bottom: ${p => p.theme.space.xs};
 `;
 
 /**
@@ -147,11 +142,11 @@ const ApplicationName = styled('div')`
  * hit box issues
  */
 const Url = styled('div')`
-  margin-bottom: ${space(0.5)};
-  font-size: ${p => p.theme.fontSizeRelativeSmall};
+  margin-bottom: ${p => p.theme.space.xs};
+  font-size: ${p => p.theme.font.size.sm};
 `;
 
 const DetailRow = styled('div')`
-  color: ${p => p.theme.subText};
-  font-size: ${p => p.theme.fontSizeRelativeSmall};
+  color: ${p => p.theme.tokens.content.secondary};
+  font-size: ${p => p.theme.font.size.sm};
 `;

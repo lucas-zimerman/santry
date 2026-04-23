@@ -1,15 +1,20 @@
 import React, {Fragment, useEffect} from 'react';
+import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import {ErrorBoundary} from '@sentry/react';
+import {useQuery} from '@tanstack/react-query';
+import {parseAsString, useQueryState} from 'nuqs';
 
-import {Alert} from 'sentry/components/core/alert';
-import {Tag} from 'sentry/components/core/badge/tag';
-import {Flex, Grid} from 'sentry/components/core/layout';
-import {TabList, TabPanels, Tabs} from 'sentry/components/core/tabs';
-import {Heading, Text} from 'sentry/components/core/text';
+import {Alert} from '@sentry/scraps/alert';
+import {Tag} from '@sentry/scraps/badge';
+import {InlineCode} from '@sentry/scraps/code';
+import {Container, Flex, Grid, Stack} from '@sentry/scraps/layout';
+import {TabList, TabPanels, Tabs} from '@sentry/scraps/tabs';
+import {Heading, Text} from '@sentry/scraps/text';
+
 import {t} from 'sentry/locale';
 import * as Storybook from 'sentry/stories';
-import {space} from 'sentry/styles/space';
+import {APIReference} from 'sentry/stories/apiReference';
 
 import {StoryFooter} from './storyFooter';
 import {storyMdxComponents} from './storyMdxComponent';
@@ -23,6 +28,7 @@ import {
   isMDXStory,
   type MDXStoryDescriptor,
   type StoryDescriptor,
+  type StoryDocumentation,
 } from './useStoriesLoader';
 import type {StoryExports as StoryExportValues} from './useStory';
 import {StoryContextProvider, useStory} from './useStory';
@@ -37,14 +43,25 @@ export function StoryExports(props: {story: StoryDescriptor}) {
 
 function StoryLayout() {
   const {story} = useStory();
+  const [tab, setTab] = useQueryState(
+    'tab',
+    parseAsString.withOptions({history: 'push'}).withDefault('usage')
+  );
+  const documentation = useStoryDocumentation(
+    (isMDXStory(story) ? story.exports.documentation : story.exports.documentation) as
+      | StoryDocumentation
+      | undefined,
+    story.filename
+  );
+
   return (
-    <Tabs>
+    <Tabs value={tab} onChange={setTab}>
       {isMDXStory(story) ? <MDXStoryTitle story={story} /> : null}
       <StoryGrid>
         <StoryContainer>
-          <StoryContent>
-            <StoryTabPanels />
-          </StoryContent>
+          <Stack flexGrow={1} minWidth="0px">
+            <StoryTabPanels documentation={documentation} />
+          </Stack>
           <ErrorBoundary>
             <StorySourceLinks />
           </ErrorBoundary>
@@ -56,11 +73,12 @@ function StoryLayout() {
   );
 }
 
-export function makeStorybookDocumentTitle(title: string | undefined): string {
+function makeStorybookDocumentTitle(title: string | undefined): string {
   return title ? `${title} — Scraps` : 'Scraps';
 }
 
 function MDXStoryTitle(props: {story: MDXStoryDescriptor}) {
+  const theme = useTheme();
   const title = props.story.exports.frontmatter?.title;
   const description = props.story.exports.frontmatter?.description;
 
@@ -69,9 +87,15 @@ function MDXStoryTitle(props: {story: MDXStoryDescriptor}) {
   }, [title]);
 
   return (
-    <StoryHeader>
+    <Container
+      as="header"
+      background="secondary"
+      padding="3xl 0 0 0"
+      borderBottom="primary"
+      area="story-head"
+    >
       <StoryGrid>
-        <StoryContainer style={{gap: space(3)}}>
+        <StoryContainer style={{gap: theme.space['2xl']}}>
           <Flex
             direction="column"
             gap="xl"
@@ -86,7 +110,7 @@ function MDXStoryTitle(props: {story: MDXStoryDescriptor}) {
               {props.story.exports.frontmatter?.status ? (
                 props.story.exports.frontmatter.status === 'stable' ? null : (
                   <Tag
-                    type={
+                    variant={
                       props.story.exports.frontmatter.status === 'in-progress'
                         ? 'warning'
                         : 'promotion'
@@ -110,19 +134,22 @@ function MDXStoryTitle(props: {story: MDXStoryDescriptor}) {
         </StoryContainer>
         <StoryTableOfContentsPlaceholder />
       </StoryGrid>
-    </StoryHeader>
+    </Container>
   );
 }
 
 function StoryTabList() {
   const {story} = useStory();
+
   if (!isMDXStory(story)) return null;
   if (story.exports.frontmatter?.layout === 'document') return null;
 
   return (
     <TabList>
       <TabList.Item key="usage">{t('Usage')}</TabList.Item>
-      {story.exports.types ? <TabList.Item key="api">{t('API')}</TabList.Item> : null}
+      {story.exports.documentation ? (
+        <TabList.Item key="api">{t('API')}</TabList.Item>
+      ) : null}
 
       {isMDXStory(story) && story.exports.frontmatter?.resources ? (
         <TabList.Item key="resources">{t('Resources')}</TabList.Item>
@@ -131,10 +158,16 @@ function StoryTabList() {
   );
 }
 
-function StoryTabPanels() {
+function StoryTabPanels(props: {documentation: TypeLoader.TypeLoaderResult | undefined}) {
   const {story} = useStory();
+
   if (!isMDXStory(story)) {
-    return <StoryUsage />;
+    return (
+      <Fragment>
+        <StoryUsage />
+        {props.documentation && <StoryAPI documentation={props.documentation} />}
+      </Fragment>
+    );
   }
 
   // A document is just a single page
@@ -143,20 +176,24 @@ function StoryTabPanels() {
   }
 
   return (
-    <TabPanels>
+    <StyledTabPanels>
       <TabPanels.Item key="usage">
+        <StoryModuleExports exports={props.documentation?.exports} />
         <StoryUsage />
       </TabPanels.Item>
       <TabPanels.Item key="api">
-        <StoryAPI />
+        <StoryAPI documentation={props.documentation} />
       </TabPanels.Item>
       <TabPanels.Item key="resources">
         <StoryResources />
       </TabPanels.Item>
-    </TabPanels>
+    </StyledTabPanels>
   );
 }
-const EXPECTED_EXPORTS = new Set<keyof StoryExportValues>(['frontmatter', 'types']);
+const EXPECTED_EXPORTS = new Set<keyof StoryExportValues>([
+  'frontmatter',
+  'documentation',
+]);
 
 function StoryUsage() {
   const {
@@ -169,11 +206,11 @@ function StoryUsage() {
   return (
     <Fragment>
       {Story && (
-        <Storybook.Section>
+        <Storybook.Section flexGrow={1}>
           <ErrorBoundary
             fallback={
-              <Alert type="error" showIcon={false}>
-                Problem loading <code>{filename}</code>
+              <Alert variant="danger" showIcon={false}>
+                Problem loading <InlineCode>{filename}</InlineCode>
               </Alert>
             }
           >
@@ -206,37 +243,45 @@ function StoryUsage() {
   );
 }
 
-function StoryAPI() {
-  const {story} = useStory();
-  if (!story.exports.types) return null;
-
-  if (
-    typeof story.exports.types === 'object' &&
-    story.exports.types !== null &&
-    'filename' in story.exports.types
-  ) {
-    return (
-      <Storybook.APIReference
-        types={story.exports.types as TypeLoader.ComponentDocWithFilename}
-      />
-    );
+function StoryAPI(props: {documentation: TypeLoader.TypeLoaderResult | undefined}) {
+  if (!props.documentation || !('props' in props.documentation)) {
+    return null;
   }
 
   return (
     <Fragment>
-      {Object.entries(story.exports.types).map(([key, value]) => {
-        return <Storybook.APIReference key={key} types={value} />;
+      {Object.entries(props.documentation.props ?? {}).map(([key, value]) => {
+        return <APIReference key={key} componentProps={value} />;
       })}
     </Fragment>
   );
 }
 
-const StoryHeader = styled('header')`
-  background: ${p => p.theme.tokens.background.secondary};
-  padding: 32px 0 0 0;
-  border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
-  grid-area: story-head;
-`;
+/**
+ * Documentation modules are lazy-compiled in development mode so we have to fetch them.
+ */
+function useStoryDocumentation(
+  documentation: StoryDocumentation | undefined,
+  storyFilename: string
+): TypeLoader.TypeLoaderResult | undefined {
+  const query = useQuery({
+    queryKey: ['stories-documentation', storyFilename, documentation],
+    queryFn: async () => {
+      if (!documentation) {
+        throw new Error('Missing documentation');
+      }
+      const result = await documentation;
+      if (result && 'default' in result) {
+        return result.default;
+      }
+      return result;
+    },
+    enabled: !!documentation,
+    staleTime: 60_000,
+  });
+
+  return query.data;
+}
 
 function StoryGrid(props: React.ComponentProps<typeof Grid>) {
   return (
@@ -248,20 +293,29 @@ function StoryGrid(props: React.ComponentProps<typeof Grid>) {
   );
 }
 
+function StoryModuleExports(props: {
+  exports: TypeLoader.TypeLoaderResult['exports'] | undefined;
+}) {
+  if (!props.exports) return null;
+  return <Storybook.ModuleExports exports={props.exports} />;
+}
+
+const StyledTabPanels = styled(TabPanels)`
+  flex-grow: 1;
+  min-width: 0;
+`;
+
 const StoryContainer = styled('div')`
   max-width: 580px;
   width: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: ${space(4)};
-  padding-inline: ${space(2)};
+  gap: ${p => p.theme.space['3xl']};
+  padding-inline: ${p => p.theme.space.xl};
 
   @media (min-width: ${p => p.theme.breakpoints.md}) {
     max-width: 832px;
     margin-inline: auto;
   }
-`;
-
-const StoryContent = styled('main')`
-  flex-grow: 1;
 `;

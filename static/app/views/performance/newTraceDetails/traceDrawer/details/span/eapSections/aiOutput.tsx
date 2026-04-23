@@ -2,35 +2,127 @@ import {Fragment} from 'react';
 
 import {t} from 'sentry/locale';
 import type {EventTransaction} from 'sentry/types/event';
-import useOrganization from 'sentry/utils/useOrganization';
 import type {TraceItemResponseAttribute} from 'sentry/views/explore/hooks/useTraceItemDetails';
 import {
   getIsAiNode,
   getTraceNodeAttribute,
-} from 'sentry/views/insights/agents/utils/aiTraceNodes';
-import {hasAgentInsightsFeature} from 'sentry/views/insights/agents/utils/features';
+} from 'sentry/views/insights/pages/agents/utils/aiTraceNodes';
 import {SectionKey} from 'sentry/views/issueDetails/streamline/context';
 import {FoldSection} from 'sentry/views/issueDetails/streamline/foldSection';
+import {AIContentRenderer} from 'sentry/views/performance/newTraceDetails/traceDrawer/details/span/eapSections/aiContentRenderer';
 import {TraceDrawerComponents} from 'sentry/views/performance/newTraceDetails/traceDrawer/details/styles';
-import type {TraceTree} from 'sentry/views/performance/newTraceDetails/traceModels/traceTree';
-import type {TraceTreeNode} from 'sentry/views/performance/newTraceDetails/traceModels/traceTreeNode';
+import type {EapSpanNode} from 'sentry/views/performance/newTraceDetails/traceModels/traceTreeNode/eapSpanNode';
+import type {SpanNode} from 'sentry/views/performance/newTraceDetails/traceModels/traceTreeNode/spanNode';
+import type {TransactionNode} from 'sentry/views/performance/newTraceDetails/traceModels/traceTreeNode/transactionNode';
 
-export function AIOutputSection({
-  node,
-  attributes,
-  event,
-}: {
-  node: TraceTreeNode<TraceTree.EAPSpan | TraceTree.Span | TraceTree.Transaction>;
-  attributes?: TraceItemResponseAttribute[];
-  event?: EventTransaction;
-}) {
-  const organization = useOrganization();
-  if (!hasAgentInsightsFeature(organization) && getIsAiNode(node)) {
-    return null;
+interface AIOutputData {
+  responseObject: string | null;
+  responseText: string | null;
+  toolCalls: string | null;
+}
+
+/**
+ * Extracts content from the new parts-based format.
+ * Handles text parts, tool calls, and structured objects.
+ */
+function extractFromOutputMessages(outputMessages: string): AIOutputData {
+  const result: AIOutputData = {
+    responseText: null,
+    responseObject: null,
+    toolCalls: null,
+  };
+
+  try {
+    const parsed = JSON.parse(outputMessages);
+    // Handle non-array format: extract "content" from the object directly
+    if (!Array.isArray(parsed)) {
+      if (parsed && typeof parsed === 'object' && typeof parsed.content === 'string') {
+        result.responseText = parsed.content;
+      }
+      return result;
+    }
+
+    const textParts: string[] = [];
+    const toolCallParts: any[] = [];
+    const objectParts: any[] = [];
+
+    for (const msg of parsed) {
+      if (msg.role !== 'assistant') {
+        continue;
+      }
+
+      if (!msg.parts || !Array.isArray(msg.parts)) {
+        // Old format - extract content directly
+        if (msg.content) {
+          if (typeof msg.content === 'string') {
+            textParts.push(msg.content);
+          } else if (typeof msg.content === 'object') {
+            objectParts.push(msg.content);
+          }
+        }
+        continue;
+      }
+
+      // New parts-based format
+      for (const part of msg.parts) {
+        if (part.type === 'text' && (part.content || part.text)) {
+          textParts.push(part.content || part.text);
+        } else if (part.type === 'tool_call') {
+          toolCallParts.push(part);
+        } else if (part.type === 'object') {
+          objectParts.push(part);
+        }
+      }
+    }
+
+    if (textParts.length > 0) {
+      result.responseText = textParts.join('\n');
+    }
+    if (toolCallParts.length > 0) {
+      result.toolCalls = JSON.stringify(toolCallParts);
+    }
+    if (objectParts.length > 0) {
+      result.responseObject = JSON.stringify(
+        objectParts.length === 1 ? objectParts[0] : objectParts
+      );
+    }
+  } catch {
+    // Parsing failed, return empty result
+  }
+
+  return result;
+}
+
+/**
+ * Gets AI output content, checking attributes in priority order.
+ * Priority: gen_ai.output.messages > gen_ai.response.text/object
+ */
+function getAIOutputData(
+  node: EapSpanNode | SpanNode | TransactionNode,
+  attributes?: TraceItemResponseAttribute[],
+  event?: EventTransaction
+): AIOutputData {
+  const outputMessages = getTraceNodeAttribute(
+    'gen_ai.output.messages',
+    node,
+    event,
+    attributes
+  );
+  if (outputMessages) {
+    const extracted = extractFromOutputMessages(outputMessages.toString());
+    if (extracted.responseText || extracted.responseObject || extracted.toolCalls) {
+      return extracted;
+    }
   }
 
   const responseText = getTraceNodeAttribute(
     'gen_ai.response.text',
+    node,
+    event,
+    attributes
+  );
+  const responseObject = getTraceNodeAttribute(
+    'gen_ai.response.object',
     node,
     event,
     attributes
@@ -41,13 +133,70 @@ export function AIOutputSection({
     event,
     attributes
   );
-  const toolOutput = getTraceNodeAttribute('gen_ai.tool.output', node, event, attributes);
-  const responseObject = getTraceNodeAttribute(
-    'gen_ai.response.object',
+
+  return {
+    responseText: responseText?.toString() ?? null,
+    responseObject: responseObject?.toString() ?? null,
+    toolCalls: toolCalls?.toString() ?? null,
+  };
+}
+
+export function hasAIOutputAttribute(
+  node: EapSpanNode | SpanNode | TransactionNode,
+  attributes?: TraceItemResponseAttribute[],
+  event?: EventTransaction
+) {
+  return (
+    getTraceNodeAttribute('gen_ai.output.messages', node, event, attributes) ||
+    getTraceNodeAttribute('gen_ai.response.text', node, event, attributes) ||
+    getTraceNodeAttribute('gen_ai.response.object', node, event, attributes) ||
+    getTraceNodeAttribute('gen_ai.tool.call.result', node, event, attributes) ||
+    getTraceNodeAttribute('gen_ai.response.tool_calls', node, event, attributes) ||
+    getTraceNodeAttribute('gen_ai.tool.output', node, event, attributes)
+  );
+}
+
+/**
+ * Gets AI tool output, checking gen_ai.tool.call.result first, falling back to gen_ai.tool.output.
+ */
+function getAIToolOutput(
+  node: EapSpanNode | SpanNode | TransactionNode,
+  attributes?: TraceItemResponseAttribute[],
+  event?: EventTransaction
+) {
+  const toolCallResult = getTraceNodeAttribute(
+    'gen_ai.tool.call.result',
     node,
     event,
     attributes
   );
+  if (toolCallResult) {
+    return toolCallResult;
+  }
+  return getTraceNodeAttribute('gen_ai.tool.output', node, event, attributes);
+}
+
+export function AIOutputSection({
+  node,
+  attributes,
+  event,
+  initialCollapse,
+}: {
+  node: EapSpanNode | SpanNode | TransactionNode;
+  attributes?: TraceItemResponseAttribute[];
+  event?: EventTransaction;
+  initialCollapse?: boolean;
+}) {
+  if (!getIsAiNode(node) || !hasAIOutputAttribute(node, attributes, event)) {
+    return null;
+  }
+
+  const {responseText, responseObject, toolCalls} = getAIOutputData(
+    node,
+    attributes,
+    event
+  );
+  const toolOutput = getAIToolOutput(node, attributes, event);
 
   if (!responseText && !responseObject && !toolCalls && !toolOutput) {
     return null;
@@ -55,18 +204,18 @@ export function AIOutputSection({
 
   return (
     <FoldSection
+      key={node.id}
       sectionKey={SectionKey.AI_OUTPUT}
       title={t('Output')}
       disableCollapsePersistence
+      initialCollapse={initialCollapse}
     >
       {responseText && (
         <Fragment>
           <TraceDrawerComponents.MultilineTextLabel>
             {t('Response')}
           </TraceDrawerComponents.MultilineTextLabel>
-          <TraceDrawerComponents.MultilineText>
-            {responseText.toString().trim()}
-          </TraceDrawerComponents.MultilineText>
+          <AIContentRenderer text={responseText} />
         </Fragment>
       )}
       {responseObject && (
@@ -74,10 +223,7 @@ export function AIOutputSection({
           <TraceDrawerComponents.MultilineTextLabel>
             {t('Response Object')}
           </TraceDrawerComponents.MultilineTextLabel>
-          <TraceDrawerComponents.MultilineJSON
-            value={responseObject}
-            maxDefaultDepth={2}
-          />
+          <AIContentRenderer text={responseObject} />
         </Fragment>
       )}
       {toolCalls && (

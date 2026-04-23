@@ -4,7 +4,7 @@ import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Mapping
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import wait
 from copy import deepcopy
 from datetime import UTC, datetime
 from functools import partial
@@ -18,6 +18,7 @@ from arroyo.processing.strategies.commit import CommitOffsets
 from arroyo.processing.strategies.run_task import RunTask
 from arroyo.types import BrokerValue, Commit, FilteredPayload, Message, Partition
 from django.db import router, transaction
+from rest_framework import serializers
 from sentry_kafka_schemas.codecs import Codec
 from sentry_kafka_schemas.schema_types.ingest_monitors_v1 import IngestMonitorMessage
 from sentry_sdk.tracing import Span, Transaction
@@ -80,6 +81,7 @@ from sentry.monitors.utils import (
 from sentry.monitors.validators import ConfigValidator, MonitorCheckInValidator
 from sentry.types.actor import parse_and_validate_actor
 from sentry.utils import json, metrics
+from sentry.utils.concurrent import ContextPropagatingThreadPoolExecutor
 from sentry.utils.dates import to_datetime
 from sentry.utils.outcomes import Outcome, track_outcome
 
@@ -92,7 +94,8 @@ def _ensure_monitor_with_config(
     project: Project,
     monitor_slug: str,
     config: dict[str, Any] | None,
-) -> Monitor | None:
+) -> tuple[Monitor | None, ProcessingErrorsException | None]:
+    non_fatal_processing_error = None
     try:
         monitor = Monitor.objects.get(
             slug=monitor_slug,
@@ -102,13 +105,8 @@ def _ensure_monitor_with_config(
     except Monitor.DoesNotExist:
         monitor = None
 
-    # Monitor was previously marked as upserting, but no config is provided for
-    # this check-in, therefore it's no longer upserting.
-    if not config and monitor and monitor.is_upserting:
-        monitor.update(is_upserting=False)
-
     if not config:
-        return monitor
+        return (monitor, non_fatal_processing_error)
 
     # The upsert payload doesn't quite match the api one. Pop out the owner here since
     # it's not part of the monitor config
@@ -117,6 +115,14 @@ def _ensure_monitor_with_config(
     owner_team_id = None
     try:
         owner_actor = parse_and_validate_actor(owner, project.organization_id)
+    except serializers.ValidationError as e:
+        validation_error = CheckinValidationFailed(
+            {
+                "type": ProcessingErrorType.CHECKIN_VALIDATION_FAILED,
+                "errors": {str(owner): [str(e.detail)]},
+            }
+        )
+        non_fatal_processing_error = ProcessingErrorsException([validation_error])
     except Exception:
         logger.exception(
             "Error attempting to resolve owner",
@@ -146,7 +152,7 @@ def _ensure_monitor_with_config(
                 "errors": validator.errors,
             }
             raise ProcessingErrorsException([error])
-        return monitor
+        return (monitor, non_fatal_processing_error)
 
     validated_config = validator.validated_data
     created = False
@@ -166,8 +172,8 @@ def _ensure_monitor_with_config(
                 "is_upserting": True,
             },
         )
-        ensure_cron_detector(monitor)
         if created:
+            ensure_cron_detector(monitor)
             signal_monitor_created(project, None, True, monitor, None)
 
     # Update existing monitor
@@ -181,7 +187,7 @@ def _ensure_monitor_with_config(
         ):
             monitor.update(owner_user_id=owner_user_id, owner_team_id=owner_team_id)
 
-    return monitor
+    return (monitor, non_fatal_processing_error)
 
 
 def check_killswitch(
@@ -617,12 +623,13 @@ def _process_checkin(item: CheckinItem, txn: Transaction | Span) -> None:
 
     validated_params = validator.validated_data
 
+    non_fatal_processing_errors = None
     ensure_config_errors: list[ProcessingError] = []
     monitor = None
     # 01
     # Retrieve or upsert monitor for this check-in
     try:
-        monitor = _ensure_monitor_with_config(
+        (monitor, non_fatal_processing_errors) = _ensure_monitor_with_config(
             project,
             monitor_slug,
             monitor_config,
@@ -657,7 +664,7 @@ def _process_checkin(item: CheckinItem, txn: Transaction | Span) -> None:
     # When accepting for upsert attempt to assign a seat for the monitor,
     # otherwise the monitor is marked as disabled
     if monitor and quotas_outcome == PermitCheckInStatus.ACCEPTED_FOR_UPSERT:
-        seat_outcome = quotas.backend.assign_monitor_seat(monitor)
+        seat_outcome = quotas.backend.assign_seat(seat_object=monitor)
         if seat_outcome != Outcome.ACCEPTED:
             monitor.update(status=ObjectStatus.DISABLED)
 
@@ -886,8 +893,8 @@ def _process_checkin(item: CheckinItem, txn: Transaction | Span) -> None:
                 # denormalize the monitor configration into the check-in.
                 # Useful to show details about the configuration of the
                 # monitor at the time of the check-in
-                monitor_config = monitor.get_validated_config()
-                timeout_at = get_timeout_at(monitor_config, status, start_time)
+                checkin_monitor_config = monitor.get_validated_config()
+                timeout_at = get_timeout_at(checkin_monitor_config, status, start_time)
 
                 # The "date_clock" is recorded as the "clock time" of when the
                 # check-in was processed. The clock time is derived from the
@@ -911,7 +918,7 @@ def _process_checkin(item: CheckinItem, txn: Transaction | Span) -> None:
                         "date_in_progress": date_in_progress,
                         "expected_time": expected_time,
                         "timeout_at": timeout_at,
-                        "monitor_config": monitor_config,
+                        "monitor_config": checkin_monitor_config,
                         "trace_id": trace_id,
                     },
                     project_id=project_id,
@@ -946,6 +953,12 @@ def _process_checkin(item: CheckinItem, txn: Transaction | Span) -> None:
                         "monitors.checkin.result",
                         tags={**metric_kwargs, "status": "created_new_checkin"},
                     )
+
+                    # When creating a brand new check-in (not updating an existing one),
+                    # if no monitor config was provided and the monitor was previously
+                    # marked as upserting, mark it as no longer upserting.
+                    if not monitor_config and monitor.is_upserting:
+                        monitor.update(is_upserting=False)
 
             track_outcome(
                 org_id=project.organization_id,
@@ -1002,6 +1015,9 @@ def _process_checkin(item: CheckinItem, txn: Transaction | Span) -> None:
         txn.set_tag("result", "error")
         logger.exception("Failed to process check-in")
 
+    if non_fatal_processing_errors:
+        raise non_fatal_processing_errors
+
 
 def process_checkin(item: CheckinItem) -> None:
     """
@@ -1031,7 +1047,7 @@ def process_checkin_group(items: list[CheckinItem]) -> None:
 
 
 def process_batch(
-    executor: ThreadPoolExecutor, message: Message[ValuesBatch[KafkaPayload]]
+    executor: ContextPropagatingThreadPoolExecutor, message: Message[ValuesBatch[KafkaPayload]]
 ) -> None:
     """
     Receives batches of check-in messages. This function will take the batch
@@ -1127,7 +1143,7 @@ def process_single(message: Message[KafkaPayload | FilteredPayload]) -> None:
 
 
 class StoreMonitorCheckInStrategyFactory(ProcessingStrategyFactory[KafkaPayload]):
-    parallel_executor: ThreadPoolExecutor | None = None
+    parallel_executor: ContextPropagatingThreadPoolExecutor | None = None
 
     batched_parallel = False
     """
@@ -1153,7 +1169,7 @@ class StoreMonitorCheckInStrategyFactory(ProcessingStrategyFactory[KafkaPayload]
     ) -> None:
         if mode == "batched-parallel":
             self.batched_parallel = True
-            self.parallel_executor = ThreadPoolExecutor(max_workers=max_workers)
+            self.parallel_executor = ContextPropagatingThreadPoolExecutor(max_workers=max_workers)
 
         if max_batch_size is not None:
             self.max_batch_size = max_batch_size

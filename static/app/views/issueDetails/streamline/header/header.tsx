@@ -1,42 +1,36 @@
-import {Fragment} from 'react';
+import {Fragment, type ComponentProps, type ReactNode} from 'react';
 import styled from '@emotion/styled';
-import Color from 'color';
+// eslint-disable-next-line no-restricted-imports
+import color from 'color';
+
+import {FeatureBadge, Tag} from '@sentry/scraps/badge';
+import {Flex, Grid} from '@sentry/scraps/layout';
+import {ExternalLink, Link} from '@sentry/scraps/link';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
 import {Breadcrumbs} from 'sentry/components/breadcrumbs';
-import {FeatureBadge} from 'sentry/components/core/badge/featureBadge';
-import {Tag} from 'sentry/components/core/badge/tag';
-import {Button} from 'sentry/components/core/button';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Flex} from 'sentry/components/core/layout';
-import {ExternalLink, Link} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import Count from 'sentry/components/count';
-import ErrorBoundary from 'sentry/components/errorBoundary';
-import EventMessage from 'sentry/components/events/eventMessage';
+import {Count} from 'sentry/components/count';
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
+import {EventMessage} from 'sentry/components/events/eventMessage';
+import {FeedbackButton} from 'sentry/components/feedbackButton/feedbackButton';
+import {useFeedbackSDKIntegration} from 'sentry/components/feedbackButton/useFeedbackSDKIntegration';
 import {getBadgeProperties} from 'sentry/components/group/inboxBadges/statusBadge';
-import UnhandledTag from 'sentry/components/group/inboxBadges/unhandledTag';
+import {UnhandledTag} from 'sentry/components/group/inboxBadges/unhandledTag';
 import {TourElement} from 'sentry/components/tours/components';
 import {MAX_PICKABLE_DAYS} from 'sentry/constants';
-import {IconInfo, IconMegaphone} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import HookStore from 'sentry/stores/hookStore';
-import {space} from 'sentry/styles/space';
+import {HookStore} from 'sentry/stores/hookStore';
 import type {Event} from 'sentry/types/event';
 import type {Group} from 'sentry/types/group';
-import {IssueType} from 'sentry/types/group';
+import {AI_DETECTED_ISSUE_TYPES, IssueType} from 'sentry/types/group';
 import type {Project} from 'sentry/types/project';
-import {defined} from 'sentry/utils';
 import {getMessage, getTitle} from 'sentry/utils/events';
 import {getConfigForIssueType} from 'sentry/utils/issueTypeConfig';
-import {useFeedbackForm} from 'sentry/utils/useFeedbackForm';
-import {useLocalStorageState} from 'sentry/utils/useLocalStorageState';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {GroupActions} from 'sentry/views/issueDetails/actions/index';
-import {NewIssueExperienceButton} from 'sentry/views/issueDetails/actions/newIssueExperienceButton';
 import {Divider} from 'sentry/views/issueDetails/divider';
-import GroupPriority from 'sentry/views/issueDetails/groupPriority';
+import {GroupPriority} from 'sentry/views/issueDetails/groupPriority';
 import {
   IssueDetailsTour,
   IssueDetailsTourContext,
@@ -45,7 +39,7 @@ import {GroupHeaderAssigneeSelector} from 'sentry/views/issueDetails/streamline/
 import {AttachmentsBadge} from 'sentry/views/issueDetails/streamline/header/attachmentsBadge';
 import {IssueIdBreadcrumb} from 'sentry/views/issueDetails/streamline/header/issueIdBreadcrumb';
 import {ReplayBadge} from 'sentry/views/issueDetails/streamline/header/replayBadge';
-import SeerBadge from 'sentry/views/issueDetails/streamline/header/seerBadge';
+import {SeerBadge} from 'sentry/views/issueDetails/streamline/header/seerBadge';
 import {UserFeedbackBadge} from 'sentry/views/issueDetails/streamline/header/userFeedbackBadge';
 import {Tab, TabPaths} from 'sentry/views/issueDetails/types';
 import {useGroupDetailsRoute} from 'sentry/views/issueDetails/useGroupDetailsRoute';
@@ -53,6 +47,8 @@ import {
   getGroupReprocessingStatus,
   ReprocessingStatus,
 } from 'sentry/views/issueDetails/utils';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 
 interface GroupHeaderProps {
   event: Event | null;
@@ -60,11 +56,7 @@ interface GroupHeaderProps {
   project: Project;
 }
 
-export default function StreamlinedGroupHeader({
-  event,
-  group,
-  project,
-}: GroupHeaderProps) {
+export function StreamlinedGroupHeader({event, group, project}: GroupHeaderProps) {
   const location = useLocation();
   const organization = useOrganization();
   const {baseUrl} = useGroupDetailsRoute();
@@ -87,101 +79,40 @@ export default function StreamlinedGroupHeader({
 
   const hasErrorUpsampling = project.features.includes('error-upsampling');
 
-  const isQueryInjection = group.issueType === IssueType.QUERY_INJECTION_VULNERABILITY;
-  const openForm = useFeedbackForm();
-  const feedbackButton = openForm ? (
-    <Button
-      aria-label={t('Give feedback on the query injection issue')}
-      icon={<IconMegaphone />}
-      size={'xs'}
-      onClick={() =>
-        openForm({
-          messagePlaceholder: t('Please provide feedback on the query injection issue.'),
-          tags: {
-            ['feedback.source']: 'issue_details_query_injection',
-          },
-        })
-      }
-    >
-      {t('Give Feedback')}
-    </Button>
-  ) : null;
+  const isAIDetectedIssue = AI_DETECTED_ISSUE_TYPES.has(group.issueType);
 
   const statusProps = getBadgeProperties(group.status, group.substatus);
   const issueTypeConfig = getConfigForIssueType(group, project);
 
-  const hasOnlyOneUIOption = defined(organization.streamlineOnly);
-  const [showLearnMore, setShowLearnMore] = useLocalStorageState(
-    'issue-details-learn-more',
-    true
-  );
+  const crumbs = [
+    {
+      label: 'Issues',
+      to: {pathname: `/organizations/${organization.slug}/issues/`, query},
+    },
+    {label: <IssueIdBreadcrumb project={project} group={group} />},
+  ];
 
   return (
     <Fragment>
       <Header>
         <Flex justify="between">
           <Flex align="center" gap="md">
-            <StyledBreadcrumbs
-              crumbs={[
-                {
-                  label: 'Issues',
-                  to: {
-                    pathname: `/organizations/${organization.slug}/issues/`,
-                    query,
-                  },
-                },
-                {
-                  label: <IssueIdBreadcrumb project={project} group={group} />,
-                },
-              ]}
-            />
+            <MaybeTopBarSlot name="title">
+              <StyledBreadcrumbs crumbs={crumbs} />
+            </MaybeTopBarSlot>
             {hasErrorUpsampling && (
               <Tooltip
                 title={t(
                   'Error counts on this page have been upsampled based on your sampling rate.'
                 )}
               >
-                <StyledTag>{t('Errors Upsampled')}</StyledTag>
+                <StyledTag variant="muted">{t('Errors Upsampled')}</StyledTag>
               </Tooltip>
             )}
           </Flex>
-          <ButtonBar gap="xs">
-            {!hasOnlyOneUIOption && !isQueryInjection && (
-              <LinkButton
-                size="xs"
-                external
-                title={t('Learn more about the new UI')}
-                href={`https://docs.sentry.io/product/issues/issue-details/`}
-                aria-label={t('Learn more about the new UI')}
-                icon={<IconInfo />}
-                analyticsEventKey="issue_details.streamline_ui_learn_more"
-                analyticsEventName="Issue Details: Streamline UI Learn More"
-                analyticsParams={{show_learn_more: showLearnMore}}
-                onClick={() => setShowLearnMore(false)}
-              >
-                {showLearnMore ? t("See What's New") : null}
-              </LinkButton>
-            )}
-            {isQueryInjection ? (
-              <ButtonBar gap="xs">
-                <LinkButton
-                  size="xs"
-                  external
-                  title={t('Learn more about the query injection issue')}
-                  href={`https://docs.sentry.io/product/issues/issue-details/query-injection-issues/`}
-                  aria-label={t('Learn more about the query injection issue')}
-                  icon={<IconInfo />}
-                  analyticsEventKey="issue_details.query_injection_learn_more"
-                  analyticsEventName="Issue Details: Query Injection Learn More"
-                >
-                  {t('Learn more')}
-                </LinkButton>
-                {feedbackButton}
-              </ButtonBar>
-            ) : (
-              <NewIssueExperienceButton />
-            )}
-          </ButtonBar>
+          <Grid flow="column" align="center" gap="xs">
+            <HeaderActions group={group} />
+          </Grid>
         </Flex>
         <HeaderGrid>
           <Title>
@@ -194,7 +125,7 @@ export default function StreamlinedGroupHeader({
             >
               <PrimaryTitle>{primaryTitle}</PrimaryTitle>
             </Tooltip>
-            {isQueryInjection && <FeatureBadge type="beta" />}
+            {isAIDetectedIssue && <FeatureBadge type="beta" />}
           </Title>
           <StatTitle>
             {issueTypeConfig.eventAndUserCounts.enabled && (
@@ -219,12 +150,7 @@ export default function StreamlinedGroupHeader({
                 </StatLink>
               ))}
           </StatTitle>
-          <EventMessage
-            data={group}
-            level={group.level}
-            message={secondaryTitle}
-            type={group.type}
-          />
+          <EventMessage level={group.level} message={secondaryTitle} type={group.type} />
           {issueTypeConfig.eventAndUserCounts.enabled && (
             <Fragment>
               <StatCount value={eventCount} aria-label={t('Event count')} />
@@ -281,46 +207,104 @@ export default function StreamlinedGroupHeader({
         id={IssueDetailsTour.WORKFLOWS}
         title={t('Take action')}
         description={t(
-          'Now that you’ve learned about this issue, it’s time to assign an owner, update priority, and take additional actions.'
+          "Now that you've learned about this issue, it's time to assign an owner, update priority, and take additional actions."
         )}
         position="bottom-end"
       >
-        <ActionBar isComplete={isComplete} role="banner">
-          <GroupActions
-            group={group}
-            project={project}
-            disabled={disableActions}
-            event={event}
-          />
-          <WorkflowActions>
-            <Workflow>
-              {t('Priority')}
-              <GroupPriority group={group} />
-            </Workflow>
-            <Workflow>
-              {t('Assignee')}
-              <GroupHeaderAssigneeSelector
+        {tourProps => (
+          <div {...tourProps}>
+            <ActionBar isComplete={isComplete} role="banner">
+              <GroupActions
                 group={group}
                 project={project}
+                disabled={disableActions}
                 event={event}
               />
-            </Workflow>
-          </WorkflowActions>
-        </ActionBar>
+              <WorkflowActions>
+                <Workflow>
+                  {t('Priority')}
+                  <GroupPriority group={group} />
+                </Workflow>
+                <Workflow>
+                  {t('Assignee')}
+                  <GroupHeaderAssigneeSelector
+                    group={group}
+                    project={project}
+                    event={event}
+                  />
+                </Workflow>
+              </WorkflowActions>
+            </ActionBar>
+          </div>
+        )}
       </TourElement>
     </Fragment>
   );
 }
 
+function MaybeTopBarSlot({
+  name,
+  children,
+}: {
+  children: ReactNode;
+  name: ComponentProps<typeof TopBar.Slot>['name'];
+}) {
+  const hasPageFrameFeature = useHasPageFrameFeature();
+  if (hasPageFrameFeature) {
+    return <TopBar.Slot name={name}>{children}</TopBar.Slot>;
+  }
+  return children;
+}
+
+function HeaderActions({group}: {group: Group}) {
+  const hasPageFrameFeature = useHasPageFrameFeature();
+  const {feedback} = useFeedbackSDKIntegration();
+
+  const isAIDetectedIssue = AI_DETECTED_ISSUE_TYPES.has(group.issueType);
+  const hasFeedbackForm =
+    group.issueType === IssueType.QUERY_INJECTION_VULNERABILITY ||
+    group.issueType === IssueType.PERFORMANCE_N_PLUS_ONE_API_CALLS ||
+    isAIDetectedIssue;
+  const feedbackSource =
+    group.issueType === IssueType.QUERY_INJECTION_VULNERABILITY
+      ? 'issue_details_query_injection'
+      : isAIDetectedIssue
+        ? 'issue_details_ai_detected'
+        : 'issue_details_n_plus_one_api_calls';
+  const feedbackOptions = {
+    messagePlaceholder: t('Please provide feedback on the issue Sentry detected.'),
+    tags: {['feedback.source']: feedbackSource},
+  };
+  const feedbackLabel = t('Give feedback on the issue Sentry detected');
+
+  if (hasFeedbackForm && feedback) {
+    return (
+      <MaybeTopBarSlot name="feedback">
+        <FeedbackButton
+          aria-label={feedbackLabel}
+          size={hasPageFrameFeature ? undefined : 'xs'}
+          feedbackOptions={feedbackOptions}
+          tooltipProps={hasPageFrameFeature ? {title: feedbackLabel} : undefined}
+        >
+          {hasPageFrameFeature ? null : t('Give Feedback')}
+        </FeedbackButton>
+      </MaybeTopBarSlot>
+    );
+  }
+
+  return null;
+}
+
 const Header = styled('header')`
-  background-color: ${p => p.theme.background};
-  padding: ${p => p.theme.space.md} ${p => p.theme.space['2xl']};
+  background-color: ${p => p.theme.tokens.background.primary};
+  padding: ${p => p.theme.space.md}
+    var(--issue-details-inset, ${p => p.theme.space['2xl']});
 `;
 
 const HeaderGrid = styled('div')`
   display: grid;
   grid-template-columns: minmax(150px, 1fr) auto auto;
-  column-gap: ${space(2)};
+  column-gap: ${p => p.theme.space.xl};
   align-items: center;
 `;
 
@@ -329,21 +313,21 @@ const PrimaryTitle = styled('span')`
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 20px;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   flex-shrink: 0;
 `;
 
 const StatTitle = styled('div')`
   display: block;
-  color: ${p => p.theme.subText};
-  font-size: ${p => p.theme.fontSize.sm};
-  font-weight: ${p => p.theme.fontWeight.bold};
+  color: ${p => p.theme.tokens.content.secondary};
+  font-size: ${p => p.theme.font.size.sm};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   line-height: 1;
   justify-self: flex-end;
 `;
 
 const StatLink = styled(Link)`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   text-decoration: ${p => (p['aria-disabled'] ? 'none' : 'underline')};
   text-decoration-style: dotted;
 `;
@@ -356,7 +340,7 @@ const StatCount = styled(Count)`
 `;
 
 const Subtext = styled('span')`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -365,13 +349,14 @@ const Subtext = styled('span')`
 const ActionBar = styled('div')<{isComplete: boolean}>`
   display: flex;
   justify-content: space-between;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   flex-wrap: wrap;
-  padding: ${space(1)} 24px;
-  border-bottom: 1px solid ${p => p.theme.translucentBorder};
+  padding: ${p => p.theme.space.md}
+    var(--issue-details-inset, ${p => p.theme.space['2xl']});
+  border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
   position: relative;
   transition: background 0.3s ease-in-out;
-  background: ${p => (p.isComplete ? 'transparent' : p.theme.background)};
+  background: ${p => (p.isComplete ? 'transparent' : p.theme.tokens.background.primary)};
   &:before {
     z-index: -1;
     position: absolute;
@@ -379,8 +364,8 @@ const ActionBar = styled('div')<{isComplete: boolean}>`
     content: '';
     background: linear-gradient(
       to right,
-      ${p => p.theme.background},
-      ${p => Color(p.theme.success).lighten(0.5).alpha(0.15).string()}
+      ${p => p.theme.tokens.background.primary},
+      ${p => color(p.theme.tokens.content.success).lighten(0.5).alpha(0.15).string()}
     );
   }
   &:after {
@@ -388,17 +373,18 @@ const ActionBar = styled('div')<{isComplete: boolean}>`
     position: absolute;
     top: 0;
     right: 0;
-    left: 24px;
+    left: var(--issue-details-inset, ${p => p.theme.space['2xl']});
     bottom: unset;
     height: 1px;
-    background: ${p => p.theme.translucentBorder};
+    /* eslint-disable-next-line @sentry/scraps/use-semantic-token */
+    background: ${p => p.theme.tokens.border.primary};
   }
 `;
 
 const WorkflowActions = styled('div')`
   display: flex;
   justify-content: flex-end;
-  column-gap: ${space(2)};
+  column-gap: ${p => p.theme.space.xl};
   flex-wrap: wrap;
   @media (max-width: ${p => p.theme.breakpoints.lg}) {
     justify-content: flex-start;
@@ -408,8 +394,8 @@ const WorkflowActions = styled('div')`
 const Workflow = styled('div')`
   display: flex;
   align-items: center;
-  gap: ${space(0.5)};
-  color: ${p => p.theme.subText};
+  gap: ${p => p.theme.space.xs};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const Title = styled('div')`

@@ -4,11 +4,15 @@ from django.test import override_settings
 from rest_framework import status
 from rest_framework.exceptions import ErrorDetail
 
-from sentry.issues.endpoints.project_performance_issue_settings import SETTINGS_PROJECT_OPTION_KEY
-from sentry.performance_issues.performance_detection import get_merged_settings
+from sentry.issue_detection.performance_detection import (
+    SETTINGS_PROJECT_OPTION_KEY,
+    SettingsMode,
+    get_merged_settings,
+)
 from sentry.testutils.cases import APITestCase
 from sentry.testutils.helpers import override_options
 from sentry.testutils.helpers.features import with_feature
+from sentry.workflow_engine.models import Detector
 
 
 class ProjectPerformanceIssueSettingsTest(APITestCase):
@@ -36,6 +40,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
         assert response.data["file_io_on_main_thread_detection_enabled"]
         assert response.data["consecutive_db_queries_detection_enabled"]
         assert response.data["large_render_blocking_asset_detection_enabled"]
+        assert response.data["web_vitals_detection_enabled"]
 
         get_value.return_value = {
             "slow_db_queries_detection_enabled": False,
@@ -48,6 +53,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
             "file_io_on_main_thread_detection_enabled": False,
             "consecutive_db_queries_detection_enabled": False,
             "large_render_blocking_asset_detection_enabled": False,
+            "web_vitals_detection_enabled": False,
         }
 
         response = self.get_success_response(
@@ -64,6 +70,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
         assert not response.data["file_io_on_main_thread_detection_enabled"]
         assert not response.data["consecutive_db_queries_detection_enabled"]
         assert not response.data["large_render_blocking_asset_detection_enabled"]
+        assert not response.data["web_vitals_detection_enabled"]
 
     @patch("sentry.models.ProjectOption.objects.get_value")
     @with_feature("organizations:performance-view")
@@ -82,6 +89,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
                 "performance.issues.consecutive_db.min_time_saved_threshold": 300,
                 "performance.issues.n_plus_one_api_calls.total_duration": 300,
                 "performance.issues.consecutive_http.min_time_saved_threshold": 2000,
+                "performance.issues.web_vitals.count_threshold": 10,
             }
         ):
             response = self.get_success_response(
@@ -101,6 +109,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
             assert response.data["consecutive_db_min_time_saved_threshold"] == 300
             assert response.data["n_plus_one_api_calls_total_duration_threshold"] == 300
             assert response.data["consecutive_http_spans_min_time_saved_threshold"] == 2000
+            assert response.data["web_vitals_count"] == 10
 
             get_value.return_value = {
                 "n_plus_one_db_duration_threshold": 10000,
@@ -115,6 +124,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
                 "consecutive_db_min_time_saved_threshold": 5000,
                 "n_plus_one_api_calls_total_duration_threshold": 500,
                 "consecutive_http_spans_min_time_saved_threshold": 1000,
+                "web_vitals_count": 10,
             }
 
             response = self.get_success_response(
@@ -134,6 +144,7 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
             assert response.data["consecutive_db_min_time_saved_threshold"] == 5000
             assert response.data["n_plus_one_api_calls_total_duration_threshold"] == 500
             assert response.data["consecutive_http_spans_min_time_saved_threshold"] == 1000
+            assert response.data["web_vitals_count"] == 10
 
     def test_get_returns_error_without_feature_enabled(self) -> None:
         self.get_error_response(
@@ -414,3 +425,299 @@ class ProjectPerformanceIssueSettingsTest(APITestCase):
             self.project.get_option(SETTINGS_PROJECT_OPTION_KEY)["slow_db_query_duration_threshold"]
             == 5000
         )  # setting persists as detection is disabled for corresponding issue
+
+    @with_feature("organizations:performance-view")
+    @with_feature("projects:workflow-engine-performance-detectors")
+    def test_put_syncs_to_wfe_detector_config(self) -> None:
+        """
+        Test that PUT updates WFE Detector.config and keeps it in sync with ProjectOption.
+        Verifies sync by comparing LEGACY vs WFE settings modes.
+        """
+        # Create a detector for SLOW_DB_QUERY
+        detector = Detector.objects.create(
+            project_id=self.project.id,
+            type="performance_slow_db_query",
+            name="Slow DB Query Detector",
+            config={"duration_threshold": 1000},
+            enabled=True,
+        )
+
+        # Update the threshold via PUT
+        response = self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            slow_db_query_duration_threshold=5000,
+            method="put",
+            status_code=status.HTTP_200_OK,
+        )
+
+        assert response.data["slow_db_query_duration_threshold"] == 5000
+
+        # Verify the WFE Detector config was updated
+        detector.refresh_from_db()
+        assert detector.config["duration_threshold"] == 5000
+
+        # Verify LEGACY and WFE settings are identical
+        legacy_settings = get_merged_settings(self.project, SettingsMode.LEGACY)
+        wfe_settings = get_merged_settings(self.project, SettingsMode.WFE)
+        assert (
+            legacy_settings["slow_db_query_duration_threshold"]
+            == wfe_settings["slow_db_query_duration_threshold"]
+            == 5000
+        )
+
+    @with_feature("organizations:performance-view")
+    @with_feature("projects:workflow-engine-performance-detectors")
+    def test_delete_resets_enabled_wfe_detector_config(self) -> None:
+        """
+        Test that DELETE clears config on enabled WFE Detectors.
+        Verifies sync by comparing LEGACY vs WFE settings modes.
+        """
+        # Create a detector with custom config, enabled
+        detector = Detector.objects.create(
+            project_id=self.project.id,
+            type="performance_slow_db_query",
+            name="Slow DB Query Detector",
+            config={"duration_threshold": 5000},
+            enabled=True,
+        )
+
+        # Set project options with custom threshold
+        self.project.update_option(
+            SETTINGS_PROJECT_OPTION_KEY,
+            {
+                "slow_db_queries_detection_enabled": True,
+                "slow_db_query_duration_threshold": 5000,
+            },
+        )
+
+        # Call DELETE to reset
+        self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            method="delete",
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+
+        # Verify the WFE Detector config was reset (empty since detector is enabled)
+        detector.refresh_from_db()
+        assert detector.config == {}
+
+        # Verify management setting was preserved in ProjectOption
+        assert self.project.get_option(SETTINGS_PROJECT_OPTION_KEY)[
+            "slow_db_queries_detection_enabled"
+        ]
+        # Verify threshold was removed from ProjectOption
+        assert "slow_db_query_duration_threshold" not in self.project.get_option(
+            SETTINGS_PROJECT_OPTION_KEY
+        )
+
+        # Verify LEGACY and WFE settings are identical after DELETE
+        legacy_settings = get_merged_settings(self.project, SettingsMode.LEGACY)
+        wfe_settings = get_merged_settings(self.project, SettingsMode.WFE)
+        assert (
+            legacy_settings["slow_db_query_duration_threshold"]
+            == wfe_settings["slow_db_query_duration_threshold"]
+        )
+
+    @with_feature("organizations:performance-view")
+    @with_feature("projects:workflow-engine-performance-detectors")
+    def test_put_toggling_detection_enabled_syncs_wfe_detector_enabled(self) -> None:
+        """
+        Test that toggling detection_enabled on/off syncs to Detector.enabled.
+        """
+        # Create an enabled detector
+        detector = Detector.objects.create(
+            project_id=self.project.id,
+            type="performance_slow_db_query",
+            name="Slow DB Query Detector",
+            config={"duration_threshold": 1000},
+            enabled=True,
+        )
+
+        # Disable the detector via PUT
+        response = self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            slow_db_queries_detection_enabled=False,
+            method="put",
+            status_code=status.HTTP_200_OK,
+        )
+
+        assert not response.data["slow_db_queries_detection_enabled"]
+
+        # Verify WFE Detector was disabled
+        detector.refresh_from_db()
+        assert not detector.enabled
+
+        # Re-enable the detector via PUT
+        response = self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            slow_db_queries_detection_enabled=True,
+            method="put",
+            status_code=status.HTTP_200_OK,
+        )
+
+        assert response.data["slow_db_queries_detection_enabled"]
+
+        # Verify WFE Detector was re-enabled
+        detector.refresh_from_db()
+        assert detector.enabled
+
+        # Verify LEGACY and WFE settings remain in sync
+        legacy_settings = get_merged_settings(self.project, SettingsMode.LEGACY)  # type: ignore[unreachable]
+        wfe_settings = get_merged_settings(self.project, SettingsMode.WFE)
+        assert legacy_settings["slow_db_queries_detection_enabled"]
+        assert wfe_settings["slow_db_queries_detection_enabled"]
+
+    @with_feature("organizations:performance-view")
+    @with_feature("projects:workflow-engine-performance-detectors")
+    def test_put_updates_threshold_after_re_enabling_detector(self) -> None:
+        """
+        Test that thresholds can be updated after disabling and re-enabling a detector.
+        Verifies the workflow: enabled → disabled → enabled → update threshold.
+        """
+        # Create an enabled detector with initial threshold
+        detector = Detector.objects.create(
+            project_id=self.project.id,
+            type="performance_slow_db_query",
+            name="Slow DB Query Detector",
+            config={"duration_threshold": 1000},
+            enabled=True,
+        )
+
+        # Disable the detector
+        self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            slow_db_queries_detection_enabled=False,
+            method="put",
+            status_code=status.HTTP_200_OK,
+        )
+
+        detector.refresh_from_db()
+        assert not detector.enabled
+
+        # Re-enable the detector
+        self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            slow_db_queries_detection_enabled=True,
+            method="put",
+            status_code=status.HTTP_200_OK,
+        )
+
+        detector.refresh_from_db()
+        assert detector.enabled
+
+        # Update threshold after re-enabling
+        response = self.get_success_response(  # type: ignore[unreachable]
+            self.project.organization.slug,
+            self.project.slug,
+            slow_db_query_duration_threshold=5000,
+            method="put",
+            status_code=status.HTTP_200_OK,
+        )
+
+        assert response.data["slow_db_query_duration_threshold"] == 5000
+
+        # Verify WFE Detector config was updated
+        detector.refresh_from_db()
+        assert detector.config["duration_threshold"] == 5000
+
+        # Verify LEGACY and WFE settings are in sync
+        legacy_settings = get_merged_settings(self.project, SettingsMode.LEGACY)
+        wfe_settings = get_merged_settings(self.project, SettingsMode.WFE)
+        assert (
+            legacy_settings["slow_db_query_duration_threshold"]
+            == wfe_settings["slow_db_query_duration_threshold"]
+            == 5000
+        )
+
+    @with_feature("organizations:performance-view")
+    def test_delete_preserves_thresholds_when_no_explicit_enabled_setting(self) -> None:
+        """
+        Test that DELETE preserves thresholds when there's no explicit detection_enabled setting.
+
+        This maintains legacy behavior where "not explicitly set" is treated differently from
+        "explicitly set to default value". If the user never touched the _enabled flag but
+        customized thresholds, we preserve those thresholds conservatively.
+        """
+        # Set only threshold, no explicit detection_enabled setting
+        self.project.update_option(
+            SETTINGS_PROJECT_OPTION_KEY,
+            {
+                "slow_db_query_duration_threshold": 5000,
+                # Note: slow_db_queries_detection_enabled NOT set, uses default True
+            },
+        )
+
+        # Call DELETE
+        self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            method="delete",
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+
+        # Verify threshold was preserved (treated as "disabled" due to no explicit enabled setting)
+        project_settings = self.project.get_option(SETTINGS_PROJECT_OPTION_KEY)
+        assert project_settings["slow_db_query_duration_threshold"] == 5000
+
+    @with_feature("organizations:performance-view")
+    @with_feature("projects:workflow-engine-performance-detectors")
+    def test_delete_preserves_disabled_wfe_detector_config(self) -> None:
+        """
+        Test that DELETE leaves config unchanged on disabled WFE Detectors.
+        Assumes WFE and ProjectOption are already in sync (verified by comparing settings modes).
+        """
+        # Create a detector with custom config, disabled
+        detector = Detector.objects.create(
+            project_id=self.project.id,
+            type="performance_slow_db_query",
+            name="Slow DB Query Detector",
+            config={"duration_threshold": 5000},
+            enabled=False,
+        )
+
+        # Set project options with detector disabled and matching threshold
+        self.project.update_option(
+            SETTINGS_PROJECT_OPTION_KEY,
+            {
+                "slow_db_queries_detection_enabled": False,
+                "slow_db_query_duration_threshold": 5000,
+            },
+        )
+
+        # Verify sync before DELETE
+        legacy_settings = get_merged_settings(self.project, SettingsMode.LEGACY)
+        wfe_settings = get_merged_settings(self.project, SettingsMode.WFE)
+        assert legacy_settings["slow_db_query_duration_threshold"] == 5000
+        assert wfe_settings["slow_db_query_duration_threshold"] == 5000
+
+        # Call DELETE to reset
+        self.get_success_response(
+            self.project.organization.slug,
+            self.project.slug,
+            method="delete",
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+
+        # Verify the WFE Detector config was preserved (detector is disabled)
+        detector.refresh_from_db()
+        assert detector.config["duration_threshold"] == 5000
+
+        # Verify both management setting and threshold were preserved in ProjectOption
+        project_settings = self.project.get_option(SETTINGS_PROJECT_OPTION_KEY)
+        assert not project_settings["slow_db_queries_detection_enabled"]
+        assert project_settings["slow_db_query_duration_threshold"] == 5000
+
+        # Verify LEGACY and WFE settings remain identical after DELETE
+        legacy_settings = get_merged_settings(self.project, SettingsMode.LEGACY)
+        wfe_settings = get_merged_settings(self.project, SettingsMode.WFE)
+        assert (
+            legacy_settings["slow_db_query_duration_threshold"]
+            == wfe_settings["slow_db_query_duration_threshold"]
+            == 5000
+        )

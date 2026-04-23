@@ -16,6 +16,9 @@ from django.utils.translation import gettext_lazy as _
 from sentry.integrations.base import IntegrationFeatures, IntegrationProvider
 from sentry.integrations.manager import default_manager as integrations
 from sentry.integrations.services.integration import integration_service
+from sentry.issue_detection.detectors.utils import get_url_from_span
+from sentry.issue_detection.performance_problem import PerformanceProblem
+from sentry.issue_detection.types import Span
 from sentry.issues.grouptype import (
     PerformanceConsecutiveDBQueriesGroupType,
     PerformanceNPlusOneAPICallsExperimentalGroupType,
@@ -34,11 +37,8 @@ from sentry.models.release import Release
 from sentry.models.releasecommit import ReleaseCommit
 from sentry.models.repository import Repository
 from sentry.models.rule import Rule
-from sentry.performance_issues.base import get_url_from_span
-from sentry.performance_issues.performance_problem import PerformanceProblem
-from sentry.performance_issues.types import Span
 from sentry.services.eventstore.models import Event, GroupEvent
-from sentry.silo.base import region_silo_function
+from sentry.silo.base import cell_silo_function
 from sentry.types.rules import NotificationRuleDetails
 from sentry.users.services.user import RpcUser
 from sentry.utils.committers import (
@@ -130,8 +130,8 @@ def get_rules(
         NotificationRuleDetails(
             rule.id,
             rule.label,
-            f"/organizations/{organization.slug}/alerts/rules/{project.slug}/{rule.id}/",
-            f"/organizations/{organization.slug}/alerts/rules/{project.slug}/{rule.id}/details/",
+            f"/organizations/{organization.slug}/issues/alerts/rules/{project.slug}/{rule.id}/",
+            f"/organizations/{organization.slug}/issues/alerts/rules/{project.slug}/{rule.id}/details/",
         )
         for rule in rules
     ]
@@ -205,7 +205,7 @@ def get_commits(project: Project, event: Event) -> Sequence[Mapping[str, Any]]:
     return sorted(commits.values(), key=lambda x: float(x.get("score", 0)), reverse=True)
 
 
-@region_silo_function
+@cell_silo_function
 def has_integrations(organization: Organization, project: Project) -> bool:
     from sentry.plugins.base import plugins
 
@@ -336,7 +336,10 @@ def get_performance_issue_alert_subtitle(event: GroupEvent) -> str:
     """Generate the issue alert subtitle for performance issues"""
     if event.occurrence is None:
         return ""
-    return event.occurrence.evidence_data.get("repeating_spans_compact", "").replace("`", '"')
+    repeating_spans_compact = event.occurrence.evidence_data.get("repeating_spans_compact", "")
+    if isinstance(repeating_spans_compact, list):
+        repeating_spans_compact = repeating_spans_compact[0]
+    return repeating_spans_compact.replace("`", '"')
 
 
 def get_notification_group_title(

@@ -47,8 +47,11 @@ class SentryAppBaseError(Exception):
             response.update({"context": public_context})
         return Response(response, status=self.status_code)
 
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}: message={self.message} status_code={self.status_code} error_type={self.error_type}"
 
-# Represents a user/client error that occured during a Sentry App process
+
+# Represents a user/client error that occurred during a Sentry App process
 class SentryAppError(SentryAppBaseError):
     error_type = SentryAppErrorType.CLIENT
     status_code = 400
@@ -68,7 +71,7 @@ class SentryAppSentryError(SentryAppBaseError):
     def to_public_dict(self) -> SentryAppPublicErrorBody:
         error_id = sentry_sdk.capture_exception(self, level="info")
         return {
-            "detail": f"An issue occured during the integration platform process. Sentry error ID: {error_id}"
+            "detail": f"An issue occurred during the integration platform process. Sentry error ID: {error_id}"
         }
 
     def response_from_exception(self) -> Response:

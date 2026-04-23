@@ -2,9 +2,10 @@ import {useTheme, type Theme} from '@emotion/react';
 import type {Location} from 'history';
 
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
+import {Pagination} from 'sentry/components/pagination';
 import type {GridColumnHeader} from 'sentry/components/tables/gridEditable';
-import GridEditable, {COL_WIDTH_UNDEFINED} from 'sentry/components/tables/gridEditable';
+import {COL_WIDTH_UNDEFINED, GridEditable} from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
@@ -15,7 +16,7 @@ import {RATE_UNIT_TITLE, RateUnit} from 'sentry/utils/discover/fields';
 import {VisuallyCompleteWithData} from 'sentry/utils/performanceForSentry';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
 import {SpanDescriptionCell} from 'sentry/views/insights/common/components/tableCells/spanDescriptionCell';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
@@ -53,7 +54,7 @@ const COLUMN_ORDER: Column[] = [
     width: COL_WIDTH_UNDEFINED,
   },
   {
-    key: `avg(span.self_time)`,
+    key: 'avg(span.self_time)',
     name: DataTitles.avg,
     width: COL_WIDTH_UNDEFINED,
   },
@@ -99,6 +100,9 @@ export function QueriesTable({response, sort, system}: Props) {
       query: {...query, [QueryParameterNames.SPANS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...COLUMN_ORDER],
+  });
 
   return (
     <VisuallyCompleteWithData
@@ -110,7 +114,7 @@ export function QueriesTable({response, sort, system}: Props) {
         isLoading={isLoading}
         error={response.error}
         data={data}
-        columnOrder={COLUMN_ORDER}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -127,6 +131,7 @@ export function QueriesTable({response, sort, system}: Props) {
             }),
           renderBodyCell: (column, row) =>
             renderBodyCell(column, row, meta, location, organization, theme, system),
+          onResizeColumn: handleResizeColumn,
         }}
       />
       <Pagination
@@ -157,7 +162,7 @@ function renderBodyCell(
     return (
       <SpanDescriptionCell
         moduleName={ModuleName.DB}
-        description={row['sentry.normalized_description']}
+        description={row['sentry.normalized_description'] ?? ''}
         group={row['span.group']}
         projectId={row['project.id']}
         system={system}
@@ -166,7 +171,7 @@ function renderBodyCell(
     );
   }
 
-  if (!meta || !meta?.fields) {
+  if (!meta?.fields) {
     return row[column.key];
   }
 

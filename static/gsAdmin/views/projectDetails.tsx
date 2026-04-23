@@ -1,38 +1,50 @@
 import moment from 'moment-timezone';
 
+import {ExternalLink, Link} from '@sentry/scraps/link';
+
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {ExternalLink, Link} from 'sentry/components/core/link';
-import List from 'sentry/components/list';
-import ListItem from 'sentry/components/list/listItem';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import ConfigStore from 'sentry/stores/configStore';
+import {List} from 'sentry/components/list';
+import {ListItem} from 'sentry/components/list/listItem';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {ConfigStore} from 'sentry/stores/configStore';
 import {DataCategoryExact} from 'sentry/types/core';
+import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {useApiQuery} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
 import {useParams} from 'sentry/utils/useParams';
 
 import {CustomerStats} from 'admin/components/customers/customerStats';
 import {CustomerStatsFilters} from 'admin/components/customers/customerStatsFilters';
-import DetailLabel from 'admin/components/detailLabel';
-import DetailList from 'admin/components/detailList';
-import DetailsContainer from 'admin/components/detailsContainer';
-import DetailsPage from 'admin/components/detailsPage';
-import EventUsers from 'admin/components/eventUsers';
+import {DetailLabel} from 'admin/components/detailLabel';
+import {DetailList} from 'admin/components/detailList';
+import {DetailsContainer} from 'admin/components/detailsContainer';
+import {DetailsPage} from 'admin/components/detailsPage';
+import {EventUsers} from 'admin/components/eventUsers';
 import {getLogQuery} from 'admin/utils';
 
 import {DynamicSamplingPanel} from './dynamicSamplingPanel';
 
-function ProjectDetails() {
+export function ProjectDetails() {
   const {projectId, orgId} = useParams<{
     orgId: string;
     projectId: string;
   }>();
-  const {data, isPending, isError} = useApiQuery<Project>(
-    [`/projects/${orgId}/${projectId}/`],
+  // This admin view fetches project details without `collapse=organization`,
+  // so the backend returns a full Organization rather than the minimal
+  // {id, slug} shape used elsewhere.
+  const {data, isPending, isError} = useApiQuery<
+    Omit<Project, 'organization'> & {organization: Organization}
+  >(
+    [
+      getApiUrl('/projects/$organizationIdOrSlug/$projectIdOrSlug/', {
+        path: {organizationIdOrSlug: orgId, projectIdOrSlug: projectId},
+      }),
+    ],
     {staleTime: Infinity}
   );
   const api = useApi();
@@ -84,7 +96,7 @@ function ProjectDetails() {
   const overview = (
     <DetailsContainer>
       <DetailList>
-        <DetailLabel title={'Customer'}>
+        <DetailLabel title="Customer">
           {organization.name}
           {' ('}
           <Link to={`/_admin/customers/${organization.slug}/`}>{'Admin'}</Link>
@@ -92,13 +104,13 @@ function ProjectDetails() {
           <Link to={orgUrl}>{'Sentry'}</Link>
           {')'}
         </DetailLabel>
-        <DetailLabel title={'Short name'}>
+        <DetailLabel title="Short name">
           <ExternalLink href={projectUrl}>{data.slug}</ExternalLink>
         </DetailLabel>
-        <DetailLabel title={'Internal ID'}>{data.id}</DetailLabel>
-        <DetailLabel title={'Status'}>{(data as any).status}</DetailLabel>
-        <DetailLabel title={'Created'}>{moment(data.dateCreated).fromNow()}</DetailLabel>
-        <DetailLabel title={'Logs'}>
+        <DetailLabel title="Internal ID">{data.id}</DetailLabel>
+        <DetailLabel title="Status">{(data as any).status}</DetailLabel>
+        <DetailLabel title="Created">{moment(data.dateCreated).fromNow()}</DetailLabel>
+        <DetailLabel title="Logs">
           <ExternalLink
             href={getLogQuery('project', {
               organizationId: orgId,
@@ -128,7 +140,7 @@ function ProjectDetails() {
         </DetailLabel>
       </DetailList>
       <DetailList>
-        <DetailLabel title={'Features'}>
+        <DetailLabel title="Features">
           <List>
             {data.features.map(item => (
               <ListItem key={item}>{item}</ListItem>
@@ -146,7 +158,7 @@ function ProjectDetails() {
   return (
     <div>
       <DetailsPage
-        rootName={'Projects'}
+        rootName="Projects"
         name={`${data.slug} (${organization.name})`}
         sections={[
           {
@@ -187,5 +199,3 @@ function ProjectDetails() {
     </div>
   );
 }
-
-export default ProjectDetails;

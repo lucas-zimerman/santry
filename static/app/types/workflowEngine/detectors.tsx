@@ -1,3 +1,4 @@
+import type {Actor} from 'sentry/types/core';
 import type {SimpleGroup} from 'sentry/types/group';
 import type {
   DataConditionGroupLogicType,
@@ -8,8 +9,19 @@ import type {
   AlertRuleThresholdType,
   Dataset,
   EventTypes,
+  ExtrapolationMode,
 } from 'sentry/views/alerts/rules/metric/types';
+import type {
+  UptimeAssertion,
+  UptimeMonitorMode,
+} from 'sentry/views/alerts/rules/uptime/types';
 import type {Monitor, MonitorConfig} from 'sentry/views/insights/crons/types';
+import type {
+  MetricType as PreprodMeasurement,
+  MeasurementType as PreprodThresholdType,
+} from 'sentry/views/settings/project/preprod/types';
+
+export type {PreprodMeasurement, PreprodThresholdType};
 
 /**
  * See SnubaQuerySerializer
@@ -25,6 +37,7 @@ export interface SnubaQuery {
    */
   timeWindow: number;
   environment?: string;
+  extrapolationMode?: ExtrapolationMode;
 }
 
 /**
@@ -46,7 +59,7 @@ export interface SnubaQueryDataSource extends BaseDataSource {
     snubaQuery: SnubaQuery;
     status: number;
     subscription: string;
-  } | null;
+  };
   type: 'snuba_query_subscription';
 }
 
@@ -55,6 +68,7 @@ export interface UptimeSubscriptionDataSource extends BaseDataSource {
    * See UptimeSubscriptionSerializer
    */
   queryObj: {
+    assertion: UptimeAssertion | null;
     body: string | null;
     headers: Array<[string, string]>;
     intervalSeconds: number;
@@ -75,23 +89,21 @@ export type DetectorType =
   | 'error'
   | 'metric_issue'
   | 'monitor_check_in_failure'
-  | 'uptime_domain_failure';
-
-interface BaseMetricDetectorConfig {
-  thresholdPeriod: number;
-}
+  | 'uptime_domain_failure'
+  | 'issue_stream'
+  | 'preprod_size_analysis';
 
 /**
  * Configuration for static/threshold-based detection
  */
-interface MetricDetectorConfigStatic extends BaseMetricDetectorConfig {
+interface MetricDetectorConfigStatic {
   detectionType: 'static';
 }
 
 /**
  * Configuration for percentage-based change detection
  */
-interface MetricDetectorConfigPercent extends BaseMetricDetectorConfig {
+interface MetricDetectorConfigPercent {
   comparisonDelta: number;
   detectionType: 'percent';
 }
@@ -99,11 +111,8 @@ interface MetricDetectorConfigPercent extends BaseMetricDetectorConfig {
 /**
  * Configuration for dynamic/anomaly detection
  */
-interface MetricDetectorConfigDynamic extends BaseMetricDetectorConfig {
+interface MetricDetectorConfigDynamic {
   detectionType: 'dynamic';
-  seasonality?: 'auto' | 'daily' | 'weekly' | 'monthly';
-  sensitivity?: AlertRuleSensitivity;
-  thresholdType?: AlertRuleThresholdType;
 }
 
 export type MetricDetectorConfig =
@@ -112,19 +121,23 @@ export type MetricDetectorConfig =
   | MetricDetectorConfigDynamic;
 
 interface UptimeDetectorConfig {
-  environment: string;
+  downtimeThreshold: number;
+  environment: string | null;
+  mode: UptimeMonitorMode;
+  recoveryThreshold: number;
 }
 
 type BaseDetector = Readonly<{
   createdBy: string | null;
   dateCreated: string;
   dateUpdated: string;
+  description: string | null;
   enabled: boolean;
   id: string;
   lastTriggered: string;
   latestGroup: SimpleGroup | null;
   name: string;
-  owner: string | null;
+  owner: Actor | null;
   projectId: string;
   type: DetectorType;
   workflowIds: string[];
@@ -154,7 +167,33 @@ export interface ErrorDetector extends BaseDetector {
   readonly type: 'error';
 }
 
-export type Detector = MetricDetector | UptimeDetector | CronDetector | ErrorDetector;
+export interface IssueStreamDetector extends BaseDetector {
+  // TODO: Add issue stream detector type fields
+  readonly type: 'issue_stream';
+}
+
+/**
+ * Configuration for preprod/mobile builds detection
+ */
+interface PreprodDetectorConfig {
+  measurement: PreprodMeasurement;
+  thresholdType: PreprodThresholdType;
+  query?: string;
+}
+
+export interface PreprodDetector extends BaseDetector {
+  readonly conditionGroup: MetricConditionGroup | null;
+  readonly config: PreprodDetectorConfig;
+  readonly type: 'preprod_size_analysis';
+}
+
+export type Detector =
+  | MetricDetector
+  | UptimeDetector
+  | CronDetector
+  | ErrorDetector
+  | IssueStreamDetector
+  | PreprodDetector;
 
 interface UpdateConditionGroupPayload {
   conditions: Array<Omit<MetricCondition, 'id'>>;
@@ -169,6 +208,7 @@ interface UpdateSnubaDataSourcePayload {
   query: string;
   queryType: number;
   timeWindow: number;
+  extrapolationMode?: string;
 }
 
 interface UpdateUptimeDataSourcePayload {
@@ -177,35 +217,50 @@ interface UpdateUptimeDataSourcePayload {
   timeoutMs: number;
   traceSampling: boolean;
   url: string;
+  assertion?: UptimeAssertion | null;
+  body?: string | null;
+  headers?: Array<[string, string]>;
 }
 
 export interface BaseDetectorUpdatePayload {
   name: string;
-  owner: Detector['owner'];
+  owner: string | null;
   projectId: Detector['projectId'];
   type: Detector['type'];
   workflowIds: string[];
+  description?: string | null;
   enabled?: boolean;
 }
 
 export interface UptimeDetectorUpdatePayload extends BaseDetectorUpdatePayload {
-  dataSource: UpdateUptimeDataSourcePayload;
+  config: UptimeDetectorConfig;
+  dataSources: UpdateUptimeDataSourcePayload[];
   type: 'uptime_domain_failure';
 }
 
 export interface MetricDetectorUpdatePayload extends BaseDetectorUpdatePayload {
   conditionGroup: UpdateConditionGroupPayload;
   config: MetricDetectorConfig;
-  dataSource: UpdateSnubaDataSourcePayload;
+  dataSources: UpdateSnubaDataSourcePayload[];
   type: 'metric_issue';
 }
 
 export interface CronDetectorUpdatePayload extends BaseDetectorUpdatePayload {
-  dataSource: {
+  dataSources: Array<{
     config: MonitorConfig;
     name: string;
-  };
+  }>;
   type: 'monitor_check_in_failure';
+}
+
+export interface PreprodDetectorUpdatePayload extends BaseDetectorUpdatePayload {
+  conditionGroup: UpdateConditionGroupPayload;
+  config: {
+    measurement: PreprodMeasurement;
+    thresholdType: PreprodThresholdType;
+    query?: string;
+  };
+  type: 'preprod_size_analysis';
 }
 
 export interface MetricConditionGroup {
@@ -224,7 +279,7 @@ export interface MetricCondition {
 /**
  * See AnomalyDetectionHandler
  */
-interface AnomalyDetectionComparison {
+export interface AnomalyDetectionComparison {
   seasonality:
     | 'auto'
     | 'hourly'
@@ -234,8 +289,8 @@ interface AnomalyDetectionComparison {
     | 'hourly_weekly'
     | 'hourly_daily_weekly'
     | 'daily_weekly';
-  sensitivity: 'low' | 'medium' | 'high';
-  threshold_type: 0 | 1 | 2;
+  sensitivity: AlertRuleSensitivity;
+  thresholdType: AlertRuleThresholdType;
 }
 
 type MetricDataCondition = AnomalyDetectionComparison | number;

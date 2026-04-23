@@ -1,12 +1,12 @@
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from unittest import mock
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from sentry_relay.processing import normalize_project_config
 
+from sentry import quotas
 from sentry.constants import HEALTH_CHECK_GLOBS, ObjectStatus
 from sentry.discover.models import TeamKeyTransaction
 from sentry.dynamic_sampling import (
@@ -17,7 +17,7 @@ from sentry.dynamic_sampling import (
     get_redis_client_for_ds,
 )
 from sentry.dynamic_sampling.rules.base import NEW_MODEL_THRESHOLD_IN_MINUTES
-from sentry.models.dynamicsampling import CustomDynamicSamplingRule
+from sentry.models.project import Project
 from sentry.models.projectkey import ProjectKey
 from sentry.models.projectteam import ProjectTeam
 from sentry.models.transaction_threshold import TransactionMetric
@@ -27,8 +27,8 @@ from sentry.testutils.factories import Factories
 from sentry.testutils.helpers import Feature
 from sentry.testutils.helpers.datetime import freeze_time
 from sentry.testutils.helpers.options import override_options
-from sentry.testutils.pytest.fixtures import django_db_all
-from sentry.testutils.silo import region_silo_test
+from sentry.testutils.pytest.fixtures import InstaSnapshotter, django_db_all
+from sentry.testutils.silo import cell_silo_test
 from sentry.utils.safe import get_path
 
 PII_CONFIG = """
@@ -98,7 +98,7 @@ def _validate_project_config(config):
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_get_project_config_non_visible(default_project) -> None:
     keys = ProjectKey.objects.filter(project=default_project)
     default_project.update(status=ObjectStatus.PENDING_DELETION)
@@ -107,8 +107,8 @@ def test_get_project_config_non_visible(default_project) -> None:
 
 
 @django_db_all
-@region_silo_test
-def test_get_project_config(default_project, insta_snapshot) -> None:
+@cell_silo_test
+def test_get_project_config(default_project: Project, insta_snapshot: InstaSnapshotter) -> None:
     # We could use the default_project fixture here, but we would like to avoid 1) hitting the db 2) creating a mock
     default_project.update_option("sentry:relay_pii_config", PII_CONFIG)
     default_project.organization.update_option("sentry:relay_pii_config", PII_CONFIG)
@@ -136,99 +136,7 @@ SOME_EXCEPTION = RuntimeError("foo")
 
 
 @django_db_all
-@region_silo_test
-@mock.patch("sentry.relay.config.logger")
-def test_get_project_config_with_logging(mock_logger, default_project, insta_snapshot) -> None:
-    # We could use the default_project fixture here, but we would like to avoid 1) hitting the db 2) creating a mock
-
-    default_project.update_option("sentry:relay_pii_config", PII_CONFIG)
-    default_project.organization.update_option("sentry:relay_pii_config", PII_CONFIG)
-    keys = ProjectKey.objects.filter(project=default_project)
-
-    # Create a custom dynamic sampling rule
-    start = datetime.now(tz=timezone.utc)
-    end = start + timedelta(hours=1)
-    condition = {"op": "eq", "name": "environment", "value": "production"}
-    CustomDynamicSamplingRule.update_or_create(
-        condition=condition,
-        start=start,
-        end=end,
-        project_ids=[default_project.id],
-        organization_id=default_project.organization.id,
-        num_samples=1000,
-        sample_rate=0.8,
-        query="environment:production",
-    )
-
-    with Feature(
-        {
-            "organizations:log-project-config": True,
-            "organizations:dynamic-sampling": True,
-        }
-    ):
-        project_cfg = get_project_config(default_project, project_keys=keys)
-        cfg = project_cfg.to_dict()
-
-    _validate_project_config(cfg["config"])
-
-    # Verify that logging was called
-    assert mock_logger.info.call_count == 2
-
-    # Check that the log message contains the expected project and org IDs
-    first_call_args = mock_logger.info.call_args_list[0]
-    second_call_args = mock_logger.info.call_args_list[1]
-
-    assert "Logging sampling feature flags for project" in first_call_args[0][0]
-    assert first_call_args[0][1] == default_project.id
-    assert first_call_args[0][2] == default_project.organization.id
-    first_extra = first_call_args[1]["extra"]
-    assert "sampling_rule_count" in first_extra
-    assert "project_sampling_config" not in first_extra
-
-    assert "Logging project sampling config for project" in second_call_args[0][0]
-    assert second_call_args[0][1] == default_project.id
-    assert second_call_args[0][2] == default_project.organization.id
-    second_extra = second_call_args[1]["extra"]
-    assert "project_sampling_config" in second_extra
-
-    # Check that extra logging data is present for both logging calls
-    first_extra_data = first_call_args[1]["extra"]
-    assert "project_id" in first_extra_data
-    assert "org_id" in first_extra_data
-    assert "dynamic_sampling_feature_flag" in first_extra_data
-    assert "dynamic_sampling_custom_feature_flag" in first_extra_data
-    assert "dynamic_sampling_mode" in first_extra_data
-    assert "dynamic_sampling_org_target_rate" in first_extra_data
-
-    second_extra_data = second_call_args[1]["extra"]
-    assert "project_id" in second_extra_data
-    assert "org_id" in second_extra_data
-    assert "dynamic_sampling_feature_flag" in second_extra_data
-    assert "dynamic_sampling_custom_feature_flag" in second_extra_data
-    assert "dynamic_sampling_mode" in second_extra_data
-    assert "dynamic_sampling_org_target_rate" in second_extra_data
-
-    # Verify that the custom dynamic sampling rule is included in the config
-    sampling_config = get_path(cfg, "config", "sampling")
-    assert sampling_config is not None
-    assert "rules" in sampling_config
-
-    # Check if our custom rule is present in the rules
-    custom_rule_found = False
-    for rule in sampling_config["rules"]:
-        if (
-            rule.get("condition") == condition
-            and rule.get("samplingValue", {}).get("type") == "reservoir"
-            and rule.get("samplingValue", {}).get("limit") == 1000
-        ):
-            custom_rule_found = True
-            break
-
-    assert custom_rule_found, "Custom dynamic sampling rule should be present in the config"
-
-
-@django_db_all
-@region_silo_test
+@cell_silo_test
 @mock.patch("sentry.relay.config.generate_rules", side_effect=SOME_EXCEPTION)
 @mock.patch("sentry.relay.config.experimental.logger")
 def test_get_experimental_config_dyn_sampling(mock_logger, _, default_project) -> None:
@@ -244,37 +152,19 @@ def test_get_experimental_config_dyn_sampling(mock_logger, _, default_project) -
 
 
 @django_db_all
-@region_silo_test
-@mock.patch("sentry.relay.config.capture_exception")
-def test_get_experimental_config_transaction_metrics_exception(
-    mock_capture_exception, default_project
-):
-    keys = ProjectKey.objects.filter(project=default_project)
-    default_project.update_option("sentry:breakdowns", {"invalid_breakdowns": "test"})
-    # wrong type
-    default_project.update_option("sentry:transaction_metrics_custom_tags", 42)
-
-    with Feature({"organizations:transaction-metrics-extraction": True}):
-        cfg = get_project_config(default_project, project_keys=keys)
-
-    config = cfg.to_dict()["config"]
-
-    assert config["transactionMetrics"]["extractCustomTags"] == []
-    assert mock_capture_exception.call_count == 2
-
-
-@django_db_all
-@region_silo_test
+@cell_silo_test
 @pytest.mark.parametrize("has_custom_filters", [False, True])
 @pytest.mark.parametrize("has_blacklisted_ips", [False, True])
 def test_project_config_uses_filter_features(
     default_project, has_custom_filters, has_blacklisted_ips
 ):
     log_messages = ["some log"]
+    trace_metric_names = ["some metric"]
     error_messages = ["some_error"]
     releases = ["1.2.3", "4.5.6"]
     blacklisted_ips = ["112.69.248.54"]
     default_project.update_option("sentry:log_messages", log_messages)
+    default_project.update_option("sentry:trace_metric_names", trace_metric_names)
     default_project.update_option("sentry:error_messages", error_messages)
     default_project.update_option("sentry:releases", releases)
     default_project.update_option("filters:react-hydration-errors", "0")
@@ -287,6 +177,7 @@ def test_project_config_uses_filter_features(
         {
             "projects:custom-inbound-filters": has_custom_filters,
             "organizations:ourlogs-ingestion": True,
+            "organizations:tracemetrics-ingestion": True,
         }
     ):
         project_cfg = get_project_config(default_project)
@@ -310,6 +201,15 @@ def test_project_config_uses_filter_features(
                 "value": ["some log"],
             },
         } in cfg_generic
+        assert {
+            "id": "trace-metric-name",
+            "isEnabled": True,
+            "condition": {
+                "op": "glob",
+                "name": "trace_metric.name",
+                "value": ["some metric"],
+            },
+        } in cfg_generic
     else:
         assert cfg_releases is None
         assert cfg_error_messages is None
@@ -322,7 +222,7 @@ def test_project_config_uses_filter_features(
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 @mock.patch("sentry.relay.config.EXPOSABLE_FEATURES", ["organizations:profiling"])
 def test_project_config_exposed_features(default_project: MagicMock) -> None:
     with Feature({"organizations:profiling": True}):
@@ -335,7 +235,7 @@ def test_project_config_exposed_features(default_project: MagicMock) -> None:
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 @mock.patch("sentry.relay.config.EXPOSABLE_FEATURES", ["badprefix:custom-inbound-filters"])
 def test_project_config_exposed_features_raise_exc(default_project: MagicMock) -> None:
     with Feature({"projects:custom-inbound-filters": True}):
@@ -348,7 +248,7 @@ def test_project_config_exposed_features_raise_exc(default_project: MagicMock) -
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 @patch("sentry.dynamic_sampling.rules.biases.boost_latest_releases_bias.apply_dynamic_factor")
 @freeze_time("2022-10-21 18:50:25.000000+00:00")
 def test_project_config_with_all_biases_enabled(
@@ -459,12 +359,6 @@ def test_project_config_with_all_biases_enabled(
                 "samplingValue": {"type": "sampleRate", "value": 1.0},
                 "type": "trace",
             },
-            # {
-            #     "condition": {"inner": [], "op": "and"},
-            #     "id": 1004,
-            #     "samplingValue": {"type": "factor", "value": default_factor},
-            #     "type": "trace",
-            # },
             {
                 "samplingValue": {"type": "sampleRate", "value": 1.0},
                 "type": "trace",
@@ -479,6 +373,12 @@ def test_project_config_with_all_biases_enabled(
                     ],
                 },
                 "id": 1001,
+            },
+            {
+                "condition": {"inner": [], "op": "and"},
+                "id": 1004,
+                "samplingValue": {"type": "factor", "value": default_factor},
+                "type": "trace",
             },
             {
                 "samplingValue": {"type": "factor", "value": 1.5},
@@ -533,10 +433,78 @@ def test_project_config_with_all_biases_enabled(
 
 
 @django_db_all
+@cell_silo_test
+@patch("sentry.dynamic_sampling.rules.biases.boost_latest_releases_bias.apply_dynamic_factor")
+@freeze_time("2022-10-21 18:50:25.000000+00:00")
+def test_project_config_with_trace_health_checks_enabled(
+    eval_dynamic_factor_lr, default_project, default_team
+):
+    eval_dynamic_factor_lr.return_value = 1.5
+
+    default_project.update_option(
+        "sentry:dynamic_sampling_biases",
+        [
+            {"id": "boostEnvironments", "active": False},
+            {"id": "ignoreHealthChecks", "active": True},
+            {"id": "boostLatestRelease", "active": False},
+            {"id": "boostKeyTransactions", "active": False},
+            {"id": "boostLowVolumeTransactions", "active": False},
+            {"id": "boostReplayId", "active": False},
+        ],
+    )
+    default_project.add_team(default_team)
+    old_date = datetime.now(tz=timezone.utc) - timedelta(minutes=NEW_MODEL_THRESHOLD_IN_MINUTES + 1)
+    default_project.organization.date_added = old_date
+    default_project.date_added = old_date
+
+    with Feature(
+        {
+            "organizations:dynamic-sampling": True,
+            "organizations:ds-health-checks-trace-based": True,
+        }
+    ):
+        with patch(
+            "sentry.dynamic_sampling.rules.base.quotas.backend.get_blended_sample_rate",
+            return_value=0.1,
+        ):
+            project_cfg = get_project_config(default_project)
+
+    cfg = project_cfg.to_dict()
+    _validate_project_config(cfg["config"])
+    dynamic_sampling = get_path(cfg, "config", "sampling")
+    assert dynamic_sampling == {
+        "version": 2,
+        "rules": [
+            {
+                "samplingValue": {"type": "sampleRate", "value": 0.1 / 3},
+                "type": "trace",
+                "condition": {
+                    "op": "or",
+                    "inner": [
+                        {
+                            "op": "glob",
+                            "name": "trace.transaction",
+                            "value": HEALTH_CHECK_GLOBS,
+                        }
+                    ],
+                },
+                "id": 1002,
+            },
+            {
+                "samplingValue": {"type": "sampleRate", "value": 0.1},
+                "type": "trace",
+                "condition": {"op": "and", "inner": []},
+                "id": 1000,
+            },
+        ],
+    }
+
+
+@django_db_all
 @pytest.mark.parametrize("transaction_metrics", ("with_metrics", "without_metrics"))
-@region_silo_test
+@cell_silo_test
 def test_project_config_with_breakdown(
-    default_project, insta_snapshot, transaction_metrics
+    default_project: Project, insta_snapshot: InstaSnapshotter, transaction_metrics: str
 ) -> None:
     with Feature(
         {
@@ -550,14 +518,13 @@ def test_project_config_with_breakdown(
     insta_snapshot(
         {
             "breakdownsV2": cfg["config"]["breakdownsV2"],
-            "transactionMetrics": cfg["config"].get("transactionMetrics"),
             "metricConditionalTagging": cfg["config"].get("metricConditionalTagging"),
         }
     )
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 @pytest.mark.parametrize("abnormal_mechanism_rollout", (0, 1))
 def test_project_config_with_organizations_metrics_extraction(
     default_project, set_sentry_option, abnormal_mechanism_rollout
@@ -579,13 +546,13 @@ def test_project_config_with_organizations_metrics_extraction(
 @django_db_all
 @pytest.mark.parametrize("has_project_transaction_threshold", (False, True))
 @pytest.mark.parametrize("has_project_transaction_threshold_overrides", (False, True))
-@region_silo_test
+@cell_silo_test
 def test_project_config_satisfaction_thresholds(
-    default_project,
-    insta_snapshot,
-    has_project_transaction_threshold_overrides,
-    has_project_transaction_threshold,
-):
+    default_project: Project,
+    insta_snapshot: InstaSnapshotter,
+    has_project_transaction_threshold_overrides: bool,
+    has_project_transaction_threshold: bool,
+) -> None:
     if has_project_transaction_threshold:
         default_project.projecttransactionthreshold_set.create(
             organization=default_project.organization,
@@ -617,52 +584,6 @@ def test_project_config_satisfaction_thresholds(
     insta_snapshot(cfg["config"]["metricConditionalTagging"])
 
 
-@django_db_all
-@region_silo_test
-@pytest.mark.parametrize("feature_flag", (False, True), ids=("feature_disabled", "feature_enabled"))
-@pytest.mark.parametrize(
-    "killswitch", (False, True), ids=("killswitch_disabled", "killswitch_enabled")
-)
-def test_has_metric_extraction(default_project, feature_flag, killswitch) -> None:
-    options = override_options(
-        {
-            "relay.drop-transaction-metrics": (
-                [{"project_id": default_project.id}] if killswitch else []
-            )
-        }
-    )
-    feature = Feature(
-        {
-            "organizations:transaction-metrics-extraction": feature_flag,
-        }
-    )
-    with feature, options:
-        project_config = get_project_config(default_project)
-        config = project_config.to_dict()["config"]
-        _validate_project_config(config)
-        if killswitch or not feature_flag:
-            assert "transactionMetrics" not in config
-        else:
-            config = config["transactionMetrics"]
-            assert config["customMeasurements"]["limit"] > 0
-
-
-@django_db_all
-def test_accept_transaction_names(default_project) -> None:
-    feature = Feature(
-        {
-            "organizations:transaction-metrics-extraction": True,
-        }
-    )
-    with feature:
-        config = get_project_config(default_project).to_dict()["config"]
-
-        _validate_project_config(config)
-        transaction_metrics_config = config["transactionMetrics"]
-
-        assert transaction_metrics_config["acceptTransactionNames"] == "clientBased"
-
-
 @pytest.mark.parametrize("num_clusterer_runs", [9, 10])
 @django_db_all
 def test_txnames_ready(default_project, num_clusterer_runs) -> None:
@@ -679,7 +600,7 @@ def test_txnames_ready(default_project, num_clusterer_runs) -> None:
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_setattr(default_project) -> None:
     project_cfg = ProjectConfig(default_project)
     with pytest.raises(Exception) as exc_info:
@@ -688,14 +609,14 @@ def test_project_config_setattr(default_project) -> None:
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_getattr(default_project) -> None:
     project_cfg = ProjectConfig(default_project, foo="bar")
     assert project_cfg.foo == "bar"
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_str(default_project) -> None:
     project_cfg = ProjectConfig(default_project, foo="bar")
     assert str(project_cfg) == '{"foo":"bar"}'
@@ -707,21 +628,21 @@ def test_project_config_str(default_project) -> None:
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_repr(default_project) -> None:
     project_cfg = ProjectConfig(default_project, foo="bar")
     assert repr(project_cfg) == '(ProjectConfig){"foo":"bar"}'
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_to_json_string(default_project) -> None:
     project_cfg = ProjectConfig(default_project, foo="bar")
     assert project_cfg.to_json_string() == '{"foo":"bar"}'
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_get_at_path(default_project) -> None:
     project_cfg = ProjectConfig(default_project, a=1, b="The b", foo="bar")
     assert project_cfg.get_at_path("b") == "The b"
@@ -1365,228 +1286,7 @@ def test_mobile_performance_calculate_score(default_project) -> None:
 
 
 @django_db_all
-@region_silo_test
-@pytest.mark.parametrize("passive", [False, True])
-def test_project_config_cardinality_limits(default_project, insta_snapshot, passive) -> None:
-    options: dict[Any, Any] = {
-        "relay.cardinality-limiter.mode": "enabled",
-        "sentry-metrics.cardinality-limiter.limits.transactions.per-org": [
-            {"window_seconds": 1000, "granularity_seconds": 100, "limit": 10}
-        ],
-        "sentry-metrics.cardinality-limiter.limits.sessions.per-org": [
-            {"window_seconds": 2000, "granularity_seconds": 200, "limit": 20}
-        ],
-        "sentry-metrics.cardinality-limiter.limits.spans.per-org": [
-            {"window_seconds": 3000, "granularity_seconds": 300, "limit": 30}
-        ],
-        "sentry-metrics.cardinality-limiter.limits.custom.per-org": [
-            {"window_seconds": 4000, "granularity_seconds": 400, "limit": 40}
-        ],
-        "sentry-metrics.cardinality-limiter.limits.generic-metrics.per-org": [
-            {"window_seconds": 5000, "granularity_seconds": 500, "limit": 50}
-        ],
-        "sentry-metrics.cardinality-limiter.limits.profiles.per-org": [
-            {"window_seconds": 3600, "granularity_seconds": 600, "limit": 60}
-        ],
-    }
-
-    if passive:
-        options["relay.cardinality-limiter.passive-limits-by-org"] = {
-            str(default_project.organization.id): [
-                "sessions",
-                "transactions",
-                "spans",
-                "profiles",
-            ]
-        }
-
-    options["relay.cardinality-limiter.limits"] = [
-        {
-            "rollout_rate": 0,
-            "limit": {
-                "id": "test1",
-                "window": {"windowSeconds": 7000, "granularitySeconds": 700},
-                "limit": 70,
-                "scope": "name",
-            },
-        },
-        {
-            "rollout_rate": 1,
-            "limit": {
-                "id": "test2",
-                "window": {"windowSeconds": 8000, "granularitySeconds": 800},
-                "limit": 80,
-                "scope": "name",
-                "report": True,
-            },
-        },
-    ]
-
-    default_project.update_option(
-        "relay.cardinality-limiter.limits",
-        [
-            {
-                "limit": {
-                    "id": "test3",
-                    "window": {"windowSeconds": 9000, "granularitySeconds": 900},
-                    "limit": 90,
-                    "scope": "name",
-                }
-            }
-        ],
-    )
-
-    default_project.organization.update_option(
-        "relay.cardinality-limiter.limits",
-        [
-            {
-                "limit": {
-                    "id": "test4",
-                    "window": {"windowSeconds": 10000, "granularitySeconds": 1000},
-                    "limit": 100,
-                    "scope": "name",
-                }
-            }
-        ],
-    )
-
-    with override_options(options):
-        project_cfg = get_project_config(default_project)
-
-        cfg = project_cfg.to_dict()
-        _validate_project_config(cfg["config"])
-
-        insta_snapshot(cfg["config"]["metrics"])
-
-
-@django_db_all
-@region_silo_test
-def test_project_config_cardinality_limits_project_options_override_other_options(
-    default_project,
-) -> None:
-    options: dict[Any, Any] = {
-        "relay.cardinality-limiter.mode": "enabled",
-        "sentry-metrics.cardinality-limiter.limits.transactions.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.sessions.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.spans.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.custom.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.generic-metrics.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.profiles.per-org": None,
-    }
-
-    options["relay.cardinality-limiter.limits"] = [
-        {
-            "limit": {
-                "id": "test1",
-                "window": {"windowSeconds": 1000, "granularitySeconds": 100},
-                "limit": 10,
-                "scope": "name",
-            },
-        },
-    ]
-
-    default_project.organization.update_option(
-        "relay.cardinality-limiter.limits",
-        [
-            {
-                "limit": {
-                    "id": "test1",
-                    "window": {"windowSeconds": 2000, "granularitySeconds": 200},
-                    "limit": 20,
-                    "scope": "name",
-                }
-            }
-        ],
-    )
-
-    default_project.update_option(
-        "relay.cardinality-limiter.limits",
-        [
-            {
-                "limit": {
-                    "id": "test1",
-                    "window": {"windowSeconds": 3000, "granularitySeconds": 300},
-                    "limit": 30,
-                    "scope": "project",
-                }
-            }
-        ],
-    )
-
-    with override_options(options):
-        project_cfg = get_project_config(default_project)
-
-        cfg = project_cfg.to_dict()
-        _validate_project_config(cfg["config"])
-
-        assert cfg["config"]["metrics"]["cardinalityLimits"] == [
-            {
-                "id": "test1",
-                "window": {"windowSeconds": 3000, "granularitySeconds": 300},
-                "limit": 30,
-                "scope": "project",
-            }
-        ]
-
-
-@django_db_all
-@region_silo_test
-def test_project_config_cardinality_limits_organization_options_override_options(
-    default_project,
-) -> None:
-    options: dict[Any, Any] = {
-        "relay.cardinality-limiter.mode": "enabled",
-        "sentry-metrics.cardinality-limiter.limits.transactions.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.sessions.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.spans.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.custom.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.generic-metrics.per-org": None,
-        "sentry-metrics.cardinality-limiter.limits.profiles.per-org": None,
-    }
-
-    options["relay.cardinality-limiter.limits"] = [
-        {
-            "limit": {
-                "id": "test1",
-                "window": {"windowSeconds": 1000, "granularitySeconds": 100},
-                "limit": 10,
-                "scope": "name",
-            },
-        },
-    ]
-
-    default_project.organization.update_option(
-        "relay.cardinality-limiter.limits",
-        [
-            {
-                "limit": {
-                    "id": "test1",
-                    "window": {"windowSeconds": 2000, "granularitySeconds": 200},
-                    "limit": 20,
-                    "scope": "project",
-                }
-            }
-        ],
-    )
-
-    with override_options(options):
-        project_cfg = get_project_config(default_project)
-
-        cfg = project_cfg.to_dict()
-        _validate_project_config(cfg["config"])
-
-        assert cfg["config"]["metrics"]["cardinalityLimits"] == [
-            {
-                "id": "test1",
-                "window": {"windowSeconds": 2000, "granularitySeconds": 200},
-                "limit": 20,
-                "scope": "project",
-            }
-        ]
-
-
-@django_db_all
-@region_silo_test
+@cell_silo_test
 def test_project_config_with_generic_filters(default_project) -> None:
     config = get_project_config(default_project).to_dict()
     _validate_project_config(config["config"])
@@ -1595,7 +1295,7 @@ def test_project_config_with_generic_filters(default_project) -> None:
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 @mock.patch("sentry.relay.config.get_transaction_names_config")
 def test_project_config_with_transaction_name_clustering_disabled(
     mock_get_transaction_name_config, default_project
@@ -1622,7 +1322,7 @@ def test_project_config_with_transaction_name_clustering_disabled(
 
 
 @django_db_all
-@region_silo_test
+@cell_silo_test
 @pytest.mark.parametrize("feature_enabled", [True, False])
 @pytest.mark.parametrize("project_option_value", ["enabled", "disabled"])
 def test_project_config_trusted_relay_settings(
@@ -1648,3 +1348,24 @@ def test_project_config_trusted_relay_settings(
         else:
             # trustedRelaySettings should not be present
             assert trusted_relay_settings is None
+
+
+@django_db_all
+@cell_silo_test
+@pytest.mark.parametrize("trimming_configs", [{}, {"span": {"maxSize": 17}}])
+def test_project_config_trimming(default_project, trimming_configs):
+    with patch.object(
+        quotas.backend,
+        "get_trimming_configs",
+        return_value=trimming_configs,
+    ):
+        project_cfg = get_project_config(default_project)
+
+        cfg = project_cfg.to_dict()["config"]
+
+        if trimming_configs:
+            assert cfg["trimming"] == {"span": {"maxSize": 17}}
+        else:
+            assert "trimming" not in cfg
+
+        _validate_project_config(cfg)

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, TypeIs, TypeVar, Union
+from typing import TYPE_CHECKING, Literal, TypedDict, TypeIs, TypeVar, Union
 
 from sentry.utils.services import Service
 
@@ -16,8 +15,6 @@ OrganizationId = int
 ReleaseName = str
 EnvironmentName = str
 DateString = str
-
-SnubaAppID = "metrics.release_health"
 
 #: The functions supported by `run_sessions_query`
 SessionsQueryFunction = Literal[
@@ -38,6 +35,11 @@ SessionsQueryFunction = Literal[
     "foreground_anr_rate()",
     "unhandled_rate(session)",
     "unhandled_rate(user)",
+    "errored_rate(session)",
+    "errored_rate(user)",
+    "abnormal_rate(session)",
+    "abnormal_rate(user)",
+    "unhealthy_rate(session)",
 ]
 
 GroupByFieldName = Literal[
@@ -53,25 +55,6 @@ class AllowedResolution(Enum):
     one_hour = (3600, "one hour")
     one_minute = (60, "one minute")
     ten_seconds = (10, "ten seconds")
-
-
-@dataclass(frozen=True)
-class SessionsQueryConfig:
-    """Backend-dependent config for sessions_v2 query"""
-
-    allowed_resolution: AllowedResolution
-    allow_session_status_query: bool
-    restrict_date_range: bool
-
-
-class SessionsQuery(TypedDict):
-    org_id: OrganizationId
-    project_ids: Sequence[ProjectId]
-    select_fields: Sequence[SessionsQueryFunction]
-    filter_query: Mapping[FilterFieldName, str]
-    start: datetime
-    end: datetime
-    rollup: int  # seconds
 
 
 SessionsQueryValue = Union[None, float]
@@ -246,7 +229,6 @@ class ReleaseHealthBackend(Service):
         "check_has_health_data",
         "get_release_sessions_time_bounds",
         "check_releases_have_health_data",
-        "sessions_query_config",
         "run_sessions_query",
         "get_release_health_data_overview",
         "get_crash_free_breakdown",
@@ -320,10 +302,6 @@ class ReleaseHealthBackend(Service):
             that. Omit if you're not sure.
         """
 
-        raise NotImplementedError()
-
-    def sessions_query_config(self, organization: Any) -> SessionsQueryConfig:
-        """Return the backend-dependent config for sessions_v2.QueryDefinition"""
         raise NotImplementedError()
 
     def run_sessions_query(
@@ -432,7 +410,7 @@ class ReleaseHealthBackend(Service):
         self,
         project_releases: Sequence[ProjectRelease],
         now: datetime | None = None,
-    ) -> Mapping[ProjectRelease, str]:
+    ) -> Mapping[ProjectRelease, datetime]:
         """Returns the oldest health data we have observed in a release
         in 90 days.  This is used for backfilling.
         """
@@ -483,11 +461,9 @@ class ReleaseHealthBackend(Service):
         start: datetime | None,
         end: datetime | None,
         environment_ids: Sequence[int] | None = None,
-        rollup: int | None = None,  # rollup in seconds
     ) -> Sequence[ProjectWithCount]:
         """
         Returns the number of sessions for each project specified.
-        Additionally
         """
         raise NotImplementedError()
 

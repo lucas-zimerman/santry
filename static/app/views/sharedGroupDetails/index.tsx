@@ -1,25 +1,26 @@
 import {useLayoutEffect, useMemo} from 'react';
-import styled from '@emotion/styled';
 
-import {Link} from 'sentry/components/core/link';
-import NotFound from 'sentry/components/errors/notFound';
-import {BorderlessEventEntries} from 'sentry/components/events/eventEntries';
-import Footer from 'sentry/components/footer';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {Container} from '@sentry/scraps/layout';
+import {Link} from '@sentry/scraps/link';
+
+import {NotFound} from 'sentry/components/errors/notFound';
+import {Footer} from 'sentry/components/footer';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Group} from 'sentry/types/group';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
+import type {Organization, SharedViewOrganization} from 'sentry/types/organization';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {useApiQuery} from 'sentry/utils/queryClient';
+import {useParams} from 'sentry/utils/useParams';
 import {OrganizationContext} from 'sentry/views/organizationContext';
 
-import SharedGroupHeader from './sharedGroupHeader';
+import {SharedEventContent} from './sharedEventContent';
+import {SharedGroupHeader} from './sharedGroupHeader';
 
-type Props = RouteComponentProps<{shareId: string; orgId?: string}>;
-
-function SharedGroupDetails({params}: Props) {
+function SharedGroupDetails() {
+  const {shareId, orgId} = useParams<{orgId: string | undefined; shareId: string}>();
   useLayoutEffect(() => {
     document.body.classList.add('shared-group');
     return () => {
@@ -28,52 +29,55 @@ function SharedGroupDetails({params}: Props) {
   }, []);
 
   const orgSlug = useMemo(() => {
-    if (params.orgId) {
-      return params.orgId;
+    if (orgId) {
+      return orgId;
     }
     const {customerDomain} = window.__initialData || {};
     if (customerDomain?.subdomain) {
       return customerDomain.subdomain;
     }
     return null;
-  }, [params.orgId]);
+  }, [orgId]);
 
-  const {shareId} = params;
   const {
     data: group,
-    isPending,
+    isLoading,
     isError,
     refetch,
   } = useApiQuery<Group>(
     [
-      orgSlug
-        ? `/organizations/${orgSlug}/shared/issues/${shareId}/`
-        : `/shared/issues/${shareId}/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/shared/issues/$shareId/', {
+        path: {organizationIdOrSlug: orgSlug!, shareId},
+      }),
     ],
     {
       staleTime: 0,
+      enabled: !!orgSlug,
     }
   );
 
-  if (isPending) {
+  if (isLoading) {
     return <LoadingIndicator />;
-  }
-
-  if (!group) {
-    return <NotFound />;
   }
 
   if (isError) {
     return <LoadingError onRetry={refetch} />;
   }
 
-  // project.organization is not a real organization, it's just the slug and name
-  // Add the features array to avoid errors when using OrganizationContext
-  const org = {...group.project.organization, features: []};
+  if (!group || !orgSlug) {
+    return <NotFound />;
+  }
+
+  // Backend only provides {slug, name} for the organization.
+  // Add features: [] for OrganizationContext compatibility.
+  const org: SharedViewOrganization = {
+    ...group.project.organization,
+    features: [],
+  };
 
   return (
     <SentryDocumentTitle noSuffix title={group?.title ?? 'Sentry'}>
-      <OrganizationContext value={org}>
+      <OrganizationContext value={org as Organization}>
         <div className="app">
           <div className="pattern-bg" />
           <div className="container">
@@ -90,13 +94,15 @@ function SharedGroupDetails({params}: Props) {
               </div>
               <div className="box-content">
                 <SharedGroupHeader group={group} />
-                <Container className="group-overview event-details-container">
-                  <BorderlessEventEntries
+                <Container
+                  padding="3xl"
+                  className="group-overview event-details-container"
+                >
+                  <SharedEventContent
                     organization={org}
                     group={group}
                     event={group.latestEvent}
                     project={group.project}
-                    isShare
                   />
                 </Container>
                 <Footer />
@@ -108,9 +114,5 @@ function SharedGroupDetails({params}: Props) {
     </SentryDocumentTitle>
   );
 }
-
-const Container = styled('div')`
-  padding: ${space(4)};
-`;
 
 export default SharedGroupDetails;

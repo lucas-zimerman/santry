@@ -1,13 +1,17 @@
 import {Fragment, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Button} from 'sentry/components/core/button';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import ErrorBoundary from 'sentry/components/errorBoundary';
+import {Button} from '@sentry/scraps/button';
+import {Container} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
 import {StacktraceBanners} from 'sentry/components/events/interfaces/crashContent/exception/banners/stacktraceBanners';
+import {useLineCoverageContext} from 'sentry/components/events/interfaces/crashContent/exception/lineCoverageContext';
 import {
   prepareSourceMapDebuggerFrameInformation,
-  useSourceMapDebuggerData,
+  useSourceMapDebugQuery,
+  type SourceMapDebugBlueThunderResponse,
 } from 'sentry/components/events/interfaces/crashContent/exception/useSourceMapDebuggerData';
 import {renderLinksInText} from 'sentry/components/events/interfaces/crashContent/exception/utils';
 import {getStacktracePlatform} from 'sentry/components/events/interfaces/utils';
@@ -17,8 +21,8 @@ import type {Event, ExceptionType, ExceptionValue} from 'sentry/types/event';
 import type {Project} from 'sentry/types/project';
 import {StackType} from 'sentry/types/stacktrace';
 import {defined} from 'sentry/utils';
-import useRouteAnalyticsParams from 'sentry/utils/routeAnalytics/useRouteAnalyticsParams';
-import useProjects from 'sentry/utils/useProjects';
+import {useRouteAnalyticsParams} from 'sentry/utils/routeAnalytics/useRouteAnalyticsParams';
+import {useProjects} from 'sentry/utils/useProjects';
 import {SectionKey} from 'sentry/views/issueDetails/streamline/context';
 import {
   FoldSection,
@@ -26,9 +30,10 @@ import {
 } from 'sentry/views/issueDetails/streamline/foldSection';
 import {useIsSampleEvent} from 'sentry/views/issueDetails/utils';
 
+import {LineCoverageLegend} from './lineCoverageLegend';
 import {Mechanism} from './mechanism';
 import {RelatedExceptions} from './relatedExceptions';
-import StackTrace from './stackTrace';
+import {StackTrace} from './stackTrace';
 
 type StackTraceProps = React.ComponentProps<typeof StackTrace>;
 
@@ -160,7 +165,7 @@ function InnerContent({
   hasChainedExceptions: boolean;
   hiddenExceptions: ExceptionRenderStateMap;
   isSampleError: boolean;
-  sourceMapDebuggerData: ReturnType<typeof useSourceMapDebuggerData>;
+  sourceMapDebuggerData: SourceMapDebugBlueThunderResponse | undefined;
   toggleRelatedExceptions: (exceptionId: number) => void;
   values: ExceptionValue[];
   project?: Project;
@@ -175,10 +180,12 @@ function InnerContent({
       project?.platform
     )
   );
-  const exceptionValue = exception.value
-    ? renderLinksInText({exceptionText: exception.value})
-    : null;
+  const exceptionValue =
+    type === StackType.ORIGINAL ? exception.value : exception.rawValue || exception.value;
 
+  const renderedExceptionValue = exceptionValue
+    ? renderLinksInText({exceptionText: exceptionValue})
+    : null;
   const platform = getStacktracePlatform(event, exception.stacktrace);
 
   // The banners should appear on the top exception only
@@ -186,24 +193,32 @@ function InnerContent({
     ? exceptionIdx === values.length - 1
     : exceptionIdx === 0;
 
+  const {hasCoverageData} = useLineCoverageContext();
   return (
     <Fragment>
       <StyledPre>
-        {meta?.[exceptionIdx]?.value?.[''] && !exception.value ? (
+        {meta?.[exceptionIdx]?.value?.[''] && !exceptionValue ? (
           <AnnotatedText
-            value={exception.value}
+            value={exceptionValue}
             meta={meta?.[exceptionIdx]?.value?.['']}
           />
         ) : (
-          exceptionValue
+          renderedExceptionValue
         )}
       </StyledPre>
       <ToggleExceptionButton
         {...{hiddenExceptions, toggleRelatedExceptions, values, exception}}
       />
-      {exception.mechanism && (
-        <Mechanism data={exception.mechanism} meta={meta?.[exceptionIdx]?.mechanism} />
-      )}
+      {exception.mechanism ? (
+        <Container paddingTop="xl">
+          <Mechanism data={exception.mechanism} meta={meta?.[exceptionIdx]?.mechanism} />
+        </Container>
+      ) : null}
+      {hasCoverageData ? (
+        <Container paddingTop="md">
+          <LineCoverageLegend />
+        </Container>
+      ) : null}
       <RelatedExceptions
         mechanism={exception.mechanism}
         allExceptions={values}
@@ -251,7 +266,11 @@ export function Content({
 }: Props) {
   const {projects} = useProjects({slugs: [projectSlug]});
 
-  const sourceMapDebuggerData = useSourceMapDebuggerData(event, projectSlug);
+  const {data: sourceMapDebuggerData} = useSourceMapDebugQuery(
+    projectSlug,
+    event.id,
+    event.sdk?.name ?? null
+  );
   const {hiddenExceptions, toggleRelatedExceptions, expandException} =
     useHiddenExceptions(values);
 
@@ -261,9 +280,8 @@ export function Content({
     num_exceptions: values?.length ?? 0,
   });
 
-  // Organization context may be unavailable for the shared event view, so we
-  // avoid using the `useOrganization` hook here and directly useContext
-  // instead.
+  // Organization context may be unavailable for the shared event view, so we need
+  // to account for this possibility if we rely on the `useOrganization` hook.
   if (!values) {
     return null;
   }
@@ -307,6 +325,10 @@ export function Content({
       />
     );
 
+    const exceptionType =
+      type === StackType.ORIGINAL ? exc.type : exc.rawType || exc.type;
+    const exceptionModule =
+      type === StackType.ORIGINAL ? exc.module : exc.rawModule || exc.module;
     if (hasChainedExceptions) {
       return (
         <StyledFoldSection
@@ -315,18 +337,16 @@ export function Content({
           dataTestId="exception-value"
           sectionKey={SectionKey.CHAINED_EXCEPTION}
           title={
-            defined(exc?.module) ? (
-              <Tooltip
-                title={tct('from [exceptionModule]', {exceptionModule: exc?.module})}
-              >
-                <Title id={id}>{exc.type}</Title>
+            defined(exceptionModule) ? (
+              <Tooltip title={tct('from [exceptionModule]', {exceptionModule})}>
+                <Title id={id}>{exceptionType}</Title>
               </Tooltip>
             ) : (
-              <Title id={id}>{exc.type}</Title>
+              <Title id={id}>{exceptionType}</Title>
             )
           }
           disableCollapsePersistence
-          initialCollapse={excIdx !== values.length - 1}
+          initialCollapse={excIdx < values.length - 3}
           additionalIdentifier={
             exc.mechanism?.exception_id?.toString() ?? excIdx.toString()
           }
@@ -338,12 +358,12 @@ export function Content({
 
     return (
       <div key={excIdx} className="exception" data-test-id="exception-value">
-        {defined(exc?.module) ? (
-          <Tooltip title={tct('from [exceptionModule]', {exceptionModule: exc?.module})}>
-            <Title id={id}>{exc.type}</Title>
+        {defined(exceptionModule) ? (
+          <Tooltip title={tct('from [exceptionModule]', {exceptionModule})}>
+            <Title id={id}>{exceptionType}</Title>
           </Tooltip>
         ) : (
-          <Title id={id}>{exc.type}</Title>
+          <Title id={id}>{exceptionType}</Title>
         )}
         {innerContent}
       </div>
@@ -387,8 +407,8 @@ const Title = styled('h5')`
 `;
 
 const ShowRelatedExceptionsButton = styled(Button)`
-  font-family: ${p => p.theme.text.familyMono};
-  font-size: ${p => p.theme.fontSize.sm};
+  font-family: ${p => p.theme.font.family.mono};
+  font-size: ${p => p.theme.font.size.sm};
 `;
 
 const StyledFoldSection = styled(FoldSection)`

@@ -1,11 +1,12 @@
-import type {ReactNode} from 'react';
 import * as Sentry from '@sentry/react';
+import type {InfiniteData, InfiniteQueryObserverResult} from '@tanstack/react-query';
 import type {Location} from 'history';
 import * as qs from 'query-string';
 
 import type {ApiResult} from 'sentry/api';
 import {t} from 'sentry/locale';
 import type {PageFilters} from 'sentry/types/core';
+import type {Event} from 'sentry/types/event';
 import type {TagCollection} from 'sentry/types/group';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
@@ -17,10 +18,9 @@ import {
   fieldAlignment,
   type Sort,
 } from 'sentry/utils/discover/fields';
-import parseLinkHeader from 'sentry/utils/parseLinkHeader';
-import type {InfiniteData, InfiniteQueryObserverResult} from 'sentry/utils/queryClient';
+import {parseLinkHeader} from 'sentry/utils/parseLinkHeader';
 import type {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
 import {prettifyAttributeName} from 'sentry/views/explore/components/traceItemAttributes/utils';
 import {
   LOGS_AGGREGATE_FN_KEY,
@@ -28,7 +28,6 @@ import {
   LOGS_FIELDS_KEY,
   LOGS_GROUP_BY_KEY,
   LOGS_QUERY_KEY,
-  setLogsPageParams,
 } from 'sentry/views/explore/contexts/logs/logsPageParams';
 import {LOGS_SORT_BYS_KEY} from 'sentry/views/explore/contexts/logs/sortBys';
 import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
@@ -42,7 +41,10 @@ import {
   LogAttributesHumanLabel,
   LOGS_GRID_SCROLL_MIN_ITEM_THRESHOLD,
 } from 'sentry/views/explore/logs/constants';
-import {LOGS_AGGREGATE_FIELD_KEY} from 'sentry/views/explore/logs/logsQueryParams';
+import {
+  getTargetWithReadableQueryParams,
+  LOGS_AGGREGATE_FIELD_KEY,
+} from 'sentry/views/explore/logs/logsQueryParams';
 import {
   OurLogKnownFieldKey,
   type EventsLogsResult,
@@ -56,9 +58,8 @@ import {
   type BaseVisualize,
   type Visualize,
 } from 'sentry/views/explore/queryParams/visualize';
-import {generateTargetQuery, type PickableDays} from 'sentry/views/explore/utils';
+import {generateTargetQuery} from 'sentry/views/explore/utils';
 import type {useSortedTimeSeries} from 'sentry/views/insights/common/queries/useSortedTimeSeries';
-
 const {warn, fmt} = Sentry.logger;
 
 export function getLogSeverityLevel(
@@ -183,9 +184,14 @@ export function adjustAliases(attribute: TraceItemResponseAttribute) {
 export function getTableHeaderLabel(
   field: OurLogFieldKey,
   stringAttributes?: TagCollection,
-  numberAttributes?: TagCollection
+  numberAttributes?: TagCollection,
+  booleanAttributes?: TagCollection
 ) {
-  const attribute = stringAttributes?.[field] ?? numberAttributes?.[field] ?? null;
+  const attribute =
+    stringAttributes?.[field] ??
+    numberAttributes?.[field] ??
+    booleanAttributes?.[field] ??
+    null;
 
   return (
     LogAttributesHumanLabel[field] ?? attribute?.name ?? prettifyAttributeName(field)
@@ -240,29 +246,6 @@ export function adjustLogTraceID(traceID: string) {
   return traceID.replace(/-/g, '');
 }
 
-export function logsPickableDays(): PickableDays {
-  const relativeOptions: Array<[string, ReactNode]> = [
-    ['1h', t('Last hour')],
-    ['24h', t('Last 24 hours')],
-    ['7d', t('Last 7 days')],
-    ['14d', t('Last 14 days')],
-    ['30d', t('Last 30 days')],
-  ];
-
-  return {
-    defaultPeriod: '24h',
-    maxPickableDays: 30,
-    relativeOptions: ({
-      arbitraryOptions,
-    }: {
-      arbitraryOptions: Record<string, ReactNode>;
-    }) => ({
-      ...arbitraryOptions,
-      ...Object.fromEntries(relativeOptions),
-    }),
-  };
-}
-
 export function getDynamicLogsNextFetchThreshold(lastPageLength: number) {
   if (lastPageLength * 0.25 > LOGS_GRID_SCROLL_MIN_ITEM_THRESHOLD) {
     return Math.floor(lastPageLength * 0.25); // Can be up to 250 on large pages.
@@ -279,6 +262,14 @@ export function parseLinkHeaderFromLogsPage(
 
 export function getLogRowTimestampMillis(row: OurLogsResponseItem): number {
   return Number(row[OurLogKnownFieldKey.TIMESTAMP_PRECISE]) / 1_000_000;
+}
+
+export function quantizeTimestampToMinutes(
+  timestampMs: number,
+  quantizeMinutes: number
+): number {
+  const quantizeMs = quantizeMinutes * 60 * 1000;
+  return Math.floor(timestampMs / quantizeMs) * quantizeMs;
 }
 
 export function getLogTimestampBucketIndex(
@@ -348,6 +339,7 @@ type BaseGetLogsUrlParams = {
   aggregateFields?: Array<GroupBy | BaseVisualize>;
   aggregateFn?: string;
   aggregateParam?: string;
+  caseInsensitive?: '1' | null;
   field?: string[];
   groupBy?: string[];
   id?: number;
@@ -379,11 +371,13 @@ export function getLogsUrl({
   aggregateFields,
   aggregateFn,
   aggregateParam,
+  caseInsensitive,
 }: BaseGetLogsUrlParams & {organization: Organization | string}) {
   const {start, end, period: statsPeriod, utc} = selection?.datetime ?? {};
   const {environments, projects} = selection ?? {};
   const queryParams = {
-    project: projects,
+    // Pass empty string when projects is empty to preserve "My Projects" selection in URL
+    project: projects?.length === 0 ? '' : projects,
     environment: environments,
     statsPeriod,
     start,
@@ -403,6 +397,7 @@ export function getLogsUrl({
     [LOGS_AGGREGATE_FN_KEY]: aggregateFn,
     [LOGS_AGGREGATE_PARAM_KEY]: aggregateParam,
     title,
+    caseInsensitive,
   };
 
   const orgSlug = typeof organization === 'string' ? organization : organization.slug;
@@ -457,6 +452,7 @@ export function getLogsUrlFromSavedQueryUrl({
       environments: savedQuery.environment ? [...savedQuery.environment] : [],
       projects: savedQuery.projects ? [...savedQuery.projects] : [],
     },
+    caseInsensitive: firstQuery.caseInsensitive ? '1' : null,
   });
 }
 
@@ -541,10 +537,10 @@ export function viewLogsSamplesTarget({
     yAxes: visualizes.map(visualize => visualize.yAxis),
   });
 
-  return setLogsPageParams(location, {
+  return getTargetWithReadableQueryParams(location, {
     mode: Mode.SAMPLES,
     fields: newFields,
-    search: newSearch,
+    query: newSearch.formatString(),
     sortBys: newSortBys,
   });
 }
@@ -564,3 +560,55 @@ export const logOnceFactory = (logSeverity: 'info' | 'warn') => {
     };
   };
 };
+
+interface PseudoLogResponseItem {
+  [OurLogKnownFieldKey.ID]: string;
+  [OurLogKnownFieldKey.MESSAGE]: string;
+  [OurLogKnownFieldKey.SEVERITY]: 'ERROR';
+  [OurLogKnownFieldKey.SEVERITY_NUMBER]: 17;
+  [OurLogKnownFieldKey.TRACE_ID]: string;
+  [OurLogKnownFieldKey.SPAN_ID]: string;
+  [OurLogKnownFieldKey.ORGANIZATION_ID]: number;
+  [OurLogKnownFieldKey.PROJECT_ID]: string;
+  [OurLogKnownFieldKey.TIMESTAMP]: string;
+  [OurLogKnownFieldKey.TIMESTAMP_PRECISE]: string | number;
+  __isPseudoRow: true;
+  __originalEvent: Event;
+}
+
+export type LogTableRowItem = OurLogsResponseItem | PseudoLogResponseItem;
+
+export function isPseudoLogResponseItem(
+  item: LogTableRowItem
+): item is PseudoLogResponseItem {
+  return '__isPseudoRow' in item && item.__isPseudoRow === true;
+}
+
+export function isRegularLogResponseItem(
+  item: LogTableRowItem
+): item is OurLogsResponseItem {
+  return !isPseudoLogResponseItem(item);
+}
+
+export function createPseudoLogResponseItem(
+  event: Event,
+  projectId: string
+): PseudoLogResponseItem {
+  const timestamp = event.dateCreated || new Date().toISOString();
+  const timestampPrecise = new Date(timestamp).getTime() * 1_000_000;
+
+  return {
+    [OurLogKnownFieldKey.ID]: `pseudo-${event.eventID}`,
+    [OurLogKnownFieldKey.MESSAGE]: event.title || event.message || 'Error Event',
+    [OurLogKnownFieldKey.SEVERITY]: 'ERROR',
+    [OurLogKnownFieldKey.SEVERITY_NUMBER]: 17,
+    [OurLogKnownFieldKey.TRACE_ID]: event.contexts?.trace?.trace_id || '',
+    [OurLogKnownFieldKey.SPAN_ID]: event.contexts?.trace?.span_id || '',
+    [OurLogKnownFieldKey.PROJECT_ID]: projectId,
+    [OurLogKnownFieldKey.TIMESTAMP]: timestamp,
+    [OurLogKnownFieldKey.TIMESTAMP_PRECISE]: timestampPrecise,
+    // Observed timestamp can be added later if needed per the event received time.
+    __isPseudoRow: true,
+    __originalEvent: event,
+  } as PseudoLogResponseItem;
+}

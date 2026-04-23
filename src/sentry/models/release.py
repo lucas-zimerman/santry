@@ -24,7 +24,7 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
@@ -32,6 +32,7 @@ from sentry.db.models.fields.jsonfield import LegacyTextJSONField
 from sentry.db.models.indexes import IndexWithPostgresNameLimits
 from sentry.db.models.manager.base import BaseManager
 from sentry.models.artifactbundle import ArtifactBundle
+from sentry.models.commit import Commit
 from sentry.models.commitauthor import CommitAuthor
 from sentry.models.releases.constants import (
     DB_VERSION_LENGTH,
@@ -41,7 +42,6 @@ from sentry.models.releases.constants import (
 from sentry.models.releases.exceptions import UnsafeReleaseDeletion
 from sentry.models.releases.release_project import ReleaseProject
 from sentry.models.releases.util import ReleaseQuerySet, SemverFilter, SemverVersion
-from sentry.releases.commits import get_or_create_commit
 from sentry.utils import metrics
 from sentry.utils.cache import cache
 from sentry.utils.db import atomic_transaction
@@ -98,8 +98,11 @@ class ReleaseModelManager(BaseManager["Release"]):
     def get_queryset(self) -> ReleaseQuerySet:
         return ReleaseQuerySet(self.model, using=self._db)
 
-    def annotate_prerelease_column(self):
+    def annotate_prerelease_column(self) -> ReleaseQuerySet:
         return self.get_queryset().annotate_prerelease_column()
+
+    def annotate_build_code_column(self) -> ReleaseQuerySet:
+        return self.get_queryset().annotate_build_code_column()
 
     def filter_to_semver(self) -> ReleaseQuerySet:
         return self.get_queryset().filter_to_semver()
@@ -134,30 +137,51 @@ class ReleaseModelManager(BaseManager["Release"]):
         operator: str,
         value,
         project_ids: Sequence[int] | None = None,
-        environments: list[str] | None = None,
+        environments: Sequence[str | int] | None = None,
     ) -> models.QuerySet:
         return self.get_queryset().filter_by_stage(
             organization_id, operator, value, project_ids, environments
         )
 
+    def filter_by_environment(
+        self,
+        value: str | Sequence[str],
+        project_ids: Sequence[int],
+        *,
+        lookup: str = "in",
+        negated: bool = False,
+    ) -> ReleaseQuerySet:
+        return self.get_queryset().filter_by_environment(
+            value, project_ids, lookup=lookup, negated=negated
+        )
+
     def order_by_recent(self):
         return self.get_queryset().order_by_recent()
 
-    def _get_group_release_version(self, group_id: int, orderby: str) -> str:
+    def _get_group_release_version(
+        self, group_id: int, environment_names: list[str] | None, orderby: str
+    ) -> str:
         from sentry.models.grouprelease import GroupRelease
 
+        group_releases = GroupRelease.objects.filter(group_id=group_id)
+
+        if environment_names:
+            group_releases = group_releases.filter(environment__in=environment_names)
+
         # Using `id__in()` because there is no foreign key relationship.
-        return self.get(
-            id__in=GroupRelease.objects.filter(group_id=group_id)
-            .order_by(orderby)
-            .values("release_id")[:1]
-        ).version
+        return self.get(id__in=group_releases.order_by(orderby).values("release_id")[:1]).version
 
     def get_group_release_version(
-        self, project_id: int, group_id: int, first: bool = True, use_cache: bool = True
+        self,
+        project_id: int,
+        group_id: int,
+        environment_names: list[str] | None,
+        first: bool = True,
+        use_cache: bool = True,
     ) -> str | None:
-        cache_key = _get_cache_key(project_id, group_id, first)
+        use_cache = use_cache and not environment_names
 
+        cache_key = _get_cache_key(project_id, group_id, first)
         release_version: Literal[False] | str | None = cache.get(cache_key) if use_cache else None
         if release_version is False:
             # We've cached the fact that no rows exist.
@@ -167,16 +191,20 @@ class ReleaseModelManager(BaseManager["Release"]):
             # Cache miss or not use_cache.
             orderby = "first_seen" if first else "-last_seen"
             try:
-                release_version = self._get_group_release_version(group_id, orderby)
+                release_version = self._get_group_release_version(
+                    group_id, environment_names, orderby
+                )
             except Release.DoesNotExist:
                 release_version = False
-            cache.set(cache_key, release_version, 3600)
+
+            if not environment_names:
+                cache.set(cache_key, release_version, 3600)
 
         # Convert the False back into a None.
         return release_version or None
 
 
-@region_silo_model
+@cell_silo_model
 class Release(Model):
     """
     A release is generally created when a new version is pushed into a
@@ -204,7 +232,7 @@ class Release(Model):
     # ref might be the branch name being released
     ref = models.CharField(max_length=DB_VERSION_LENGTH, null=True, blank=True)
     url = models.URLField(null=True, blank=True)
-    date_added = models.DateTimeField(default=timezone.now)
+    date_added = models.DateTimeField(default=timezone.now, db_index=True)
     # DEPRECATED - not available in UI or editable from API
     date_started = models.DateTimeField(null=True, blank=True)
     date_released = models.DateTimeField(null=True, blank=True)
@@ -287,6 +315,18 @@ class Release(Model):
     __repr__ = sane_repr("organization_id", "version")
 
     SEMVER_COLS = ["major", "minor", "patch", "revision", "prerelease_case", "prerelease"]
+
+    SEMVER_COLS_WITH_BUILD_CODE = [
+        "major",
+        "minor",
+        "patch",
+        "revision",
+        "prerelease_case",
+        "prerelease",
+        "build_code_case",
+        "build_number",
+        "build_code",
+    ]
 
     def __eq__(self, other: object) -> bool:
         """Make sure that specialized releases are only comparable to the same
@@ -605,15 +645,15 @@ class Release(Model):
             for ref in refs:
                 repo = repos_by_name[ref["repository"]]
 
-                commit = get_or_create_commit(
-                    organization=self.organization, repo_id=repo.id, key=ref["commit"]
+                commit = Commit.objects.get_or_create(
+                    organization_id=self.organization_id, repository_id=repo.id, key=ref["commit"]
                 )[0]
                 # update head commit for repo/release if exists
-                ReleaseHeadCommit.objects.create_or_update(
+                ReleaseHeadCommit.objects.update_or_create(
                     organization_id=self.organization_id,
                     repository_id=repo.id,
                     release=self,
-                    values={"commit": commit},
+                    defaults={"commit": commit},
                 )
             if fetch:
                 prev_release = get_previous_release(self)
@@ -709,7 +749,7 @@ class Release(Model):
             from sentry.models.releasecommit import ReleaseCommit
             from sentry.models.releaseheadcommit import ReleaseHeadCommit
 
-            ReleaseHeadCommit.objects.get(
+            ReleaseHeadCommit.objects.filter(
                 organization_id=self.organization_id, release=self
             ).delete()
             ReleaseCommit.objects.filter(
@@ -772,10 +812,9 @@ class Release(Model):
             GroupRelease.objects.filter(release_id=OuterRef("id"), last_seen__gte=cutoff_date)
         )
 
-        # Subquery for checking if there are recent group resolutions (within 90 days)
-        recent_group_resolutions_exist = Exists(
-            GroupResolution.objects.filter(release_id=OuterRef("id"), datetime__gte=cutoff_date)
-        )
+        # Check ALL GroupResolutions (not just recent) - needed by GroupResolution.has_resolution()
+        # Deleting releases with GroupResolutions breaks regression detection for resolved issues.
+        group_resolutions_exist = Exists(GroupResolution.objects.filter(release_id=OuterRef("id")))
 
         # Subquery for checking if GroupEnvironment has this release as first_release
         group_environment_first_release_exists = Exists(
@@ -795,8 +834,8 @@ class Release(Model):
             | group_environment_first_release_exists
             # Releases referenced by group history
             | group_history_exists
-            # Releases with recent group resolutions (only recent ones, old ones can be cleaned up)
-            | recent_group_resolutions_exist
+            # Releases with any group resolutions (keeps resolution tracking intact)
+            | group_resolutions_exist
             # Releases with recent distributions (only recent ones, old ones can be cleaned up)
             | recent_distributions_exist
             # Releases with recent deploys (only recent ones, old ones can be cleaned up)

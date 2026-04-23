@@ -18,6 +18,7 @@ from sentry.notifications.models.notificationaction import ActionTarget
 from sentry.notifications.notification_action.metric_alert_registry.handlers.utils import (
     get_alert_rule_serializer,
     get_detailed_incident_serializer,
+    get_detector_serializer,
 )
 from sentry.notifications.notification_action.registry import metric_alert_handler_registry
 from sentry.notifications.notification_action.types import BaseMetricAlertHandler
@@ -44,7 +45,6 @@ class EmailMetricAlertHandler(BaseMetricAlertHandler):
         organization: Organization,
         project: Project,
     ) -> None:
-
         detector = Detector.objects.get(id=alert_context.action_identifier_id)
         if not detector:
             raise ValueError("Detector not found")
@@ -54,6 +54,7 @@ class EmailMetricAlertHandler(BaseMetricAlertHandler):
             raise ValueError("Open period not found")
 
         alert_rule_serialized_response = get_alert_rule_serializer(detector)
+        detector_serialized_response = get_detector_serializer(detector)
         incident_serialized_response = get_detailed_incident_serializer(open_period)
 
         recipients = list(
@@ -77,6 +78,7 @@ class EmailMetricAlertHandler(BaseMetricAlertHandler):
             alert_context=alert_context,
             alert_rule_serialized_response=alert_rule_serialized_response,
             incident_serialized_response=incident_serialized_response,
+            detector_serialized_response=detector_serialized_response,
             trigger_status=trigger_status,
             targets=targets,
             project=project,

@@ -1,47 +1,63 @@
-import {useCallback, useEffect, useMemo} from 'react';
+import {Fragment, useCallback, useEffect, useMemo} from 'react';
 import {forceCheck} from 'react-lazyload';
 import styled from '@emotion/styled';
+import {keepPreviousData, useQuery} from '@tanstack/react-query';
+
+import {FeatureBadge} from '@sentry/scraps/badge';
+import {Flex, Stack} from '@sentry/scraps/layout';
+import {TabList} from '@sentry/scraps/tabs';
 
 import {fetchTagValues} from 'sentry/actionCreators/tags';
-import FloatingFeedbackWidget from 'sentry/components/feedback/widget/floatingFeedbackWidget';
+import {FeedbackButton} from 'sentry/components/feedbackButton/feedbackButton';
 import * as Layout from 'sentry/components/layouts/thirds';
-import LoadingError from 'sentry/components/loadingError';
-import NoProjectMessage from 'sentry/components/noProjectMessage';
-import {DatePageFilter} from 'sentry/components/organizations/datePageFilter';
-import {EnvironmentPageFilter} from 'sentry/components/organizations/environmentPageFilter';
-import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
-import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
-import {ProjectPageFilter} from 'sentry/components/organizations/projectPageFilter';
+import {LoadingError} from 'sentry/components/loadingError';
+import {NoProjectMessage} from 'sentry/components/noProjectMessage';
+import {ALL_ACCESS_PROJECTS} from 'sentry/components/pageFilters/constants';
+import {PageFiltersContainer} from 'sentry/components/pageFilters/container';
+import {DatePageFilter} from 'sentry/components/pageFilters/date/datePageFilter';
+import {EnvironmentPageFilter} from 'sentry/components/pageFilters/environment/environmentPageFilter';
+import {PageFilterBar} from 'sentry/components/pageFilters/pageFilterBar';
+import {normalizeDateTimeParams} from 'sentry/components/pageFilters/parse';
+import {ProjectPageFilter} from 'sentry/components/pageFilters/project/projectPageFilter';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {PageHeadingQuestionTooltip} from 'sentry/components/pageHeadingQuestionTooltip';
+import {PreprodBuildsDisplay} from 'sentry/components/preprod/preprodBuildsDisplay';
 import {SearchQueryBuilder} from 'sentry/components/searchQueryBuilder';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import type {GetTagValues} from 'sentry/components/searchQueryBuilder';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {ReleasesSortOption} from 'sentry/constants/releases';
 import {t} from 'sentry/locale';
-import ProjectsStore from 'sentry/stores/projectsStore';
-import {space} from 'sentry/styles/space';
-import type {Tag, TagCollection} from 'sentry/types/group';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
+import type {TagCollection} from 'sentry/types/group';
 import type {Release} from 'sentry/types/release';
 import {ReleaseStatus} from 'sentry/types/release';
+import {trackAnalytics} from 'sentry/utils/analytics';
+import {apiOptions, selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {DemoTourElement, DemoTourStep} from 'sentry/utils/demoMode/demoTours';
 import {SEMVER_TAGS} from 'sentry/utils/discover/fields';
-import {useApiQuery, type ApiQueryKey} from 'sentry/utils/queryClient';
+import {FieldKey} from 'sentry/utils/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
-import useApi from 'sentry/utils/useApi';
+import {RequestError} from 'sentry/utils/requestError/requestError';
+import {useApi} from 'sentry/utils/useApi';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
-import Header from 'sentry/views/releases/components/header';
-import ReleaseArchivedNotice from 'sentry/views/releases/detail/overview/releaseArchivedNotice';
-import ReleaseHealthCTA from 'sentry/views/releases/list/releaseHealthCTA';
-import ReleaseListInner from 'sentry/views/releases/list/releaseListInner';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
+import {buildDetailsApiOptions} from 'sentry/views/preprod/utils/buildDetailsApiOptions';
+import {ReleaseArchivedNotice} from 'sentry/views/releases/detail/overview/releaseArchivedNotice';
+import {MobileBuilds} from 'sentry/views/releases/list/mobileBuilds';
+import {ReleaseHealthCTA} from 'sentry/views/releases/list/releaseHealthCTA';
+import {ReleaseListInner} from 'sentry/views/releases/list/releaseListInner';
 import {isMobileRelease} from 'sentry/views/releases/utils';
 
-import ReleasesDisplayOptions, {ReleasesDisplayOption} from './releasesDisplayOptions';
-import ReleasesSortOptions from './releasesSortOptions';
-import ReleasesStatusOptions, {ReleasesStatusOption} from './releasesStatusOptions';
+import {ReleasesDisplayOption, ReleasesDisplayOptions} from './releasesDisplayOptions';
+import {ReleasesSortOptions} from './releasesSortOptions';
+import {ReleasesStatusOption, ReleasesStatusOptions} from './releasesStatusOptions';
 import {validateSummaryStatsPeriod} from './utils';
+
+type ReleaseTab = 'releases' | 'mobile-builds' | 'snapshots';
 
 const RELEASE_FILTER_KEYS = [
   ...Object.values(SEMVER_TAGS),
@@ -49,12 +65,16 @@ const RELEASE_FILTER_KEYS = [
     key: 'release',
     name: 'release',
   },
+  {
+    key: FieldKey.RELEASE_CREATED,
+    name: FieldKey.RELEASE_CREATED,
+  },
 ].reduce<TagCollection>((acc, tag) => {
   acc[tag.key] = tag;
   return acc;
 }, {});
 
-function makeReleaseListQueryKey({
+function makeReleaseListApiOptions({
   organizationSlug,
   location,
   activeSort,
@@ -64,31 +84,41 @@ function makeReleaseListQueryKey({
   organizationSlug: string;
   activeSort?: ReleasesSortOption;
   activeStatus?: ReleasesStatusOption;
-}): ApiQueryKey {
-  const query = {
-    project: location.query.project,
-    environment: location.query.environment,
-    cursor: location.query.cursor,
-    query: location.query.query,
-    sort: location.query.sort,
-    summaryStatsPeriod: validateSummaryStatsPeriod(
-      decodeScalar(location.query.statsPeriod)
-    ),
-    per_page: 20,
-    flatten: activeSort === ReleasesSortOption.DATE ? 0 : 1,
-    adoptionStages: 1,
-    status:
-      activeStatus === ReleasesStatusOption.ARCHIVED
-        ? ReleaseStatus.ARCHIVED
-        : ReleaseStatus.ACTIVE,
-  };
-
-  return [`/organizations/${organizationSlug}/releases/`, {query}];
+}) {
+  return apiOptions.as<Release[]>()('/organizations/$organizationIdOrSlug/releases/', {
+    path: {organizationIdOrSlug: organizationSlug},
+    query: {
+      project: location.query.project,
+      environment: location.query.environment,
+      cursor: location.query.cursor,
+      query: location.query.query,
+      sort: location.query.sort,
+      summaryStatsPeriod: validateSummaryStatsPeriod(
+        decodeScalar(location.query.statsPeriod)
+      ),
+      per_page: 20,
+      flatten: activeSort === ReleasesSortOption.DATE ? 0 : 1,
+      adoptionStages: 1,
+      status:
+        activeStatus === ReleasesStatusOption.ARCHIVED
+          ? ReleaseStatus.ARCHIVED
+          : ReleaseStatus.ACTIVE,
+    },
+    staleTime: Infinity,
+  });
 }
+
+const releasesFeedbackOptions = {
+  messagePlaceholder: t('How can we improve the Releases experience?'),
+  tags: {
+    ['feedback.source']: 'releases-list-header',
+  },
+};
 
 export default function ReleasesList() {
   const api = useApi({persistInFlight: true});
   const organization = useOrganization();
+  const hasPageFrameFeature = useHasPageFrameFeature();
   const {projects} = useProjects();
   const {selection} = usePageFilters();
   const location = useLocation();
@@ -163,20 +193,22 @@ export default function ReleasesList() {
   }, [location.query]);
 
   const {
-    data: releases = [],
+    data,
     isPending: isReleasesPending,
     isRefetching: isReleasesRefetching,
     error: releasesError,
-    getResponseHeader: getReleasesResponseHeader,
-  } = useApiQuery<Release[]>(
-    makeReleaseListQueryKey({
+  } = useQuery({
+    ...makeReleaseListApiOptions({
       organizationSlug: organization.slug,
       location,
       activeSort,
       activeStatus,
     }),
-    {staleTime: Infinity, placeholderData: prev => prev}
-  );
+    select: selectJsonWithHeaders,
+    placeholderData: keepPreviousData,
+  });
+
+  const releases = data?.json;
 
   useEffect(() => {
     /**
@@ -197,10 +229,79 @@ export default function ReleasesList() {
       return projects[0];
     }
 
-    const selectedProjectId =
-      selection.projects && selection.projects.length === 1 && selection.projects[0];
+    const selectedProjectId = selection.projects?.length === 1 && selection.projects[0];
     return projects?.find(p => p.id === `${selectedProjectId}`);
   }, [selection.projects, projects]);
+
+  // Get selected project IDs, handling "All Projects" case
+  const selectedProjectIds = useMemo(() => {
+    const selectedIds = selection.projects.filter(id => id !== ALL_ACCESS_PROJECTS);
+
+    // If no specific projects selected, pass [-1] to represent "all projects"
+    // This avoids expanding to hundreds of project IDs which causes URL length issues
+    return selectedIds.length === 0
+      ? [`${ALL_ACCESS_PROJECTS}`]
+      : selectedIds.map(id => `${id}`);
+  }, [selection.projects]);
+
+  const hasSnapshotsFeature = organization.features?.includes('preprod-snapshots');
+
+  const {statsPeriod, start, end, utc} = normalizeDateTimeParams(location.query);
+  const buildsProbeQuery = useQuery({
+    ...buildDetailsApiOptions({
+      organization,
+      queryParams: {
+        per_page: 1,
+        project: selectedProjectIds,
+        ...(statsPeriod && {statsPeriod}),
+        ...(start && {start}),
+        ...(end && {end}),
+        ...(utc && {utc}),
+      },
+    }),
+    staleTime: 60_000,
+    placeholderData: keepPreviousData,
+  });
+
+  const hasAnyStrictlyMobileProject = useMemo(() => {
+    const isAllProjects =
+      selectedProjectIds.length === 1 &&
+      selectedProjectIds[0] === `${ALL_ACCESS_PROJECTS}`;
+    const projectIdsToCheck = isAllProjects
+      ? projects.map(p => p.id)
+      : selectedProjectIds;
+
+    return projectIdsToCheck
+      .map(id => ProjectsStore.getById(id))
+      .filter(Boolean)
+      .some(project => project?.platform && isMobileRelease(project.platform, false));
+  }, [selectedProjectIds, projects]);
+
+  const hasBuildsData =
+    !buildsProbeQuery.isPending && (buildsProbeQuery.data?.length ?? 0) > 0;
+
+  const shouldShowMobileBuildsTab = hasBuildsData || hasAnyStrictlyMobileProject;
+  const shouldShowSnapshotsTab = !!hasSnapshotsFeature;
+  const shouldShowPreprodTabs = shouldShowMobileBuildsTab || shouldShowSnapshotsTab;
+
+  const selectedTab = useMemo(() => {
+    if (!shouldShowPreprodTabs) {
+      return 'releases';
+    }
+    const tab = decodeScalar(location.query.tab) as ReleaseTab | undefined;
+    if (tab === 'snapshots' && !shouldShowSnapshotsTab) {
+      return 'releases';
+    }
+    if (tab === 'mobile-builds' && !shouldShowMobileBuildsTab) {
+      return 'releases';
+    }
+    return tab || 'releases';
+  }, [
+    shouldShowPreprodTabs,
+    shouldShowMobileBuildsTab,
+    shouldShowSnapshotsTab,
+    location.query.tab,
+  ]);
 
   const handleSearch = useCallback(
     (query: string) => {
@@ -265,6 +366,17 @@ export default function ReleasesList() {
     [location, navigate]
   );
 
+  const handleTabChange = useCallback(
+    (newTab: string) => {
+      if (newTab === 'mobile-builds') {
+        trackAnalytics('preprod.releases.mobile-builds.tab-clicked', {
+          organization,
+        });
+      }
+    },
+    [organization]
+  );
+
   const tagValueLoader = useCallback(
     (key: string, search: string) => {
       const {project} = location.query;
@@ -288,36 +400,48 @@ export default function ReleasesList() {
     [api, location, organization]
   );
 
-  const getTagValues = useCallback(
-    async (tag: Tag, currentQuery: string): Promise<string[]> => {
-      const values = await tagValueLoader(tag.key, currentQuery);
+  const getTagValues = useCallback<GetTagValues>(
+    async ({tag, searchQuery}) => {
+      const values = await tagValueLoader(tag.key, searchQuery);
       return values.map(({value}) => value);
     },
     [tagValueLoader]
   );
 
-  const hasAnyMobileProject = selection.projects
-    .map(id => `${id}`)
-    .map(ProjectsStore.getById)
-    .some(project => project?.platform && isMobileRelease(project.platform));
+  const hasAnyMobileProject = useMemo(() => {
+    // When "All Projects" is selected (represented by [-1]), check all accessible projects
+    // When specific projects are selected, check only those projects
+    const isAllProjects =
+      selectedProjectIds.length === 1 &&
+      selectedProjectIds[0] === `${ALL_ACCESS_PROJECTS}`;
+    const projectIdsToCheck = isAllProjects
+      ? projects.map(p => p.id)
+      : selectedProjectIds;
+
+    return projectIdsToCheck
+      .map(id => ProjectsStore.getById(id))
+      .filter(Boolean)
+      .some(project => project?.platform && isMobileRelease(project.platform));
+  }, [selectedProjectIds, projects]);
+
   const showReleaseAdoptionStages =
     hasAnyMobileProject && selection.environments.length === 1;
   const shouldShowQuickstart = Boolean(
     selectedProject &&
-      // Has not set up releases
-      !selectedProject?.features.includes('releases') &&
-      // Has no releases
-      !releases?.length
+    // Has not set up releases
+    !selectedProject?.features.includes('releases') &&
+    // Has no releases
+    !releases?.length
   );
-  const releasesPageLinks = getReleasesResponseHeader?.('Link');
+  const releasesPageLinks = data?.headers.Link;
 
   const releasesErrorMessage = useMemo(() => {
     if (!releasesError) {
       return null;
     }
-    if (releasesError?.status === 400) {
+    if (releasesError instanceof RequestError && releasesError.status === 400) {
       // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      return String(releasesError?.responseJSON?.detail);
+      return String(releasesError.responseJSON?.detail);
     }
     return t('There was an error loading releases');
   }, [releasesError]);
@@ -325,97 +449,223 @@ export default function ReleasesList() {
   return (
     <PageFiltersContainer showAbsolute={false} defaultSelection={selection}>
       <SentryDocumentTitle title={t('Releases')} orgSlug={organization.slug} />
-      <NoProjectMessage organization={organization}>
-        <Header />
-        <Layout.Body>
-          <Layout.Main fullWidth>
-            <ReleaseHealthCTA
-              organization={organization}
-              releases={releases}
-              selectedProject={selectedProject}
-              selection={selection}
-            />
-            <ReleasesPageFilterBar condensed>
-              <DemoTourElement
-                id={DemoTourStep.RELEASES_COMPARE}
-                title={t('Compare releases')}
-                description={t(
-                  'Click here and select the "react" project to see how the release is trending compared to previous releases.'
-                )}
-                position="bottom-start"
+      <Stack flex={1}>
+        <NoProjectMessage organization={organization}>
+          <Layout.Header noActionWrap>
+            <Stack gap="md">
+              <Flex justify="between">
+                <Layout.HeaderContent unified>
+                  <Layout.Title>
+                    {t('Releases')}
+                    <PageHeadingQuestionTooltip
+                      docsUrl="https://docs.sentry.io/product/releases/"
+                      title={t(
+                        'A visualization of your release adoption from the past 24 hours, providing a high-level view of the adoption stage, percentage of crash-free users and sessions, and more.'
+                      )}
+                    />
+                  </Layout.Title>
+                </Layout.HeaderContent>
+                <Layout.HeaderActions>
+                  {hasPageFrameFeature ? (
+                    <TopBar.Slot name="feedback">
+                      <FeedbackButton
+                        feedbackOptions={releasesFeedbackOptions}
+                        aria-label={t('Give Feedback')}
+                        tooltipProps={{title: t('Give Feedback')}}
+                      >
+                        {null}
+                      </FeedbackButton>
+                    </TopBar.Slot>
+                  ) : (
+                    <FeedbackButton feedbackOptions={releasesFeedbackOptions} />
+                  )}
+                </Layout.HeaderActions>
+              </Flex>
+
+              <ReleasesPageFilterBar
+                condensed
+                shouldShowPreprodTabs={shouldShowPreprodTabs}
               >
                 <ProjectPageFilter />
-              </DemoTourElement>
-              <EnvironmentPageFilter />
-              <DatePageFilter
-                disallowArbitraryRelativeRanges
-                menuFooterMessage={t(
-                  'Changing this date range will recalculate the release metrics. Select a supported date range from the options above.'
+                <EnvironmentPageFilter
+                  disabled={
+                    selectedTab === 'mobile-builds' || selectedTab === 'snapshots'
+                  }
+                />
+                <DatePageFilter
+                  disallowArbitraryRelativeRanges
+                  menuFooterMessage={t(
+                    'Changing this date range will recalculate the release metrics. Select a supported date range from the options above.'
+                  )}
+                />
+              </ReleasesPageFilterBar>
+
+              {shouldShowPreprodTabs && (
+                <Layout.HeaderTabs value={selectedTab} onChange={handleTabChange}>
+                  <TabList aria-label={t('Releases tab selector')}>
+                    <TabList.Item
+                      key="releases"
+                      to={{
+                        pathname: location.pathname,
+                        query: {
+                          ...location.query,
+                          query: undefined,
+                          tab: undefined,
+                        },
+                      }}
+                      textValue={t('Releases')}
+                    >
+                      {t('Releases')}
+                    </TabList.Item>
+                    <TabList.Item
+                      key="mobile-builds"
+                      hidden={!shouldShowMobileBuildsTab}
+                      to={{
+                        pathname: location.pathname,
+                        query: {
+                          ...location.query,
+                          query: undefined,
+                          tab: 'mobile-builds',
+                        },
+                      }}
+                      textValue={t('Mobile Builds')}
+                    >
+                      <Flex align="center" gap="sm">
+                        {t('Mobile Builds')}
+                        <FeatureBadge type="new" />
+                      </Flex>
+                    </TabList.Item>
+                    <TabList.Item
+                      key="snapshots"
+                      hidden={!shouldShowSnapshotsTab}
+                      to={{
+                        pathname: location.pathname,
+                        query: {
+                          ...location.query,
+                          query: undefined,
+                          tab: 'snapshots',
+                        },
+                      }}
+                      textValue={t('Snapshots')}
+                    >
+                      <Flex align="center" gap="sm">
+                        {t('Snapshots')}
+                        <FeatureBadge type="alpha" />
+                      </Flex>
+                    </TabList.Item>
+                  </TabList>
+                </Layout.HeaderTabs>
+              )}
+            </Stack>
+          </Layout.Header>
+          <Layout.Body>
+            <Layout.Main width="full">
+              <Stack gap="xl">
+                {selectedTab === 'mobile-builds' && (
+                  <MobileBuilds
+                    organization={organization}
+                    selectedProjectIds={selectedProjectIds}
+                  />
                 )}
-              />
-            </ReleasesPageFilterBar>
 
-            {shouldShowQuickstart ? null : (
-              <SortAndFilterWrapper>
-                <StyledSearchQueryBuilder
-                  onSearch={handleSearch}
-                  initialQuery={activeQuery}
-                  filterKeys={RELEASE_FILTER_KEYS}
-                  getTagValues={getTagValues}
-                  placeholder={t('Search by version, build, package, or stage')}
-                  searchSource="releases"
-                />
-                <ReleasesStatusOptions selected={activeStatus} onSelect={handleStatus} />
-                <ReleasesSortOptions
-                  selected={activeSort}
-                  selectedDisplay={activeDisplay}
-                  onSelect={handleSortBy}
-                  environments={selection.environments}
-                />
-                <ReleasesDisplayOptions
-                  selected={activeDisplay}
-                  onSelect={handleDisplay}
-                />
-              </SortAndFilterWrapper>
-            )}
+                {selectedTab === 'snapshots' && shouldShowSnapshotsTab && (
+                  <MobileBuilds
+                    organization={organization}
+                    selectedProjectIds={selectedProjectIds}
+                    defaultDisplay={PreprodBuildsDisplay.SNAPSHOT}
+                    hideDisplayToggle
+                  />
+                )}
 
-            {!(isReleasesPending || isReleasesRefetching) &&
-              activeStatus === ReleasesStatusOption.ARCHIVED &&
-              !!releases?.length && <ReleaseArchivedNotice multi />}
+                {selectedTab === 'releases' && (
+                  <Fragment>
+                    <ReleaseHealthCTA
+                      organization={organization}
+                      releases={releases ?? []}
+                      selectedProject={selectedProject}
+                      selection={selection}
+                    />
+                    {shouldShowQuickstart ? null : (
+                      <SortAndFilterWrapper>
+                        <StyledSearchQueryBuilder
+                          onSearch={handleSearch}
+                          initialQuery={activeQuery}
+                          filterKeys={RELEASE_FILTER_KEYS}
+                          getTagValues={getTagValues}
+                          placeholder={t('Search by version, build, package, or stage')}
+                          searchSource="releases"
+                        />
+                        <ReleasesStatusOptions
+                          selected={activeStatus}
+                          onSelect={handleStatus}
+                        />
+                        <ReleasesSortOptions
+                          selected={activeSort}
+                          selectedDisplay={activeDisplay}
+                          onSelect={handleSortBy}
+                          environments={selection.environments}
+                        />
+                        <ReleasesDisplayOptions
+                          selected={activeDisplay}
+                          onSelect={handleDisplay}
+                        />
+                      </SortAndFilterWrapper>
+                    )}
 
-            {releasesErrorMessage ? (
-              <LoadingError message={releasesErrorMessage} />
-            ) : (
-              <ReleaseListInner
-                activeDisplay={activeDisplay}
-                loading={isReleasesPending}
-                organization={organization}
-                releases={releases}
-                releasesPageLinks={releasesPageLinks}
-                reloading={isReleasesRefetching}
-                selectedProject={selectedProject}
-                selection={selection}
-                shouldShowQuickstart={shouldShowQuickstart}
-                showReleaseAdoptionStages={showReleaseAdoptionStages}
-              />
-            )}
-            <FloatingFeedbackWidget />
-          </Layout.Main>
-        </Layout.Body>
-      </NoProjectMessage>
+                    {!(isReleasesPending || isReleasesRefetching) &&
+                      activeStatus === ReleasesStatusOption.ARCHIVED &&
+                      !!releases?.length && <ReleaseArchivedNotice multi />}
+
+                    {releasesErrorMessage ? (
+                      <LoadingError message={releasesErrorMessage} />
+                    ) : (
+                      <DemoTourElement
+                        id={DemoTourStep.RELEASES_LIST}
+                        title={t('Latest releases')}
+                        description={t(
+                          'View the latest releases for your project. Select a release to review new and regressed issues, and business critical metrics like crash rate, and user adoption. '
+                        )}
+                        position="top-start"
+                      >
+                        {props => (
+                          <div {...props}>
+                            <ReleaseListInner
+                              activeDisplay={activeDisplay}
+                              loading={isReleasesPending}
+                              organization={organization}
+                              releases={releases ?? []}
+                              releasesPageLinks={releasesPageLinks}
+                              reloading={isReleasesRefetching}
+                              selectedProject={selectedProject}
+                              selection={selection}
+                              shouldShowQuickstart={shouldShowQuickstart}
+                              showReleaseAdoptionStages={showReleaseAdoptionStages}
+                            />
+                          </div>
+                        )}
+                      </DemoTourElement>
+                    )}
+                  </Fragment>
+                )}
+              </Stack>
+            </Layout.Main>
+          </Layout.Body>
+        </NoProjectMessage>
+      </Stack>
     </PageFiltersContainer>
   );
 }
 
-const ReleasesPageFilterBar = styled(PageFilterBar)`
-  margin-bottom: ${space(2)};
+const ReleasesPageFilterBar = styled(PageFilterBar)<{
+  shouldShowPreprodTabs: boolean;
+}>`
+  ${p => !p.shouldShowPreprodTabs && `margin-bottom: ${p.theme.space.xl};`}
 `;
 
 const SortAndFilterWrapper = styled('div')`
   display: grid;
   grid-template-columns: 1fr repeat(3, max-content);
-  gap: ${space(2)};
-  margin-bottom: ${space(2)};
+  gap: ${p => p.theme.space.xl};
 
   @media (max-width: ${p => p.theme.breakpoints.md}) {
     grid-template-columns: repeat(3, 1fr);

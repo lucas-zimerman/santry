@@ -16,7 +16,7 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.db.models.fields.jsonfield import LegacyTextJSONField
@@ -58,7 +58,7 @@ class PullRequestManager(BaseManager["PullRequest"]):
         return affected, created
 
 
-@region_silo_model
+@cell_silo_model
 class PullRequest(Model):
     __relocation_scope__ = RelocationScope.Excluded
 
@@ -121,12 +121,16 @@ class PullRequest(Model):
         This is the inverse of what makes a PR "in use".
         """
         from sentry.models.grouplink import GroupLink
+        from sentry.models.releasecommit import ReleaseCommit
+        from sentry.models.releaseheadcommit import ReleaseHeadCommit
 
         # Subquery for checking if there's a valid GroupLink
-        grouplink_exists = GroupLink.objects.filter(
-            linked_type=GroupLink.LinkedType.pull_request,
-            linked_id=OuterRef("id"),
-            group__project__isnull=False,
+        grouplink_exists = Exists(
+            GroupLink.objects.filter(
+                linked_type=GroupLink.LinkedType.pull_request,
+                linked_id=OuterRef("id"),
+                group__project__isnull=False,
+            )
         )
 
         # Subquery for checking if comment has valid group_ids
@@ -147,15 +151,26 @@ class PullRequest(Model):
             )
         )
 
+        recent_comment_exists = Exists(
+            PullRequestComment.objects.filter(
+                pull_request_id=OuterRef("id"),
+            ).filter(Q(created_at__gte=cutoff_date) | Q(updated_at__gte=cutoff_date))
+        )
+
+        commit_in_release = Exists(ReleaseCommit.objects.filter(commit_id=OuterRef("commit_id")))
+        commit_in_head = Exists(ReleaseHeadCommit.objects.filter(commit_id=OuterRef("commit_id")))
+        commit_exists = Exists(
+            PullRequestCommit.objects.filter(
+                pull_request_id=OuterRef("id"),
+            ).filter(Q(commit__date_added__gte=cutoff_date) | commit_in_release | commit_in_head)
+        )
+
         # Define what makes a PR "in use" (should be kept)
         keep_conditions = (
             Q(date_added__gte=cutoff_date)
-            | Q(pullrequestcomment__created_at__gte=cutoff_date)
-            | Q(pullrequestcomment__updated_at__gte=cutoff_date)
-            | Q(pullrequestcommit__commit__date_added__gte=cutoff_date)
-            | Q(pullrequestcommit__commit__releasecommit__isnull=False)
-            | Q(pullrequestcommit__commit__releaseheadcommit__isnull=False)
-            | Exists(grouplink_exists)
+            | recent_comment_exists
+            | commit_exists
+            | grouplink_exists
             | comment_has_valid_group
         )
 
@@ -163,7 +178,7 @@ class PullRequest(Model):
         return ~keep_conditions
 
 
-@region_silo_model
+@cell_silo_model
 class PullRequestCommit(Model):
     __relocation_scope__ = RelocationScope.Excluded
     pull_request = FlexibleForeignKey("sentry.PullRequest")
@@ -184,7 +199,7 @@ class CommentType:
         return ((cls.MERGED_PR, "merged_pr"), (cls.OPEN_PR, "open_pr"))
 
 
-@region_silo_model
+@cell_silo_model
 class PullRequestComment(Model):
     __relocation_scope__ = RelocationScope.Excluded
 

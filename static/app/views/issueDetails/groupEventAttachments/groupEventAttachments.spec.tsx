@@ -1,11 +1,11 @@
 import {EnvironmentsFixture} from 'sentry-fixture/environments';
 import {EventAttachmentFixture} from 'sentry-fixture/eventAttachment';
 import {GroupFixture} from 'sentry-fixture/group';
+import {OrganizationFixture} from 'sentry-fixture/organization';
 import {ProjectFixture} from 'sentry-fixture/project';
 import {TagsFixture} from 'sentry-fixture/tags';
 import {UserFixture} from 'sentry-fixture/user';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
   act,
   render,
@@ -13,31 +13,37 @@ import {
   screen,
   userEvent,
   within,
+  type RouterConfig,
 } from 'sentry-test/reactTestingLibrary';
 
-import ConfigStore from 'sentry/stores/configStore';
-import GroupStore from 'sentry/stores/groupStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {ConfigStore} from 'sentry/stores/configStore';
+import {GroupStore} from 'sentry/stores/groupStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import type {Project} from 'sentry/types/project';
 
-import GroupEventAttachments from './groupEventAttachments';
+import {GroupEventAttachments} from './groupEventAttachments';
 
 describe('GroupEventAttachments', () => {
   const groupId = 'group-id';
   const group = GroupFixture({id: groupId});
-  const {organization, router} = initializeOrg({
-    organization: {
-      features: ['event-attachments'],
-      orgRole: 'member',
-      attachmentsRole: 'member',
-    },
+  const organization = OrganizationFixture({
+    features: ['event-attachments'],
+    orgRole: 'member',
+    attachmentsRole: 'member',
   });
-  const {router: screenshotRouter} = initializeOrg({
-    router: {
-      params: {orgId: 'org-slug', groupId: 'group-id'},
-      location: {query: {attachmentFilter: 'screenshot'}},
+  const initialRouterConfig: RouterConfig = {
+    location: {
+      pathname: `/organizations/${organization.slug}/issues/${groupId}/attachments/`,
     },
-  });
+    route: '/organizations/:orgId/issues/:groupId/attachments/',
+  };
+  const screenshotRouterConfig: RouterConfig = {
+    location: {
+      pathname: `/organizations/${organization.slug}/issues/${groupId}/attachments/`,
+      query: {attachmentFilter: 'screenshot'},
+    },
+    route: '/organizations/:orgId/issues/:groupId/attachments/',
+  };
   let project: Project;
   let getAttachmentsMock: jest.Mock;
 
@@ -67,9 +73,8 @@ describe('GroupEventAttachments', () => {
 
   it('calls attachments api with screenshot filter', async () => {
     render(<GroupEventAttachments project={project} group={group} />, {
-      router: screenshotRouter,
       organization,
-      deprecatedRouterMocks: true,
+      initialRouterConfig: screenshotRouterConfig,
     });
     expect(screen.getByRole('radio', {name: 'Screenshots'})).toBeInTheDocument();
     await userEvent.click(screen.getByRole('radio', {name: 'Screenshots'}));
@@ -79,7 +84,6 @@ describe('GroupEventAttachments', () => {
         query: {
           screenshot: '1',
           environment: [],
-          statsPeriod: '14d',
         },
       })
     );
@@ -87,9 +91,8 @@ describe('GroupEventAttachments', () => {
 
   it('calls opens modal when clicking on panel body', async () => {
     render(<GroupEventAttachments project={project} group={group} />, {
-      router: screenshotRouter,
       organization,
-      deprecatedRouterMocks: true,
+      initialRouterConfig: screenshotRouterConfig,
     });
     renderGlobalModal();
     await userEvent.click(await screen.findByTestId('screenshot-1'));
@@ -98,9 +101,8 @@ describe('GroupEventAttachments', () => {
 
   it('links event id to event detail', async () => {
     render(<GroupEventAttachments project={project} group={group} />, {
-      router,
       organization,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(await screen.findByRole('link', {name: '12345678'})).toHaveAttribute(
       'href',
@@ -110,9 +112,8 @@ describe('GroupEventAttachments', () => {
 
   it('links to the download URL', async () => {
     render(<GroupEventAttachments project={project} group={group} />, {
-      router: screenshotRouter,
       organization,
-      deprecatedRouterMocks: true,
+      initialRouterConfig: screenshotRouterConfig,
     });
     await userEvent.click(await screen.findByLabelText('Actions'));
     expect(
@@ -126,9 +127,8 @@ describe('GroupEventAttachments', () => {
       statusCode: 500,
     });
     render(<GroupEventAttachments project={project} group={group} />, {
-      router,
       organization,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     expect(await screen.findByText(/error loading/i)).toBeInTheDocument();
   });
@@ -139,9 +139,8 @@ describe('GroupEventAttachments', () => {
       method: 'DELETE',
     });
     render(<GroupEventAttachments project={project} group={group} />, {
-      router,
       organization,
-      deprecatedRouterMocks: true,
+      initialRouterConfig,
     });
     renderGlobalModal();
 
@@ -169,15 +168,16 @@ describe('GroupEventAttachments', () => {
     render(<GroupEventAttachments project={project} group={group} />, {
       initialRouterConfig: {
         location: {
-          pathname: '/organizations/org-slug/issues/group-id/',
+          pathname: `/organizations/${organization.slug}/issues/${groupId}/attachments/`,
           query: {
             statsPeriod: '3d',
             query: 'user.email:leander.rodrigues@sentry.io',
             environment: ['staging'],
           },
         },
+        route: '/organizations/:orgId/issues/:groupId/attachments/',
       },
-      organization: {...organization, features: ['issue-details-streamline-enforce']},
+      organization,
     });
     expect(getAttachmentsMock).toHaveBeenCalledWith(
       '/organizations/org-slug/issues/group-id/attachments/',

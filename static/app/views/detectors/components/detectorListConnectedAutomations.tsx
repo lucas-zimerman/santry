@@ -1,31 +1,41 @@
+import {useMemo} from 'react';
 import {ClassNames} from '@emotion/react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 
-import InteractionStateLayer from 'sentry/components/core/interactionStateLayer';
-import {Link} from 'sentry/components/core/link';
+import InteractionStateLayer from '@sentry/scraps/interactionStateLayer';
+import {Stack} from '@sentry/scraps/layout';
+import {Link} from '@sentry/scraps/link';
+
 import {Hovercard} from 'sentry/components/hovercard';
-import LoadingError from 'sentry/components/loadingError';
-import Placeholder from 'sentry/components/placeholder';
+import {LoadingError} from 'sentry/components/loadingError';
+import {Placeholder} from 'sentry/components/placeholder';
 import {EmptyCell} from 'sentry/components/workflowEngine/gridCell/emptyCell';
 import {tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {AutomationActionSummary} from 'sentry/views/automations/components/automationActionSummary';
-import {useAutomationsQuery} from 'sentry/views/automations/hooks';
+import {automationsApiOptions} from 'sentry/views/automations/hooks';
 import {getAutomationActions} from 'sentry/views/automations/hooks/utils';
 import {makeAutomationDetailsPathname} from 'sentry/views/automations/pathnames';
+import {useIssueStreamDetectorsForProject} from 'sentry/views/detectors/utils/useIssueStreamDetectorsForProject';
 
 type DetectorListConnectedAutomationsProps = {
   automationIds: string[];
+  projectId: string;
 };
 
 function ConnectedAutomationsHoverBody({automationIds}: {automationIds: string[]}) {
   const organization = useOrganization();
   const shownAutomations = automationIds.slice(0, 5);
-  const {data, isPending, isError} = useAutomationsQuery({
-    ids: automationIds.slice(0, 5),
-  });
+  const {data, isPending, isError} = useQuery(
+    automationsApiOptions(organization, {
+      ids: automationIds.slice(0, 5),
+    })
+  );
   const hasMore = automationIds.length > 5;
+  const hasMoreText = hasMore ? (
+    <MoreText>{tn('%s more', '%s more', automationIds.length - 5)}</MoreText>
+  ) : null;
 
   if (isError) {
     return <LoadingError />;
@@ -35,11 +45,12 @@ function ConnectedAutomationsHoverBody({automationIds}: {automationIds: string[]
     return (
       <div>
         {Array.from({length: shownAutomations.length}).map((_, index) => (
-          <HovercardSkeletonRow key={index}>
+          <Stack justify="center" padding="md xl" gap="xs" minHeight="64px" key={index}>
             <Placeholder height="20px" width="100%" />
             <Placeholder height="18px" width="40%" />
-          </HovercardSkeletonRow>
+          </Stack>
         ))}
+        {hasMoreText}
       </div>
     );
   }
@@ -64,17 +75,32 @@ function ConnectedAutomationsHoverBody({automationIds}: {automationIds: string[]
           </HovercardRow>
         );
       })}
-      {hasMore && (
-        <MoreText>{tn('%s more', '%s more', automationIds.length - 5)}</MoreText>
-      )}
+      {hasMoreText}
     </div>
   );
 }
 
 export function DetectorListConnectedAutomations({
   automationIds,
+  projectId,
 }: DetectorListConnectedAutomationsProps) {
-  if (!automationIds.length) {
+  const {data: issueStreamDetectors, isPending} =
+    useIssueStreamDetectorsForProject(projectId);
+
+  // Combine the automation IDs from the project's issue stream detector with the directly-connected ones
+  const combinedAutomationIds = useMemo(() => {
+    if (isPending) {
+      return automationIds;
+    }
+    const issueStreamAutomationIds = issueStreamDetectors?.[0]?.workflowIds ?? [];
+    return [...new Set([...automationIds, ...issueStreamAutomationIds])];
+  }, [automationIds, issueStreamDetectors, isPending]);
+
+  if (isPending) {
+    return <Placeholder height="20px" />;
+  }
+
+  if (!combinedAutomationIds.length) {
     return <EmptyCell />;
   }
 
@@ -83,13 +109,13 @@ export function DetectorListConnectedAutomations({
       <ClassNames>
         {({css}) => (
           <Hovercard
-            body={<ConnectedAutomationsHoverBody automationIds={automationIds} />}
+            body={<ConnectedAutomationsHoverBody automationIds={combinedAutomationIds} />}
             bodyClassName={css`
               padding: 0;
             `}
             showUnderline
           >
-            {tn('%s automation', '%s automations', automationIds.length)}
+            {tn('%s alert', '%s alerts', combinedAutomationIds.length)}
           </Hovercard>
         )}
       </ClassNames>
@@ -98,42 +124,32 @@ export function DetectorListConnectedAutomations({
 }
 
 const ConnectedAutomations = styled('div')`
-  color: ${p => p.theme.textColor};
+  color: ${p => p.theme.tokens.content.primary};
   display: flex;
   flex-direction: row;
-  gap: ${space(0.5)};
-`;
-
-const HovercardSkeletonRow = styled('div')`
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: ${space(0.5)};
-  padding: ${space(1)} ${space(2)};
-
-  min-height: 64px;
+  gap: ${p => p.theme.space.xs};
 `;
 
 const HovercardRow = styled(Link)`
   position: relative;
   display: flex;
   align-items: center;
-  gap: ${space(0.5)};
-  color: ${p => p.theme.textColor};
-  padding: ${space(1)} ${space(2)};
+  gap: ${p => p.theme.space.xs};
+  color: ${p => p.theme.tokens.content.primary};
+  padding: ${p => p.theme.space.md} ${p => p.theme.space.xl};
 
   min-height: 64px;
 
   &:first-child {
-    border-radius: ${p => p.theme.borderRadius} ${p => p.theme.borderRadius} 0 0;
+    border-radius: ${p => p.theme.radius.md} ${p => p.theme.radius.md} 0 0;
   }
 
   &:last-child {
-    border-radius: 0 0 ${p => p.theme.borderRadius} ${p => p.theme.borderRadius};
+    border-radius: 0 0 ${p => p.theme.radius.md} ${p => p.theme.radius.md};
   }
 
   &:hover {
-    color: ${p => p.theme.textColor};
+    color: ${p => p.theme.tokens.content.primary};
   }
 
   &:hover strong {
@@ -142,13 +158,13 @@ const HovercardRow = styled(Link)`
 `;
 
 const AutomationActionWrapper = styled('div')`
-  margin-top: ${space(0.5)};
-  color: ${p => p.theme.subText};
+  margin-top: ${p => p.theme.space.xs};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const MoreText = styled('p')`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   text-align: center;
   margin: 0;
-  padding: ${space(1)} ${space(2)};
+  padding: ${p => p.theme.space.md} ${p => p.theme.space.xl};
 `;

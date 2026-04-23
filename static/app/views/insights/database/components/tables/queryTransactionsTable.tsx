@@ -3,11 +3,13 @@ import {useTheme, type Theme} from '@emotion/react';
 import type {Location} from 'history';
 import * as qs from 'query-string';
 
-import {Link} from 'sentry/components/core/link';
+import {Link} from '@sentry/scraps/link';
+
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
+import {Pagination} from 'sentry/components/pagination';
 import type {GridColumnHeader} from 'sentry/components/tables/gridEditable';
-import GridEditable, {COL_WIDTH_UNDEFINED} from 'sentry/components/tables/gridEditable';
+import {COL_WIDTH_UNDEFINED, GridEditable} from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import type {EventsMetaType} from 'sentry/utils/discover/eventView';
@@ -15,7 +17,7 @@ import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
 import type {Sort} from 'sentry/utils/discover/fields';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
 import {OverflowEllipsisTextContainer} from 'sentry/views/insights/common/components/textAlign';
 import {useModuleURL} from 'sentry/views/insights/common/utils/useModuleURL';
@@ -98,6 +100,9 @@ export function QueryTransactionsTable({
       query: {...query, [QueryParameterNames.TRANSACTIONS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...COLUMN_ORDER],
+  });
 
   return (
     <Fragment>
@@ -106,7 +111,7 @@ export function QueryTransactionsTable({
         isLoading={isLoading}
         error={error}
         data={data}
-        columnOrder={COLUMN_ORDER}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -132,6 +137,7 @@ export function QueryTransactionsTable({
               organization,
               theme
             ),
+          onResizeColumn: handleResizeColumn,
         }}
       />
 
@@ -171,7 +177,7 @@ function renderBodyCell(
     );
   }
 
-  if (!meta || !meta?.fields) {
+  if (!meta?.fields) {
     return row[column.key];
   }
 

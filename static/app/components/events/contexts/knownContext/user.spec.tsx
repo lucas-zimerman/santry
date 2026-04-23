@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getUserContextData,
   type UserContext,
@@ -75,8 +75,8 @@ describe('UserContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'default'}
-        alias={'user'}
+        type="default"
+        alias="user"
         value={{...MOCK_USER_CONTEXT, name: ''}}
       />
     );

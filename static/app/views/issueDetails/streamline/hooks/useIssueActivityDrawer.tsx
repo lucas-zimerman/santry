@@ -1,6 +1,7 @@
 import {useCallback} from 'react';
 
-import useDrawer from 'sentry/components/globalDrawer';
+import {useDrawer} from '@sentry/scraps/drawer';
+
 import {t} from 'sentry/locale';
 import type {Group} from 'sentry/types/group';
 import type {Project} from 'sentry/types/project';
@@ -34,7 +35,7 @@ export function useIssueActivityDrawer({group, project}: UseIssueActivityDrawerP
               filter: undefined,
             },
           },
-          {preventScrollReset: true}
+          {replace: true, preventScrollReset: true}
         );
       },
       shouldCloseOnLocationChange: newLocation => {

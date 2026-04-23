@@ -1,9 +1,7 @@
 import {DashboardListItemFixture} from 'sentry-fixture/dashboard';
-import {LocationFixture} from 'sentry-fixture/locationFixture';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 import {UserFixture} from 'sentry-fixture/user';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
   render,
   renderGlobalModal,
@@ -22,10 +20,8 @@ describe('Dashboards - DashboardGrid', () => {
   let dashboardUpdateMock: jest.Mock;
   let createMock: jest.Mock;
   const organization = OrganizationFixture({
-    features: ['global-views', 'dashboards-basic', 'dashboards-edit', 'discover-query'],
+    features: ['dashboards-basic', 'dashboards-edit', 'discover-query'],
   });
-
-  const {router} = initializeOrg();
 
   beforeEach(() => {
     MockApiClient.clearMockResponses();
@@ -106,7 +102,6 @@ describe('Dashboards - DashboardGrid', () => {
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={[]}
-        location={router.location}
         columnCount={3}
         rowCount={3}
       />
@@ -124,7 +119,6 @@ describe('Dashboards - DashboardGrid', () => {
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={dashboards}
-        location={router.location}
         columnCount={3}
         rowCount={3}
       />
@@ -140,7 +134,6 @@ describe('Dashboards - DashboardGrid', () => {
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={dashboards}
-        location={router.location}
         columnCount={3}
         rowCount={3}
       />
@@ -156,21 +149,28 @@ describe('Dashboards - DashboardGrid', () => {
     );
   });
 
-  it('persists global selection headers', () => {
+  it('does not forward query params from the list page to dashboard links', () => {
     render(
       <DashboardGrid
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={dashboards}
-        location={{...LocationFixture(), query: {statsPeriod: '7d'}}}
         columnCount={3}
         rowCount={3}
-      />
+      />,
+      {
+        initialRouterConfig: {
+          location: {
+            pathname: '/organizations/org-slug/dashboards/',
+            query: {sort: 'title', query: 'agent'},
+          },
+        },
+      }
     );
 
     expect(screen.getByRole('link', {name: 'Dashboard 1'})).toHaveAttribute(
       'href',
-      '/organizations/org-slug/dashboard/1/?statsPeriod=7d'
+      '/organizations/org-slug/dashboard/1/'
     );
   });
 
@@ -179,7 +179,6 @@ describe('Dashboards - DashboardGrid', () => {
       <DashboardGrid
         organization={organization}
         dashboards={dashboards}
-        location={{...LocationFixture(), query: {}}}
         onDashboardsChange={dashboardUpdateMock}
         columnCount={3}
         rowCount={3}
@@ -218,7 +217,6 @@ describe('Dashboards - DashboardGrid', () => {
       <DashboardGrid
         organization={organization}
         dashboards={singleDashboard}
-        location={LocationFixture()}
         onDashboardsChange={dashboardUpdateMock}
         columnCount={3}
         rowCount={3}
@@ -237,7 +235,6 @@ describe('Dashboards - DashboardGrid', () => {
       <DashboardGrid
         organization={organization}
         dashboards={dashboards}
-        location={{...LocationFixture(), query: {}}}
         onDashboardsChange={dashboardUpdateMock}
         columnCount={3}
         rowCount={3}
@@ -273,7 +270,6 @@ describe('Dashboards - DashboardGrid', () => {
       <DashboardGrid
         organization={organization}
         dashboards={dashboards}
-        location={{...LocationFixture(), query: {}}}
         onDashboardsChange={dashboardUpdateMock}
         columnCount={3}
         rowCount={3}
@@ -299,7 +295,7 @@ describe('Dashboards - DashboardGrid', () => {
     expect(dashboardUpdateMock).not.toHaveBeenCalled();
   });
 
-  it('renders favorite and unfavorite buttons on cards', () => {
+  it('renders star and unstar buttons on cards', () => {
     dashboards = [
       DashboardListItemFixture({
         id: '1',
@@ -319,7 +315,6 @@ describe('Dashboards - DashboardGrid', () => {
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={dashboards}
-        location={router.location}
         columnCount={3}
         rowCount={3}
       />,
@@ -330,9 +325,9 @@ describe('Dashboards - DashboardGrid', () => {
       }
     );
 
-    expect(screen.queryAllByLabelText('Dashboards Favorite')).toHaveLength(2);
-    expect(screen.queryAllByLabelText('Favorite')).toHaveLength(1);
-    expect(screen.queryAllByLabelText('UnFavorite')).toHaveLength(1);
+    expect(screen.queryAllByLabelText('Starred Dashboard')).toHaveLength(1);
+    expect(screen.queryAllByLabelText('Star')).toHaveLength(1);
+    expect(screen.queryAllByLabelText('Unstar')).toHaveLength(1);
   });
 
   it('makes PUT requests when favoriting', async () => {
@@ -362,7 +357,6 @@ describe('Dashboards - DashboardGrid', () => {
         onDashboardsChange={jest.fn()}
         organization={organization}
         dashboards={dashboards}
-        location={router.location}
         columnCount={3}
         rowCount={3}
       />,
@@ -373,14 +367,14 @@ describe('Dashboards - DashboardGrid', () => {
       }
     );
 
-    expect(screen.queryAllByLabelText('Favorite')).toHaveLength(1);
-    const favoriteButton = screen.queryAllByLabelText('Favorite')[0]!;
+    expect(screen.queryAllByLabelText('Star')).toHaveLength(1);
+    const favoriteButton = screen.queryAllByLabelText('Star')[0]!;
     await userEvent.click(favoriteButton);
 
     await waitFor(() => {
       expect(putMock).toHaveBeenCalled();
     });
 
-    expect(screen.queryAllByLabelText('Favorite')).toHaveLength(0);
+    expect(screen.queryAllByLabelText('Star')).toHaveLength(0);
   });
 });

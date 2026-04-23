@@ -2,31 +2,32 @@ import React, {Fragment, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
 import classNames from 'classnames';
 
+import {TabList, Tabs} from '@sentry/scraps/tabs';
+
 import {
   addErrorMessage,
   addLoadingMessage,
   addSuccessMessage,
 } from 'sentry/actionCreators/indicator';
 import {openModal, type ModalRenderProps} from 'sentry/actionCreators/modal';
-import {TabList, Tabs} from 'sentry/components/core/tabs';
-import FormModel from 'sentry/components/forms/model';
+import {FormModel} from 'sentry/components/forms/model';
 import type {Data, OnSubmitCallback} from 'sentry/components/forms/types';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import ConfigStore from 'sentry/stores/configStore';
-import {space} from 'sentry/styles/space';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {ConfigStore} from 'sentry/stores/configStore';
 import type {DataCategory} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {useApiQuery} from 'sentry/utils/queryClient';
 import {toTitleCase} from 'sentry/utils/string/toTitleCase';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 
-import PlanList from 'admin/components/planList';
+import {PlanList} from 'admin/components/planList';
 import {ANNUAL, MONTHLY} from 'getsentry/constants';
 import type {BillingConfig, Plan, Subscription} from 'getsentry/types';
-import {CheckoutType, PlanTier, ReservedBudgetCategoryType} from 'getsentry/types';
+import {CheckoutType, PlanTier} from 'getsentry/types';
 
-const ALLOWED_TIERS = [PlanTier.MM2, PlanTier.AM1, PlanTier.AM2, PlanTier.AM3];
+const ALLOWED_TIERS = [PlanTier.AM1, PlanTier.AM2, PlanTier.AM3];
 
 type Props = {
   onSuccess: () => void;
@@ -49,32 +50,23 @@ function ChangePlanAction({
   const [formModel] = useState(() => new FormModel());
   const orgId = organization.slug;
 
-  /**
-   * Check if the current subscription has Seer budget enabled
-   */
-  const hasCurrentSeerBudget = useMemo(() => {
-    return (
-      subscription.reservedBudgets?.some(
-        budget =>
-          budget.apiName === ReservedBudgetCategoryType.SEER && budget.reservedBudget > 0
-      ) ?? false
-    );
-  }, [subscription.reservedBudgets]);
-
-  // Initialize Seer budget value in form model
-  React.useEffect(() => {
-    formModel.setValue('seer', hasCurrentSeerBudget);
-  }, [formModel, hasCurrentSeerBudget]);
-
   const api = useApi({persistInFlight: true});
   const {
     data: configs,
     isPending,
     isError,
-  } = useApiQuery<BillingConfig>([`/customers/${orgId}/billing-config/?tier=all`], {
-    // TODO(isabella): pass billing config from customerDetails
-    staleTime: Infinity,
-  });
+  } = useApiQuery<BillingConfig>(
+    [
+      getApiUrl('/customers/$organizationIdOrSlug/billing-config/', {
+        path: {organizationIdOrSlug: orgId},
+      }),
+      {query: {tier: 'all'}},
+    ],
+    {
+      // TODO(isabella): pass billing config from customerDetails
+      staleTime: Infinity,
+    }
+  );
 
   const planList = useMemo(
     () =>
@@ -214,30 +206,10 @@ function ChangePlanAction({
       return;
     }
 
-    // Add Seer budget parameter for AM plans and TEST tier
-    const submitData = {
-      ...data,
-      seer: formModel.getValue('seer'),
-    };
-
-    if (activeTier === PlanTier.MM2) {
-      try {
-        await api.requestPromise(`/customers/${orgId}/`, {
-          method: 'PUT',
-          data: submitData,
-        });
-        onSubmitSuccess(data);
-      } catch (error) {
-        onSubmitError(error);
-      }
-      return;
-    }
-
-    // AM plans use a different endpoint to update plans
     try {
       await api.requestPromise(`/customers/${orgId}/subscription/`, {
         method: 'PUT',
-        data: submitData,
+        data,
       });
       onSubmitSuccess(data);
       onSuccess?.();
@@ -262,10 +234,6 @@ function ChangePlanAction({
       tier: PlanTier.AM1,
     },
     {
-      label: 'MM2',
-      tier: PlanTier.MM2,
-    },
-    {
       label: 'TEST',
       tier: PlanTier.TEST,
     },
@@ -281,7 +249,6 @@ function ChangePlanAction({
             setActiveTier(tab);
             setBillingInterval(MONTHLY);
             setContractInterval(MONTHLY);
-            formModel.setValue('seer', hasCurrentSeerBudget);
           }}
         >
           <TabList>
@@ -308,22 +275,6 @@ function ChangePlanAction({
             Monthly
           </a>
         </li>
-        {activeTier === PlanTier.MM2 && (
-          <li
-            className={classNames({
-              active: contractInterval === ANNUAL && billingInterval === MONTHLY,
-            })}
-          >
-            <a
-              onClick={() => {
-                setBillingInterval(MONTHLY);
-                setContractInterval(ANNUAL);
-              }}
-            >
-              Annual (Contract)
-            </a>
-          </li>
-        )}
         <li
           className={classNames({
             active: contractInterval === ANNUAL && billingInterval === ANNUAL,
@@ -349,7 +300,6 @@ function ChangePlanAction({
         formModel={formModel}
         activePlan={activePlan}
         subscription={subscription}
-        organization={organization}
         onSubmit={handleSubmit}
         onCancel={closeModal}
         onSubmitSuccess={(data: Data) => {
@@ -376,11 +326,9 @@ type Options = {
   subscription: Subscription;
 };
 
-const triggerChangePlanAction = (opts: Options) =>
+export const triggerChangePlanAction = (opts: Options) =>
   openModal(deps => <ChangePlanAction {...deps} {...opts} />);
 
 const TabsContainer = styled('div')`
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
 `;
-
-export default triggerChangePlanAction;

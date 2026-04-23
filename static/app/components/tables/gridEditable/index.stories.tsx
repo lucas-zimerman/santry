@@ -1,12 +1,17 @@
-import {Fragment, useCallback, useState} from 'react';
+import {Fragment, useState} from 'react';
 
-import {Button} from 'sentry/components/core/button';
-import type {GridColumnOrder} from 'sentry/components/tables/gridEditable';
-import GridEditable from 'sentry/components/tables/gridEditable';
-import useQueryBasedColumnResize from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
+import {Button} from '@sentry/scraps/button';
+import {InlineCode} from '@sentry/scraps/code';
+
+import type {
+  GridColumnOrder,
+  GridColumnSortBy,
+} from 'sentry/components/tables/gridEditable';
+import {GridEditable} from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
+import {useStateBasedColumnResize} from 'sentry/components/tables/gridEditable/useStateBasedColumnResize';
 import {backend, frontend} from 'sentry/data/platformCategories';
 import * as Storybook from 'sentry/stories';
-import {useLocation} from 'sentry/utils/useLocation';
 
 interface ExampleDataItem {
   category: 'frontend' | 'backend';
@@ -132,38 +137,12 @@ export default Storybook.story('GridEditable', story => {
     );
   });
 
-  function useStatefulColumnWidths() {
-    const [columnsWithDynamicWidths, setColumns] =
-      useState<Array<GridColumnOrder<keyof ExampleDataItem | 'other'>>>(columnsWithWidth);
-
-    const handleResizeColumn = useCallback(
-      (
-        columnIndex: number,
-        nextColumn: GridColumnOrder<keyof ExampleDataItem | 'other'>
-      ) => {
-        setColumns(prev => {
-          const next = [...prev];
-          next[columnIndex] = nextColumn;
-          return next;
-        });
-      },
-      []
-    );
-
-    return {
-      columns: columnsWithDynamicWidths,
-      handleResizeColumn,
-    };
-  }
-
   story('Column Resize', () => {
-    const statefulColumnResize = useStatefulColumnWidths();
+    const stateBasedColumnResize = useStateBasedColumnResize({columns: columnsWithWidth});
 
-    const location = useLocation();
     const queryBasedColumnResize = useQueryBasedColumnResize({
       columns: columnsWithWidth,
       paramName: 'width',
-      location,
     });
 
     return (
@@ -177,19 +156,20 @@ export default Storybook.story('GridEditable', story => {
             <p>In this example we are saving the column widths to state.</p>
             <GridEditable
               data={data}
-              columnOrder={statefulColumnResize.columns}
+              columnOrder={stateBasedColumnResize.columns}
               columnSortBy={[]}
               grid={{
                 renderHeadCell,
                 renderBodyCell,
-                onResizeColumn: statefulColumnResize.handleResizeColumn,
+                onResizeColumn: stateBasedColumnResize.handleResizeColumn,
               }}
             />
           </div>
           <div>
             <p>
-              In this example we are using <kbd>useQueryBasedColumnResize</kbd>. Notice
-              how the url updates after you drag columns.
+              In this example we are using{' '}
+              <InlineCode>useQueryBasedColumnResize</InlineCode>. Notice how the url
+              updates after you drag columns.
             </p>
             <GridEditable
               data={data}
@@ -223,7 +203,13 @@ export default Storybook.story('GridEditable', story => {
 
   story('Header Augmentations', () => (
     <Storybook.PropMatrix
-      render={GridEditable}
+      render={
+        GridEditable<
+          ExampleDataItem,
+          GridColumnOrder<keyof ExampleDataItem>,
+          GridColumnSortBy<keyof ExampleDataItem>
+        >
+      }
       propMatrix={{
         data: [data],
         columnOrder: [columns],
@@ -233,7 +219,6 @@ export default Storybook.story('GridEditable', story => {
         title: [undefined, 'GridEditable Title'],
       }}
       selectedProps={['title', 'headerButtons']}
-      // Storybook.SizingWindowProps={{display: 'block'}}
     />
   ));
 
@@ -294,7 +279,7 @@ export default Storybook.story('GridEditable', story => {
       <Fragment>
         <p>
           Passing
-          <Storybook.JSXProperty name="fit" value={'max-content'} /> will set the width of
+          <Storybook.JSXProperty name="fit" value="max-content" /> will set the width of
           the grid to fit around the content.
         </p>
         <p>
@@ -303,7 +288,7 @@ export default Storybook.story('GridEditable', story => {
           or be cut off, which might not be desired (ex. when the table has many columns
           or is placed into a small container). One way to control column width this is to
           provide
-          <Storybook.JSXProperty name="minColumnWidth" value={'number'} />, which applies
+          <Storybook.JSXProperty name="minColumnWidth" value="number" />, which applies
           the same width to all columns. However, this does not account for varying widths
           between columns, unlike this prop does.
         </p>

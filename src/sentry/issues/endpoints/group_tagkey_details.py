@@ -5,8 +5,9 @@ from rest_framework.response import Response
 from sentry import tagstore
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.exceptions import ResourceDoesNotExist
+from sentry.api.helpers.deprecation import deprecated
 from sentry.api.helpers.environments import get_environment_id
 from sentry.api.serializers import serialize
 from sentry.apidocs.constants import (
@@ -18,14 +19,16 @@ from sentry.apidocs.constants import (
 from sentry.apidocs.examples.tags_examples import TagsExamples
 from sentry.apidocs.parameters import GlobalParams, IssueParams
 from sentry.apidocs.utils import inline_sentry_response_serializer
+from sentry.constants import CELL_API_DEPRECATION_DATE
 from sentry.issues.endpoints.bases.group import GroupEndpoint
 from sentry.models.environment import Environment
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.tagstore.types import TagKeySerializer, TagKeySerializerResponse
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
 @extend_schema(tags=["Events"])
-@region_silo_endpoint
+@cell_silo_endpoint
 class GroupTagKeyDetailsEndpoint(GroupEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PUBLIC,
@@ -33,13 +36,15 @@ class GroupTagKeyDetailsEndpoint(GroupEndpoint):
     owner = ApiOwner.ISSUES
 
     enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=10, window=1, concurrent_limit=10),
-            RateLimitCategory.USER: RateLimit(limit=10, window=1, concurrent_limit=10),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1, concurrent_limit=5),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=10, window=1, concurrent_limit=10),
+                RateLimitCategory.USER: RateLimit(limit=10, window=1, concurrent_limit=10),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1, concurrent_limit=5),
+            }
         }
-    }
+    )
 
     @extend_schema(
         operation_id="Retrieve Tag Details",
@@ -60,6 +65,7 @@ class GroupTagKeyDetailsEndpoint(GroupEndpoint):
         },
         examples=[TagsExamples.GROUP_TAGKEY_DETAILS],
     )
+    @deprecated(CELL_API_DEPRECATION_DATE, url_names=["sentry-api-0-group-tag-key-details"])
     def get(self, request: Request, group, key) -> Response:
         """
         Returns the values and aggregate details of a given tag key related to an issue.
@@ -84,12 +90,18 @@ class GroupTagKeyDetailsEndpoint(GroupEndpoint):
 
         if group_tag_key.count is None:
             group_tag_key.count = tagstore.backend.get_group_tag_value_count(
-                group, environment_id, lookup_key, tenant_ids=tenant_ids
+                group,
+                environment_id,
+                lookup_key,
+                tenant_ids=tenant_ids,
             )
 
         if group_tag_key.top_values is None:
             group_tag_key.top_values = tagstore.backend.get_top_group_tag_values(
-                group, environment_id, lookup_key, tenant_ids=tenant_ids
+                group,
+                environment_id,
+                lookup_key,
+                tenant_ids=tenant_ids,
             )
 
         return Response(serialize(group_tag_key, request.user, serializer=TagKeySerializer()))

@@ -1,23 +1,30 @@
+import type {ButtonProps} from '@sentry/scraps/button';
+
 import type {ChildrenRenderFn} from 'sentry/components/acl/feature';
 import type {Guide} from 'sentry/components/assistant/types';
-import type {ButtonProps} from 'sentry/components/core/button';
-import type {SelectKey} from 'sentry/components/core/compactSelect';
-import type {FormPanelProps} from 'sentry/components/forms/formPanel';
-import type {JsonFormObject} from 'sentry/components/forms/types';
 import type {ProductSelectionProps} from 'sentry/components/onboarding/productSelection';
-import type {SentryRouteObject} from 'sentry/components/route';
-import type SidebarItem from 'sentry/components/sidebar/sidebarItem';
-import type DateRange from 'sentry/components/timeRangeSelector/dateRange';
-import type SelectorItems from 'sentry/components/timeRangeSelector/selectorItems';
+import type {InstallationInfo} from 'sentry/components/pipeline/pipelineIntegrationGitHub';
+import type {DateRange} from 'sentry/components/timeRangeSelector/dateRange';
+import type {SelectorItems} from 'sentry/components/timeRangeSelector/selectorItems';
+import type {SentryRouteObject} from 'sentry/router/types';
+import type {DataCategory} from 'sentry/types/core';
+import type {Event} from 'sentry/types/event';
+import type {Group} from 'sentry/types/group';
+import type {Project} from 'sentry/types/project';
+import type {UseExperimentOptions, UseExperimentResult} from 'sentry/utils/useExperiment';
+import type {
+  useDefaultMaxPickableDays,
+  useMaxPickableDays,
+} from 'sentry/utils/useMaxPickableDays';
 import type {WidgetType} from 'sentry/views/dashboards/types';
+import type {AutofixContentProps} from 'sentry/views/issueDetails/streamline/sidebar/autofixSection';
 import type {OrganizationStatsProps} from 'sentry/views/organizationStats';
 import type {RouteAnalyticsContext} from 'sentry/views/routeAnalyticsContextProvider';
 import type {NavigationSection} from 'sentry/views/settings/types';
 
 import type {Integration, IntegrationProvider} from './integrations';
-import type {RouteComponentProps, RouteContextInterface} from './legacyReactRouter';
+import type {RouteContextInterface} from './legacyReactRouter';
 import type {Member, Organization, OrgRole} from './organization';
-import type {Project} from './project';
 import type {User} from './user';
 
 // XXX(epurkhiser): A Note about `_`.
@@ -34,7 +41,8 @@ import type {User} from './user';
  * the sentry frontend application.
  */
 export interface Hooks
-  extends RouteHooks,
+  extends
+    RouteHooks,
     ComponentHooks,
     CustomizationHooks,
     AnalyticsHooks,
@@ -55,22 +63,28 @@ export type HookName = keyof Hooks;
  */
 type RouteHooks = {
   'routes:legacy-organization-redirects': RouteObjectHook;
+  'routes:org-settings': RouteObjectHook;
   'routes:root': RouteObjectHook;
-  'routes:settings': RouteObjectHook;
+  'routes:subscription-settings': RouteObjectHook;
+};
+
+type AiSetupConfigrationProps = {
+  event: Event;
+  group: Group;
+  project: Project;
+};
+
+type AiSetupDataConsentProps = {
+  groupId: string;
 };
 
 /**
  * Component specific hooks for DateRange and SelectorItems
  * These components have plan specific overrides in getsentry
  */
-type AiSetupDataConsentProps = {
-  groupId: string;
-};
 type DateRangeProps = React.ComponentProps<typeof DateRange>;
 
 type SelectorItemsProps = React.ComponentProps<typeof SelectorItems>;
-
-type DisabledMemberViewProps = RouteComponentProps<{orgId: string}>;
 
 type MemberListHeaderProps = {
   members: Member[];
@@ -86,7 +100,6 @@ type DisabledMemberTooltipProps = {children: React.ReactNode};
 
 type DashboardHeadersProps = {organization: Organization};
 
-type ReplayFeedbackButton = {children: React.ReactNode};
 type ReplayListPageHeaderProps = {children?: React.ReactNode};
 type ReplayOnboardingAlertProps = {children: React.ReactNode};
 type ReplayOnboardingCTAProps = {children: React.ReactNode; organization: Organization};
@@ -114,10 +127,24 @@ type OrganizationHeaderProps = {
 
 type ProductSelectionAvailabilityProps = Omit<ProductSelectionProps, 'disabledProducts'>;
 
+type DateRangeQueryLimitFooterProps = {
+  description: string;
+  source: string;
+};
+
 type FirstPartyIntegrationAlertProps = {
   integrations: Integration[];
   hideCTA?: boolean;
   wrapWithContainer?: boolean;
+};
+
+export type ScmGithubMultiOrgInstallProps = {
+  installations: InstallationInfo[];
+  onNewInstall: () => void;
+  onSelectInstallation: (installationId: string) => void;
+  isDisabled?: boolean;
+  newInstallDisabled?: boolean;
+  popupBlockedNotice?: React.ReactNode;
 };
 
 type FirstPartyIntegrationAdditionalCTAProps = {
@@ -148,17 +175,8 @@ export type PartnershipAgreementProps = {
 };
 
 export type MembershipSettingsProps = {
-  forms: JsonFormObject[];
-  jsonFormSettings: Omit<
-    FormPanelProps,
-    'highlighted' | 'fields' | 'additionalFieldProps'
-  >;
-};
-export type GithubInstallationInstallButtonProps = {
-  handleSubmit: (e: React.MouseEvent) => void;
-  hasSCMMultiOrg: boolean;
-  installationID: SelectKey;
-  isSaving: boolean;
+  onSave: (previous: Organization, updated: Organization) => void;
+  organization: Organization;
 };
 
 type DashboardLimitProviderProps = {
@@ -176,6 +194,8 @@ type DashboardLimitProviderProps = {
  * Component wrapping hooks
  */
 type ComponentHooks = {
+  'component:ai-configure-seer-quota-sidebar': () => React.ComponentType<AutofixContentProps>;
+  'component:ai-setup-configuration': () => React.ComponentType<AiSetupConfigrationProps>;
   'component:ai-setup-data-consent': () => React.ComponentType<AiSetupDataConsentProps> | null;
   'component:codecov-integration-settings-link': () => React.ComponentType<CodecovLinkProps>;
   'component:confirm-account-close': () => React.ComponentType<AttemptCloseAttemptProps>;
@@ -190,12 +210,12 @@ type ComponentHooks = {
   'component:data-consent-org-creation-checkbox': () => React.ComponentType | null;
   'component:data-consent-priority-learn-more': () => React.ComponentType | null;
   'component:disabled-custom-symbol-sources': () => React.ComponentType<DisabledCustomSymbolSources>;
-  'component:disabled-member': () => React.ComponentType<DisabledMemberViewProps>;
+  'component:disabled-member': () => React.ComponentType;
   'component:disabled-member-tooltip': () => React.ComponentType<DisabledMemberTooltipProps>;
   'component:enhanced-org-stats': () => React.ComponentType<OrganizationStatsProps>;
-  'component:explore-date-range-query-limit-footer': () => React.ComponentType;
   'component:first-party-integration-additional-cta': () => React.ComponentType<FirstPartyIntegrationAdditionalCTAProps>;
   'component:first-party-integration-alert': () => React.ComponentType<FirstPartyIntegrationAlertProps>;
+  'component:header-date-page-filter-upsell-footer': () => React.ComponentType<DateRangeQueryLimitFooterProps>;
   'component:header-date-range': () => React.ComponentType<DateRangeProps>;
   'component:header-selector-items': () => React.ComponentType<SelectorItemsProps>;
   'component:insights-date-range-query-limit-footer': () => React.ComponentType;
@@ -210,12 +230,11 @@ type ComponentHooks = {
   'component:product-selection-availability': () => React.ComponentType<ProductSelectionAvailabilityProps>;
   'component:product-unavailable-cta': () => React.ComponentType<ProductUnavailableCTAProps>;
   'component:profiling-billing-banner': () => React.ComponentType<ProfilingBetaAlertBannerProps>;
-  'component:replay-feedback-button': () => React.ComponentType<ReplayFeedbackButton>;
   'component:replay-list-page-header': () => React.ComponentType<ReplayListPageHeaderProps> | null;
   'component:replay-onboarding-alert': () => React.ComponentType<ReplayOnboardingAlertProps>;
   'component:replay-onboarding-cta': () => React.ComponentType<ReplayOnboardingCTAProps>;
   'component:replay-settings-alert': () => React.ComponentType | null;
-  'component:scm-multi-org-install-button': () => React.ComponentType<GithubInstallationInstallButtonProps>;
+  'component:scm-github-multi-org-install': () => React.ComponentType<ScmGithubMultiOrgInstallProps>;
   'component:seer-beta-closing-alert': () => React.ComponentType;
   'component:superuser-access-category': React.ComponentType<any>;
   'component:superuser-warning': React.ComponentType<any>;
@@ -230,6 +249,7 @@ type ComponentHooks = {
  */
 type CustomizationHooks = {
   'integrations:feature-gates': IntegrationsFeatureGatesHook;
+  'member-invite-button:customization': InviteButtonCustomizationHook;
   'member-invite-modal:customization': InviteModalCustomizationHook;
   'member-invite-modal:organization-roles': (organization: Organization) => OrgRole[];
 };
@@ -286,6 +306,7 @@ type InterfaceChromeHooks = {
   'sidebar:item-label': SidebarItemLabelHook;
   'sidebar:organization-dropdown-menu': GenericOrganizationComponentHook;
   'sidebar:organization-dropdown-menu-bottom': GenericOrganizationComponentHook;
+  'sidebar:seer-config-reminder': GenericOrganizationComponentHook;
   'sidebar:try-business': SidebarTryBusinessHook;
 };
 
@@ -329,7 +350,10 @@ type ReactHooks = {
   'react-hook:use-dashboard-dataset-retention-limit': (props: {
     dataset: WidgetType;
   }) => number;
+  'react-hook:use-default-max-pickable-days': typeof useDefaultMaxPickableDays;
+  'react-hook:use-experiment': (options: UseExperimentOptions) => UseExperimentResult;
   'react-hook:use-get-max-retention-days': () => number | undefined;
+  'react-hook:use-max-pickable-days': typeof useMaxPickableDays;
   'react-hook:use-metric-detector-limit': () => {
     detectorCount: number;
     detectorLimit: number;
@@ -337,6 +361,7 @@ type ReactHooks = {
     isError: boolean;
     isLoading: boolean;
   };
+  'react-hook:use-product-billing-access': (product: DataCategory) => boolean;
 };
 
 /**
@@ -497,17 +522,10 @@ type SidebarItemLabelHook = () => React.ComponentType<{
   id?: string;
 }>;
 
-type SidebarProps = Pick<
-  React.ComponentProps<typeof SidebarItem>,
-  'orientation' | 'collapsed' | 'hasPanel'
->;
-
 /**
  * Returns an additional list of sidebar items.
  */
-type SidebarTryBusinessHook = (
-  opts: SidebarProps & {organization: Organization}
-) => React.ReactNode;
+type SidebarTryBusinessHook = (opts: {organization: Organization}) => React.ReactNode;
 
 /**
  * Provides augmentation of the help modal footer
@@ -598,6 +616,25 @@ type IntegrationsFeatureGatesHook = () => {
   IntegrationFeatures: React.ComponentType<IntegrationFeaturesProps>;
 };
 
+/**
+ * Invite Button customization allows for a render-props component to replace
+ * or intercept props of the button element.
+ */
+type InviteButtonCustomizationHook = () => React.ComponentType<{
+  children: (opts: {
+    /**
+     * Whether the Invite Members button is active or not
+     */
+    disabled: boolean;
+    onTriggerModal: () => void;
+    /**
+     * Whether to display a message that new members must be registered via SSO
+     */
+    isSsoRequired?: boolean;
+  }) => React.ReactElement;
+  onTriggerModal: () => void;
+  organization: Organization;
+}>;
 /**
  * Invite Modal customization allows for a render-prop component to add
  * additional react elements into the modal, and add invite-send middleware.

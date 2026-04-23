@@ -1,14 +1,14 @@
+import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
+import {Container} from '@sentry/scraps/layout';
+
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Event} from 'sentry/types/event';
 import type {Group} from 'sentry/types/group';
 import type {Project} from 'sentry/types/project';
 import {DemoTourStep, SharedTourElement} from 'sentry/utils/demoMode/demoTours';
 import {getConfigForIssueType} from 'sentry/utils/issueTypeConfig';
-import {chonkStyled} from 'sentry/utils/theme/theme.chonk';
-import {withChonk} from 'sentry/utils/theme/withChonk';
 import {
   IssueDetailsTour,
   IssueDetailsTourContext,
@@ -19,13 +19,14 @@ import {
 } from 'sentry/views/issueDetails/streamline/context';
 import {EventDetailsHeader} from 'sentry/views/issueDetails/streamline/eventDetailsHeader';
 import {IssueEventNavigation} from 'sentry/views/issueDetails/streamline/eventNavigation';
-import StreamlinedGroupHeader from 'sentry/views/issueDetails/streamline/header/header';
-import StreamlinedSidebar from 'sentry/views/issueDetails/streamline/sidebar/sidebar';
+import {StreamlinedGroupHeader} from 'sentry/views/issueDetails/streamline/header/header';
+import {StreamlinedSidebar} from 'sentry/views/issueDetails/streamline/sidebar/sidebar';
 import {ToggleSidebar} from 'sentry/views/issueDetails/streamline/sidebar/toggleSidebar';
 import {
   getGroupReprocessingStatus,
   ReprocessingStatus,
 } from 'sentry/views/issueDetails/utils';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 
 function GroupLayoutBody({children}: {children: React.ReactNode}) {
   const {isSidebarOpen} = useIssueDetails();
@@ -52,48 +53,68 @@ export function GroupDetailsLayout({
   const issueTypeConfig = getConfigForIssueType(group, group.project);
   const hasFilterBar = issueTypeConfig.header.filterBar.enabled;
   const groupReprocessingStatus = getGroupReprocessingStatus(group);
+  const hasPageFrameFeature = useHasPageFrameFeature();
+  const theme = useTheme();
 
   return (
     <IssueDetailsContextProvider>
-      <StreamlinedGroupHeader group={group} event={event ?? null} project={project} />
-      <GroupLayoutBody>
-        <div>
-          <SharedTourElement<IssueDetailsTour>
-            id={IssueDetailsTour.AGGREGATES}
-            demoTourId={DemoTourStep.ISSUES_AGGREGATES}
-            tourContext={IssueDetailsTourContext}
-            title={t('View data in aggregate')}
-            description={t(
-              'The top section of the page always displays data in aggregate, including trends over time or tag value distributions.'
-            )}
-            position="bottom"
-          >
-            <EventDetailsHeader event={event} group={group} project={project} />
-          </SharedTourElement>
-          <SharedTourElement<IssueDetailsTour>
-            id={IssueDetailsTour.EVENT_DETAILS}
-            demoTourId={DemoTourStep.ISSUES_EVENT_DETAILS}
-            tourContext={IssueDetailsTourContext}
-            title={t('Explore details')}
-            description={t(
-              'Here we capture everything we know about this data example, like context, trace, breadcrumbs, replay, and tags.'
-            )}
-            position="top"
-          >
-            <GroupContent>
-              {groupReprocessingStatus !== ReprocessingStatus.REPROCESSING && (
-                <NavigationSidebarWrapper hasToggleSidebar={!hasFilterBar}>
-                  <IssueEventNavigation event={event} group={group} />
-                  {/* Since the event details header is disabled, display the sidebar toggle here */}
-                  {!hasFilterBar && <ToggleSidebar size="sm" />}
-                </NavigationSidebarWrapper>
+      <Container
+        display="contents"
+        style={
+          hasPageFrameFeature
+            ? ({'--issue-details-inset': theme.space.xl} as React.CSSProperties)
+            : undefined
+        }
+      >
+        <StreamlinedGroupHeader group={group} event={event ?? null} project={project} />
+        <GroupLayoutBody>
+          <div>
+            <SharedTourElement<IssueDetailsTour>
+              id={IssueDetailsTour.AGGREGATES}
+              demoTourId={DemoTourStep.ISSUES_AGGREGATES}
+              tourContext={IssueDetailsTourContext}
+              title={t('See overall impact')}
+              description={t(
+                "Here you'll see aggregate metrics like frequency over time, total affected users, and where it occurs (environment, release, device, etc.)."
               )}
-              <ContentPadding>{children}</ContentPadding>
-            </GroupContent>
-          </SharedTourElement>
-        </div>
-        <StreamlinedSidebar group={group} event={event} project={project} />
-      </GroupLayoutBody>
+              position="bottom"
+            >
+              {tourProps => (
+                <div {...tourProps}>
+                  <EventDetailsHeader event={event} group={group} project={project} />
+                </div>
+              )}
+            </SharedTourElement>
+            <SharedTourElement<IssueDetailsTour>
+              id={IssueDetailsTour.EVENT_DETAILS}
+              demoTourId={DemoTourStep.ISSUES_EVENT_DETAILS}
+              tourContext={IssueDetailsTourContext}
+              title={t('Investigate the issue')}
+              description={t(
+                'See all the issue context including the stack trace, tags, screenshots and connected replays, logs, and traces.'
+              )}
+              position="top"
+            >
+              {tourProps => (
+                <div {...tourProps}>
+                  <GroupContent>
+                    {groupReprocessingStatus !== ReprocessingStatus.REPROCESSING &&
+                      issueTypeConfig.header.eventNavigation.enabled && (
+                        <NavigationSidebarWrapper hasToggleSidebar={!hasFilterBar}>
+                          <IssueEventNavigation event={event} group={group} />
+                          {/* Since the event details header is disabled, display the sidebar toggle here */}
+                          {!hasFilterBar && <ToggleSidebar size="sm" />}
+                        </NavigationSidebarWrapper>
+                      )}
+                    <ContentPadding>{children}</ContentPadding>
+                  </GroupContent>
+                </div>
+              )}
+            </SharedTourElement>
+          </div>
+          <StreamlinedSidebar group={group} event={event} project={project} />
+        </GroupLayoutBody>
+      </Container>
     </IssueDetailsContextProvider>
   );
 }
@@ -102,7 +123,7 @@ const StyledLayoutBody = styled('div')<{
   sidebarOpen: boolean;
 }>`
   display: grid;
-  background-color: ${p => p.theme.background};
+  background-color: ${p => p.theme.tokens.background.primary};
   grid-template-columns: ${p => (p.sidebarOpen ? 'minmax(100px, 100%) 325px' : '100%')};
 
   @media (max-width: ${p => p.theme.breakpoints.lg}) {
@@ -113,43 +134,31 @@ const StyledLayoutBody = styled('div')<{
 `;
 
 const GroupContent = styled('section')`
-  background: ${p => p.theme.backgroundSecondary};
+  background: ${p => p.theme.tokens.background.secondary};
   display: flex;
   flex-direction: column;
   @media (min-width: ${p => p.theme.breakpoints.lg}) {
-    border-right: 1px solid ${p => p.theme.translucentBorder};
+    border-right: 1px solid ${p => p.theme.tokens.border.primary};
   }
   @media (max-width: ${p => p.theme.breakpoints.lg}) {
-    border-bottom-width: 1px solid ${p => p.theme.translucentBorder};
+    border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
   }
 `;
 
-const NavigationSidebarWrapper = withChonk(
-  styled('div')<{
-    hasToggleSidebar: boolean;
-  }>`
-    position: relative;
-    display: flex;
-    padding: ${p =>
-      p.hasToggleSidebar
-        ? `${p.theme.space.md} 0 ${p.theme.space.sm} ${p.theme.space['2xl']}`
-        : `${p.theme.space.sm} ${p.theme.space['2xl']} ${p.theme.space.xs} ${p.theme.space['2xl']}`};
-  `,
-  chonkStyled('div')<{
-    hasToggleSidebar: boolean;
-  }>`
-    position: relative;
-    display: flex;
-    gap: ${space(0.5)};
-    padding: ${p =>
-      p.hasToggleSidebar
-        ? `${p.theme.space.md} 0 ${p.theme.space.sm} ${p.theme.space['2xl']}`
-        : `${p.theme.space.sm} ${p.theme.space['2xl']} ${p.theme.space.xs} ${p.theme.space['2xl']}`};
-  `
-);
+const NavigationSidebarWrapper = styled('div')<{
+  hasToggleSidebar: boolean;
+}>`
+  position: relative;
+  display: flex;
+  gap: ${p => p.theme.space.xs};
+  padding: ${p =>
+    p.hasToggleSidebar
+      ? `${p.theme.space.md} 0 ${p.theme.space.sm} var(--issue-details-inset, ${p.theme.space['2xl']})`
+      : `${p.theme.space.sm} var(--issue-details-inset, ${p.theme.space['2xl']}) ${p.theme.space.xs} var(--issue-details-inset, ${p.theme.space['2xl']})`};
+`;
 
 const ContentPadding = styled('div')`
   min-height: 100vh;
-  padding: 0 ${p => p.theme.space['2xl']} ${p => p.theme.space['2xl']}
-    ${p => p.theme.space['2xl']};
+  padding: 0 var(--issue-details-inset, ${p => p.theme.space['2xl']})
+    ${p => p.theme.space['2xl']} var(--issue-details-inset, ${p => p.theme.space['2xl']});
 `;

@@ -1,83 +1,90 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Fragment, memo, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import styled from '@emotion/styled';
+import {useQueryClient} from '@tanstack/react-query';
+import type {InfiniteData} from '@tanstack/react-query';
+
+import {Button} from '@sentry/scraps/button';
+import {TabList, Tabs} from '@sentry/scraps/tabs';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
 import {openModal} from 'sentry/actionCreators/modal';
-import {Button} from 'sentry/components/core/button';
-import {TabList, Tabs} from 'sentry/components/core/tabs';
-import {Tooltip} from 'sentry/components/core/tooltip';
 import {DropdownMenu} from 'sentry/components/dropdownMenu';
 import * as Layout from 'sentry/components/layouts/thirds';
-import {DatePageFilter} from 'sentry/components/organizations/datePageFilter';
-import {EnvironmentPageFilter} from 'sentry/components/organizations/environmentPageFilter';
-import {ProjectPageFilter} from 'sentry/components/organizations/projectPageFilter';
-import {SearchQueryBuilderProvider} from 'sentry/components/searchQueryBuilder/context';
-import {IconChevron, IconRefresh, IconTable} from 'sentry/icons';
+import type {DatePageFilterProps} from 'sentry/components/pageFilters/date/datePageFilter';
+import {DatePageFilter} from 'sentry/components/pageFilters/date/datePageFilter';
+import {EnvironmentPageFilter} from 'sentry/components/pageFilters/environment/environmentPageFilter';
+import {ProjectPageFilter} from 'sentry/components/pageFilters/project/projectPageFilter';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {
+  SearchQueryBuilderProvider,
+  useSearchQueryBuilder,
+} from 'sentry/components/searchQueryBuilder/context';
+import {IconChevron, IconEdit, IconRefresh} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import {LogsAnalyticsPageSource} from 'sentry/utils/analytics/logsAnalyticsEvent';
 import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {parsePeriodToHours} from 'sentry/utils/duration/parsePeriodToHours';
+import type {AggregationKey} from 'sentry/utils/fields';
 import {HOUR} from 'sentry/utils/formatters';
-import {useQueryClient, type InfiniteData} from 'sentry/utils/queryClient';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {useChartInterval} from 'sentry/utils/useChartInterval';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {OverChartButtonGroup} from 'sentry/views/explore/components/overChartButtonGroup';
-import SchemaHintsList, {
-  SchemaHintsSection,
-} from 'sentry/views/explore/components/schemaHints/schemaHintsList';
+import {SchemaHintsList} from 'sentry/views/explore/components/schemaHints/schemaHintsList';
 import {SchemaHintsSources} from 'sentry/views/explore/components/schemaHints/schemaHintsUtils';
+import {
+  ExploreBodyContent,
+  ExploreBodySearch,
+  ExploreContentSection,
+  ExploreControlSection,
+  ExploreSchemaHintsSection,
+} from 'sentry/views/explore/components/styles';
+import {TableActionButton} from 'sentry/views/explore/components/tableActionButton';
 import {TraceItemSearchQueryBuilder} from 'sentry/views/explore/components/traceItemSearchQueryBuilder';
 import {defaultLogFields} from 'sentry/views/explore/contexts/logs/fields';
 import {useLogsAutoRefreshEnabled} from 'sentry/views/explore/contexts/logs/logsAutoRefreshContext';
-import {useLogsPageDataQueryResult} from 'sentry/views/explore/contexts/logs/logsPageData';
-import {useLogsSearch} from 'sentry/views/explore/contexts/logs/logsPageParams';
-import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
-import {formatSort} from 'sentry/views/explore/contexts/pageParamsContext/sortBys';
-import {useTraceItemAttributes} from 'sentry/views/explore/contexts/traceItemAttributeContext';
-import {useLogAnalytics} from 'sentry/views/explore/hooks/useAnalytics';
 import {
-  ChartIntervalUnspecifiedStrategy,
-  useChartInterval,
-} from 'sentry/views/explore/hooks/useChartInterval';
+  useLogsPageData,
+  useLogsPageDataQueryResult,
+} from 'sentry/views/explore/contexts/logs/logsPageData';
+import {usePersistedLogsPageParams} from 'sentry/views/explore/contexts/logs/logsPageParams';
+import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
+import {useLogItemAttributes} from 'sentry/views/explore/contexts/traceItemAttributeContext';
+import {useLogAnalytics} from 'sentry/views/explore/hooks/useAnalytics';
 import {
   HiddenColumnEditorLogFields,
   HiddenLogSearchFields,
 } from 'sentry/views/explore/logs/constants';
 import {AutorefreshToggle} from 'sentry/views/explore/logs/logsAutoRefresh';
+import {LogsDownSamplingAlert} from 'sentry/views/explore/logs/logsDownsamplingAlert';
 import {LogsExportButton} from 'sentry/views/explore/logs/logsExport';
 import {LogsGraph} from 'sentry/views/explore/logs/logsGraph';
+import {LogsTabSeerComboBox} from 'sentry/views/explore/logs/logsTabSeerComboBox';
 import {LogsToolbar} from 'sentry/views/explore/logs/logsToolbar';
 import {
-  BottomSectionBody,
-  FilterBarContainer,
+  LogsFilterSection,
   LogsGraphContainer,
   LogsItemContainer,
   LogsSidebarCollapseButton,
   LogsTableActionsContainer,
   StyledPageFilterBar,
   TableActionsContainer,
-  ToolbarAndBodyContainer,
-  ToolbarContainer,
-  TopSectionBody,
 } from 'sentry/views/explore/logs/styles';
 import {LogsAggregateTable} from 'sentry/views/explore/logs/tables/logsAggregateTable';
 import {LogsInfiniteTable} from 'sentry/views/explore/logs/tables/logsInfiniteTable';
-import {
-  OurLogKnownFieldKey,
-  type OurLogsResponseItem,
-} from 'sentry/views/explore/logs/types';
-import {
-  getIngestDelayFilterValue,
-  getMaxIngestDelayTimestamp,
-  useLogsAggregatesQuery,
-} from 'sentry/views/explore/logs/useLogsQuery';
+import {type OurLogsResponseItem} from 'sentry/views/explore/logs/types';
+import {useLogsAggregatesTable} from 'sentry/views/explore/logs/useLogsAggregatesTable';
+import {getMaxIngestDelayTimestamp} from 'sentry/views/explore/logs/useLogsQuery';
 import {useLogsSearchQueryBuilderProps} from 'sentry/views/explore/logs/useLogsSearchQueryBuilderProps';
+import {useLogsTimeseries} from 'sentry/views/explore/logs/useLogsTimeseries';
 import {usePersistentLogsPageParameters} from 'sentry/views/explore/logs/usePersistentLogsPageParameters';
 import {useSaveAsItems} from 'sentry/views/explore/logs/useSaveAsItems';
-import {useStreamingTimeseriesResult} from 'sentry/views/explore/logs/useStreamingTimeseriesResult';
 import {calculateAverageLogsPerSecond} from 'sentry/views/explore/logs/utils';
 import {
   useQueryParamsAggregateSortBys,
   useQueryParamsFields,
   useQueryParamsGroupBys,
   useQueryParamsMode,
+  useQueryParamsSearch,
   useQueryParamsSortBys,
   useQueryParamsTopEventsLimit,
   useQueryParamsVisualizes,
@@ -85,23 +92,158 @@ import {
   useSetQueryParamsMode,
 } from 'sentry/views/explore/queryParams/context';
 import {ColumnEditorModal} from 'sentry/views/explore/tables/columnEditorModal';
-import type {PickableDays} from 'sentry/views/explore/utils';
-import {useSortedTimeSeries} from 'sentry/views/insights/common/queries/useSortedTimeSeries';
+import {useRawCounts} from 'sentry/views/explore/useRawCounts';
 
-// eslint-disable-next-line no-restricted-imports,boundaries/element-types
+// eslint-disable-next-line boundaries/dependencies
 import QuotaExceededAlert from 'getsentry/components/performance/quotaExceededAlert';
 
-type LogsTabProps = PickableDays;
+import type {TableExpando} from './tables/useTableExpando';
+type LogsTabProps = {
+  datePageFilterProps: DatePageFilterProps;
+  tableExpando: TableExpando;
+};
 
-export function LogsTabContent({
-  defaultPeriod,
-  maxPickableDays,
-  relativeOptions,
-}: LogsTabProps) {
-  const pageFilters = usePageFilters();
-  const logsSearch = useLogsSearch();
-  const fields = useQueryParamsFields();
+interface LogsSearchBarProps {
+  tracesItemSearchQueryBuilderProps: Parameters<typeof TraceItemSearchQueryBuilder>[0];
+}
+
+function LogsSearchBar({tracesItemSearchQueryBuilderProps}: LogsSearchBarProps) {
+  const {displayAskSeer} = useSearchQueryBuilder();
+
+  if (displayAskSeer) {
+    return <LogsTabSeerComboBox />;
+  }
+
+  return <TraceItemSearchQueryBuilder {...tracesItemSearchQueryBuilderProps} />;
+}
+
+interface LogsSearchSectionProps {
+  datePageFilterProps: DatePageFilterProps;
+  searchBarWidthOffset?: number;
+}
+
+const LogsSearchSection = memo(function LogsSearchSection({
+  datePageFilterProps,
+  searchBarWidthOffset,
+}: LogsSearchSectionProps) {
+  const logsSearch = useQueryParamsSearch();
+  const logsSearchQuery = logsSearch.formatString();
   const groupBys = useQueryParamsGroupBys();
+  const mode = useQueryParamsMode();
+  const [interval] = useChartInterval();
+  const visualizes = useQueryParamsVisualizes();
+  const aggregateSortBys = useQueryParamsAggregateSortBys();
+
+  const saveAsItems = useSaveAsItems({
+    visualizes,
+    groupBys,
+    interval,
+    mode,
+    search: logsSearch,
+    sortBys: aggregateSortBys,
+  });
+
+  const {
+    attributes: stringAttributes,
+    isLoading: stringAttributesLoading,
+    secondaryAliases: stringSecondaryAliases,
+  } = useLogItemAttributes({}, 'string', HiddenLogSearchFields);
+  const {
+    attributes: numberAttributes,
+    isLoading: numberAttributesLoading,
+    secondaryAliases: numberSecondaryAliases,
+  } = useLogItemAttributes({}, 'number', HiddenLogSearchFields);
+  const {
+    attributes: booleanAttributes,
+    isLoading: booleanAttributesLoading,
+    secondaryAliases: booleanSecondaryAliases,
+  } = useLogItemAttributes({}, 'boolean', HiddenLogSearchFields);
+
+  const {tracesItemSearchQueryBuilderProps, searchQueryBuilderProviderProps} =
+    useLogsSearchQueryBuilderProps({
+      booleanAttributes,
+      numberAttributes,
+      stringAttributes,
+      booleanSecondaryAliases,
+      numberSecondaryAliases,
+      stringSecondaryAliases,
+    });
+
+  const supportedAggregates = useMemo<AggregationKey[]>(() => {
+    return [];
+  }, []);
+
+  const organization = useOrganization();
+  const hasTranslateEndpoint = organization.features.includes(
+    'gen-ai-search-agent-translate'
+  );
+
+  return (
+    <SearchQueryBuilderProvider
+      enableAISearch={hasTranslateEndpoint}
+      aiSearchBadgeType="beta"
+      {...searchQueryBuilderProviderProps}
+    >
+      <ExploreBodySearch>
+        <Layout.Main width="full">
+          <LogsFilterSection>
+            <StyledPageFilterBar condensed>
+              <ProjectPageFilter />
+              <EnvironmentPageFilter />
+              <DatePageFilter
+                {...datePageFilterProps}
+                searchPlaceholder={t('Custom range: 2h, 4d, 3w')}
+              />
+            </StyledPageFilterBar>
+            <LogsSearchBar
+              tracesItemSearchQueryBuilderProps={tracesItemSearchQueryBuilderProps}
+            />
+            {saveAsItems.length > 0 && (
+              <DropdownMenu
+                items={saveAsItems}
+                trigger={triggerProps => (
+                  <Button
+                    {...triggerProps}
+                    priority="primary"
+                    aria-label={t('Save as')}
+                    onClick={e => {
+                      e.stopPropagation();
+                      e.preventDefault();
+
+                      triggerProps.onClick?.(e);
+                    }}
+                  >
+                    {t('Save as')}
+                  </Button>
+                )}
+              />
+            )}
+          </LogsFilterSection>
+          <ExploreSchemaHintsSection>
+            <SchemaHintsList
+              supportedAggregates={supportedAggregates}
+              booleanTags={booleanAttributes}
+              numberTags={numberAttributes}
+              stringTags={stringAttributes}
+              isLoading={
+                numberAttributesLoading ||
+                stringAttributesLoading ||
+                booleanAttributesLoading
+              }
+              exploreQuery={logsSearchQuery}
+              source={SchemaHintsSources.LOGS}
+              searchBarWidthOffset={searchBarWidthOffset}
+            />
+          </ExploreSchemaHintsSection>
+        </Layout.Main>
+      </ExploreBodySearch>
+    </SearchQueryBuilderProvider>
+  );
+});
+
+export function LogsTabContent({datePageFilterProps, tableExpando}: LogsTabProps) {
+  const pageFilters = usePageFilters();
+  const fields = useQueryParamsFields();
   const mode = useQueryParamsMode();
   const topEventsLimit = useQueryParamsTopEventsLimit();
   const queryClient = useQueryClient();
@@ -111,25 +253,17 @@ export function LogsTabContent({
   const setFields = useSetQueryParamsFields();
   const tableData = useLogsPageDataQueryResult();
   const autorefreshEnabled = useLogsAutoRefreshEnabled();
+
   const [timeseriesIngestDelay, setTimeseriesIngestDelay] = useState<bigint>(
     getMaxIngestDelayTimestamp()
   );
+  const [_, setPersistentParams] = usePersistedLogsPageParams();
   usePersistentLogsPageParameters(); // persist the columns you chose last time
 
   const columnEditorButtonRef = useRef<HTMLButtonElement>(null);
   // always use the smallest interval possible (the most bars)
-  const [interval] = useChartInterval({
-    unspecifiedStrategy: ChartIntervalUnspecifiedStrategy.USE_SMALLEST,
-  });
+  const [interval] = useChartInterval();
   const visualizes = useQueryParamsVisualizes();
-
-  const orderby: string | string[] | undefined = useMemo(() => {
-    if (!aggregateSortBys.length) {
-      return undefined;
-    }
-
-    return aggregateSortBys.map(formatSort);
-  }, [aggregateSortBys]);
 
   const [sidebarOpen, setSidebarOpen] = useState(mode === Mode.AGGREGATE);
 
@@ -139,53 +273,38 @@ export function LogsTabContent({
     }
   }, [autorefreshEnabled]);
 
-  const search = useMemo(() => {
-    const newSearch = logsSearch.copy();
-    // We need to add the delay filter to ensure the table data and the graph data are as close as possible when merging buckets.
-    newSearch.addFilterValue(
-      OurLogKnownFieldKey.TIMESTAMP_PRECISE,
-      getIngestDelayFilterValue(timeseriesIngestDelay)
-    );
-    return newSearch;
-  }, [logsSearch, timeseriesIngestDelay]);
+  const rawLogCounts = useRawCounts({dataset: DiscoverDatasets.OURLOGS});
 
   const yAxes = useMemo(() => {
     const uniqueYAxes = new Set(visualizes.map(visualize => visualize.yAxis));
     return [...uniqueYAxes];
   }, [visualizes]);
 
-  const _timeseriesResult = useSortedTimeSeries(
-    {
-      search,
-      yAxis: yAxes,
-      interval,
-      fields: [...groupBys.filter(Boolean), ...yAxes],
-      topEvents: topEventsLimit,
-      orderby,
-    },
-    'explore.ourlogs.main-chart',
-    DiscoverDatasets.OURLOGS
-  );
-  const timeseriesResult = useStreamingTimeseriesResult(
+  const timeseriesResult = useLogsTimeseries({
+    enabled: true,
     tableData,
-    _timeseriesResult,
-    timeseriesIngestDelay
-  );
-  const aggregatesTableResult = useLogsAggregatesQuery({
-    disabled: mode !== Mode.AGGREGATE,
+    timeseriesIngestDelay,
+  });
+  const aggregatesTableResult = useLogsAggregatesTable({
+    enabled: mode === Mode.AGGREGATE,
     limit: 50,
   });
 
-  const {
-    attributes: stringAttributes,
-    isLoading: stringAttributesLoading,
-    secondaryAliases: stringSecondaryAliases,
-  } = useTraceItemAttributes('string', HiddenLogSearchFields);
-  const {
-    attributes: numberAttributes,
-    isLoading: numberAttributesLoading,
-    secondaryAliases: numberSecondaryAliases,
-  } = useTraceItemAttributes('number', HiddenLogSearchFields);
+  const {attributes: stringAttributes} = useLogItemAttributes(
+    {},
+    'string',
+    HiddenLogSearchFields
+  );
+  const {attributes: numberAttributes} = useLogItemAttributes(
+    {},
+    'number',
+    HiddenLogSearchFields
+  );
+  const {attributes: booleanAttributes} = useLogItemAttributes(
+    {},
+    'boolean',
+    HiddenLogSearchFields
+  );
 
   const averageLogsPerSecond = calculateAverageLogsPerSecond(timeseriesResult);
 
@@ -202,19 +321,7 @@ export function LogsTabContent({
     aggregateSortBys,
   });
 
-  const {tracesItemSearchQueryBuilderProps, searchQueryBuilderProviderProps} =
-    useLogsSearchQueryBuilderProps({
-      numberAttributes,
-      stringAttributes,
-      numberSecondaryAliases,
-      stringSecondaryAliases,
-    });
-
-  const supportedAggregates = useMemo(() => {
-    return [];
-  }, []);
-
-  const refreshTable = useCallback(async () => {
+  const refreshTable = async () => {
     setTimeseriesIngestDelay(getMaxIngestDelayTimestamp());
     queryClient.setQueryData(
       tableData.queryKey,
@@ -230,131 +337,105 @@ export function LogsTabContent({
       }
     );
     await tableData.refetch();
-  }, [tableData, queryClient]);
+  };
 
-  const openColumnEditor = useCallback(() => {
+  const onColumnsChange = useCallback(
+    (newFields: string[]) => {
+      setPersistentParams(prev => ({
+        ...prev,
+        fields: newFields,
+      }));
+      setFields(newFields);
+    },
+    [setFields, setPersistentParams]
+  );
+
+  const openColumnEditor = () => {
     openModal(
       modalProps => (
         <ColumnEditorModal
           {...modalProps}
           columns={fields.slice()}
-          onColumnsChange={setFields}
+          onColumnsChange={onColumnsChange}
           stringTags={stringAttributes}
           numberTags={numberAttributes}
+          booleanTags={booleanAttributes}
           hiddenKeys={HiddenColumnEditorLogFields}
           handleReset={() => {
-            setFields(defaultLogFields());
+            onColumnsChange(defaultLogFields());
           }}
           isDocsButtonHidden
         />
       ),
       {closeEvents: 'escape-key'}
     );
-  }, [fields, setFields, stringAttributes, numberAttributes]);
+  };
 
   const tableTab = mode === Mode.AGGREGATE ? 'aggregates' : 'logs';
-  const setTableTab = useCallback(
-    (tab: 'aggregates' | 'logs') => {
-      if (tab === 'aggregates') {
-        setSidebarOpen(true);
-        setMode(Mode.AGGREGATE);
-      } else {
-        setMode(Mode.SAMPLES);
-      }
-    },
-    [setSidebarOpen, setMode]
-  );
-
-  const saveAsItems = useSaveAsItems({
-    visualizes,
-    groupBys,
-    interval,
-    mode,
-    search: logsSearch,
-    sortBys: aggregateSortBys,
-  });
+  const setTableTab = (tab: 'aggregates' | 'logs') => {
+    if (tab === 'aggregates') {
+      setSidebarOpen(true);
+      setMode(Mode.AGGREGATE);
+    } else {
+      setMode(Mode.SAMPLES);
+    }
+  };
 
   /**
-   * Manual refresh doesn't work for longer relative periods as it hits cacheing. Only allow manual refresh if the relative period or absolute time range is less than 1 day.
+   * Manual refresh doesn't work for longer relative periods as it hits cacheing. Only allow manual refresh if the relative period or absolute time range is less than 1 hour.
    */
-  const canManuallyRefresh = useMemo(() => {
+  const {canManuallyRefresh, manualRefreshDisabledReason} = useMemo(() => {
     if (pageFilters.selection.datetime.period) {
       const parsedPeriod = parsePeriodToHours(pageFilters.selection.datetime.period);
       if (parsedPeriod <= 1) {
-        return true;
+        return {canManuallyRefresh: true, manualRefreshDisabledReason: null};
       }
+      return {
+        canManuallyRefresh: false,
+        manualRefreshDisabledReason: t(
+          'Manual refresh is only available for time ranges of 1 hour or less.'
+        ),
+      };
     }
 
     if (pageFilters.selection.datetime.start && pageFilters.selection.datetime.end) {
       const start = new Date(pageFilters.selection.datetime.start).getTime();
       const end = new Date(pageFilters.selection.datetime.end).getTime();
       const difference = end - start;
-      const oneDayInMs = HOUR;
-      return difference <= oneDayInMs;
+      const oneHourInMs = HOUR;
+      if (difference <= oneHourInMs) {
+        return {canManuallyRefresh: true, manualRefreshDisabledReason: null};
+      }
+      return {
+        canManuallyRefresh: false,
+        manualRefreshDisabledReason: t(
+          'Manual refresh is only available for time ranges of 1 hour or less.'
+        ),
+      };
     }
 
-    return false;
+    return {
+      canManuallyRefresh: false,
+      manualRefreshDisabledReason: t(
+        'Manual refresh is only available for time ranges of 1 hour or less.'
+      ),
+    };
   }, [pageFilters.selection.datetime]);
 
+  const {infiniteLogsQueryResult} = useLogsPageData();
+
   return (
-    <SearchQueryBuilderProvider {...searchQueryBuilderProviderProps}>
-      <TopSectionBody noRowGap>
-        <Layout.Main fullWidth>
-          <FilterBarContainer>
-            <StyledPageFilterBar condensed>
-              <ProjectPageFilter />
-              <EnvironmentPageFilter />
-              <DatePageFilter
-                defaultPeriod={defaultPeriod}
-                maxPickableDays={maxPickableDays}
-                relativeOptions={relativeOptions}
-                searchPlaceholder={t('Custom range: 2h, 4d, 3w')}
-              />
-            </StyledPageFilterBar>
-            <TraceItemSearchQueryBuilder {...tracesItemSearchQueryBuilderProps} />
-            {saveAsItems.length > 0 && (
-              <DropdownMenu
-                items={saveAsItems}
-                trigger={triggerProps => (
-                  <Button
-                    {...triggerProps}
-                    priority="default"
-                    aria-label={t('Save as')}
-                    onClick={e => {
-                      e.stopPropagation();
-                      e.preventDefault();
-
-                      triggerProps.onClick?.(e);
-                    }}
-                  >
-                    {t('Save as')}
-                  </Button>
-                )}
-              />
-            )}
-          </FilterBarContainer>
-          <SchemaHintsSection>
-            <SchemaHintsList
-              supportedAggregates={supportedAggregates}
-              numberTags={numberAttributes}
-              stringTags={stringAttributes}
-              isLoading={numberAttributesLoading || stringAttributesLoading}
-              exploreQuery={logsSearch.formatString()}
-              source={SchemaHintsSources.LOGS}
-              searchBarWidthOffset={columnEditorButtonRef.current?.clientWidth}
-            />
-          </SchemaHintsSection>
-        </Layout.Main>
-      </TopSectionBody>
-
-      <ToolbarAndBodyContainer sidebarOpen={sidebarOpen}>
-        {sidebarOpen && (
-          <ToolbarContainer sidebarOpen={sidebarOpen}>
-            <LogsToolbar stringTags={stringAttributes} numberTags={numberAttributes} />
-          </ToolbarContainer>
-        )}
-        <BottomSectionBody sidebarOpen={sidebarOpen}>
-          <section>
+    <Fragment>
+      <LogsSearchSection
+        datePageFilterProps={datePageFilterProps}
+        searchBarWidthOffset={columnEditorButtonRef.current?.clientWidth}
+      />
+      <ViewportConstrainedBody>
+        <LogsControlSection expanded={sidebarOpen}>
+          {sidebarOpen ? <LogsToolbar /> : null}
+        </LogsControlSection>
+        <ExploreContentSection gap="md">
+          {!tableExpando.expanded && (
             <OverChartButtonGroup>
               <LogsSidebarCollapseButton
                 sidebarOpen={sidebarOpen}
@@ -377,54 +458,92 @@ export function LogsTabContent({
                 error={tableData.error}
               />
             </OverChartButtonGroup>
-            {!tableData.isPending && tableData.isEmpty && (
-              <QuotaExceededAlert referrer="logs-explore" traceItemDataset="logs" />
-            )}
+          )}
+          <QuotaExceededAlert referrer="logs-explore" traceItemDataset="logs" />
+          <LogsDownSamplingAlert
+            timeseriesResult={timeseriesResult}
+            tableResult={infiniteLogsQueryResult}
+          />
+          {!tableExpando.expanded && (
             <LogsGraphContainer>
-              <LogsGraph timeseriesResult={timeseriesResult} />
+              <LogsGraph
+                rawLogCounts={rawLogCounts}
+                timeseriesResult={timeseriesResult}
+              />
             </LogsGraphContainer>
-            <LogsTableActionsContainer>
-              <Tabs value={tableTab} onChange={setTableTab} size="sm">
-                <TabList hideBorder variant="floating">
-                  <TabList.Item key={'logs'}>{t('Logs')}</TabList.Item>
-                  <TabList.Item key={'aggregates'}>{t('Aggregates')}</TabList.Item>
-                </TabList>
-              </Tabs>
+          )}
+          <LogsTableActionsContainer>
+            <Tabs value={tableTab} onChange={setTableTab} size="sm">
+              <TabList variant="floating">
+                <TabList.Item key="logs">{t('Logs')}</TabList.Item>
+                <TabList.Item key="aggregates">{t('Aggregates')}</TabList.Item>
+              </TabList>
+            </Tabs>
+            {tableTab === 'logs' && (
               <TableActionsContainer>
                 <AutorefreshToggle averageLogsPerSecond={averageLogsPerSecond} />
                 <Tooltip
-                  title={t(
-                    'Narrow your time range to 1hr or less for manually refreshing your logs.'
-                  )}
-                  disabled={canManuallyRefresh}
+                  title={manualRefreshDisabledReason}
+                  disabled={!manualRefreshDisabledReason}
+                  skipWrapper
                 >
                   <Button
-                    onClick={refreshTable}
-                    icon={<IconRefresh />}
                     size="sm"
-                    aria-label={t('Refresh')}
+                    icon={<IconRefresh />}
                     disabled={!canManuallyRefresh}
+                    onClick={refreshTable}
+                    aria-label={t('Refresh')}
                   />
                 </Tooltip>
-                <Button onClick={openColumnEditor} icon={<IconTable />} size="sm">
-                  {t('Edit Table')}
-                </Button>
-              </TableActionsContainer>
-            </LogsTableActionsContainer>
-
-            <LogsItemContainer>
-              {tableTab === 'logs' ? (
-                <LogsInfiniteTable
-                  stringAttributes={stringAttributes}
-                  numberAttributes={numberAttributes}
+                <TableActionButton
+                  mobile={
+                    <Button
+                      onClick={openColumnEditor}
+                      icon={<IconEdit />}
+                      size="sm"
+                      aria-label={t('Edit Table')}
+                    />
+                  }
+                  desktop={
+                    <Button
+                      onClick={openColumnEditor}
+                      icon={<IconEdit />}
+                      size="sm"
+                      aria-label={t('Edit Table')}
+                    >
+                      {t('Edit Table')}
+                    </Button>
+                  }
                 />
-              ) : (
-                <LogsAggregateTable aggregatesTableResult={aggregatesTableResult} />
-              )}
-            </LogsItemContainer>
-          </section>
-        </BottomSectionBody>
-      </ToolbarAndBodyContainer>
-    </SearchQueryBuilderProvider>
+                {tableExpando.enabled && tableExpando.button}
+              </TableActionsContainer>
+            )}
+          </LogsTableActionsContainer>
+          <LogsItemContainer>
+            {tableTab === 'logs' ? (
+              <LogsInfiniteTable
+                expanded={tableExpando.expanded}
+                booleanAttributes={booleanAttributes}
+                stringAttributes={stringAttributes}
+                numberAttributes={numberAttributes}
+              />
+            ) : (
+              <LogsAggregateTable aggregatesTableResult={aggregatesTableResult} />
+            )}
+          </LogsItemContainer>
+        </ExploreContentSection>
+      </ViewportConstrainedBody>
+    </Fragment>
   );
 }
+
+const ViewportConstrainedBody = styled(ExploreBodyContent)`
+  flex-direction: row;
+  min-height: 0;
+`;
+
+const LogsControlSection = styled(ExploreControlSection)`
+  @media (max-width: ${p => p.theme.breakpoints.md}) {
+    display: none;
+  }
+`;

@@ -6,7 +6,7 @@ from django.urls import reverse
 from rest_framework.response import Response
 
 from sentry.discover.models import DatasetSourcesTypes, TeamKeyTransaction
-from sentry.models.dashboard_widget import DashboardWidgetTypes
+from sentry.models.dashboard_widget import DashboardWidget, DashboardWidgetTypes
 from sentry.models.projectteam import ProjectTeam
 from sentry.models.transaction_threshold import (
     ProjectTransactionThreshold,
@@ -58,9 +58,7 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTest(MetricsEnhancedPe
     def setUp(self) -> None:
         super().setUp()
         self.transaction_data = load_data("transaction", timestamp=before_now(minutes=1))
-        self.features = {
-            "organizations:performance-use-metrics": True,
-        }
+        self.features: dict[str, bool] = {}
 
     def do_request(self, query, features=None):
         if features is None:
@@ -3340,18 +3338,17 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTest(MetricsEnhancedPe
         transaction_data["tags"].append(("faketag", "foo"))
         self.store_event(transaction_data, self.project.id)
 
-        with self.feature({"organizations:mep-use-default-tags": True}):
-            response = self.do_request(
-                {
-                    "field": [
-                        "faketag",
-                        "count()",
-                    ],
-                    "query": "event.type:transaction",
-                    "dataset": "metricsEnhanced",
-                    "per_page": 50,
-                }
-            )
+        response = self.do_request(
+            {
+                "field": [
+                    "faketag",
+                    "count()",
+                ],
+                "query": "event.type:transaction",
+                "dataset": "metricsEnhanced",
+                "per_page": 50,
+            }
+        )
         assert response.status_code == 200, response.content
         assert len(response.data["data"]) == 1
         data = response.data["data"]
@@ -3869,6 +3866,15 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTestWithOnDemandMetric
         self._assert_on_demand_response(response, expected_on_demand_query=True)
         assert response.data["data"] == [{"count_unique(user)": 2}]
 
+    def test_on_demand_for_metrics_deprecation(self) -> None:
+        params = {"field": ["count()"], "query": "", "yAxis": "count()"}
+        specs = self._create_specs(params)
+        for spec in specs:
+            self.store_on_demand_metric(1, spec=spec)
+        with self.feature("organizations:on-demand-gen-metrics-deprecation-query-prefill"):
+            response = self._make_on_demand_request(params)
+        self._assert_on_demand_response(response)
+
     def test_split_decision_for_errors_widget(self) -> None:
         error_data = load_data("python", timestamp=before_now(minutes=1))
         self.store_event(
@@ -3930,7 +3936,7 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTestWithOnDemandMetric
             "discoverSplitDecision"
         ) is DashboardWidgetTypes.get_type_name(DashboardWidgetTypes.TRANSACTION_LIKE)
 
-        widget.refresh_from_db()
+        widget = DashboardWidget.objects.get(id=widget.id)
         assert widget.discover_widget_split == DashboardWidgetTypes.TRANSACTION_LIKE
         assert widget.dataset_source == DatasetSourcesTypes.INFERRED.value
 
@@ -3958,7 +3964,7 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTestWithOnDemandMetric
             "discoverSplitDecision"
         ) == DashboardWidgetTypes.get_type_name(DashboardWidgetTypes.ERROR_EVENTS)
 
-        widget.refresh_from_db()
+        widget = DashboardWidget.objects.get(id=widget.id)
         assert widget.discover_widget_split == DashboardWidgetTypes.ERROR_EVENTS
         assert widget.dataset_source == DatasetSourcesTypes.FORCED.value
 
@@ -4005,7 +4011,7 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTestWithOnDemandMetric
             "discoverSplitDecision"
         ) == DashboardWidgetTypes.get_type_name(DashboardWidgetTypes.ERROR_EVENTS)
 
-        widget.refresh_from_db()
+        widget = DashboardWidget.objects.get(id=widget.id)
         assert widget.discover_widget_split == DashboardWidgetTypes.ERROR_EVENTS
         assert widget.dataset_source == DatasetSourcesTypes.FORCED.value
 
@@ -4066,115 +4072,41 @@ class OrganizationEventsMetricsEnhancedPerformanceEndpointTestWithOnDemandMetric
         assert response.status_code == 200, response.content
         mock_mep_query.assert_called_once()
 
+    def test_idor_dashboard_widget_from_different_org(self) -> None:
+        """Regression test: Cannot access dashboard widgets from other organizations (IDOR)."""
+        # Create a widget in a DIFFERENT organization with discover_widget_split=None
+        # This means if the widget IS accessed, the split detection would run and UPDATE it
+        other_org = self.create_organization()
+        other_project = self.create_project(organization=other_org)
+        _, other_widget, __ = create_widget(
+            ["count()"],
+            "",
+            other_project,
+            discover_widget_split=None,  # Not yet split - would be updated if accessed
+        )
 
-class OrganizationEventsMetricsEnhancedPerformanceEndpointTestWithMetricLayer(
-    OrganizationEventsMetricsEnhancedPerformanceEndpointTest
-):
-    def setUp(self) -> None:
-        super().setUp()
-        self.features["organizations:use-metrics-layer"] = True
+        # Verify initial state
+        assert other_widget.discover_widget_split is None
 
-    @pytest.mark.xfail(reason="Not supported")
-    def test_time_spent(self) -> None:
-        super().test_time_spent()
+        # Request with cross-org widget ID should NOT access that widget
+        response = self.do_request(
+            {
+                "field": ["count()"],
+                "query": "",
+                "dataset": "metricsEnhanced",
+                "per_page": 50,
+                "dashboardWidgetId": other_widget.id,
+            }
+        )
 
-    @pytest.mark.xfail(reason="Not supported")
-    def test_http_error_rate(self) -> None:
-        super().test_http_error_rate()
+        # Request should succeed (the widget query fails silently and falls back)
+        assert response.status_code == 200, response.content
 
-    @pytest.mark.xfail(reason="Multiple aliases to same column not supported")
-    def test_title_and_transaction_alias(self) -> None:
-        super().test_title_and_transaction_alias()
-
-    @pytest.mark.xfail(reason="Sort order is flaking when querying multiple datasets")
-    def test_maintain_sort_order_across_datasets(self) -> None:
-        """You may need to run this test a few times to get it to fail"""
-        super().test_maintain_sort_order_across_datasets()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_avg_compare(self) -> None:
-        super().test_avg_compare()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_avg_if(self) -> None:
-        super().test_avg_if()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_count_if(self) -> None:
-        super().test_count_if()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_device_class(self) -> None:
-        super().test_device_class()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_device_class_filter(self) -> None:
-        super().test_device_class_filter()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_performance_score(self) -> None:
-        super().test_performance_score()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_performance_score_boundaries(self) -> None:
-        super().test_performance_score_boundaries()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_total_performance_score(self) -> None:
-        super().test_total_performance_score()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_total_performance_score_with_missing_vitals(self) -> None:
-        super().test_total_performance_score_with_missing_vitals()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_invalid_performance_score_column(self) -> None:
-        super().test_invalid_performance_score_column()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_opportunity_score(self) -> None:
-        super().test_opportunity_score()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_opportunity_score_with_fixed_weights_and_missing_vitals(self) -> None:
-        super().test_opportunity_score_with_fixed_weights_and_missing_vitals()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_count_scores(self) -> None:
-        super().test_count_scores()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_count_starts(self) -> None:
-        super().test_count_starts()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_count_starts_returns_all_counts_when_no_arg_is_passed(self) -> None:
-        super().test_count_starts_returns_all_counts_when_no_arg_is_passed()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_timestamp_groupby(self) -> None:
-        super().test_timestamp_groupby()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_on_demand_with_mep(self) -> None:
-        super().test_on_demand_with_mep()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_cache_miss_rate(self) -> None:
-        super().test_cache_miss_rate()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_http_response_rate(self) -> None:
-        super().test_http_response_rate()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_avg_span_self_time(self) -> None:
-        super().test_avg_span_self_time()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_avg_message_receive_latency_gauge_functions(self) -> None:
-        super().test_avg_message_receive_latency_gauge_functions()
-
-    @pytest.mark.xfail(reason="Not implemented")
-    def test_span_module_filter(self) -> None:
-        super().test_span_module_filter()
+        # KEY ASSERTION: The cross-org widget should NOT have been modified
+        # Without IDOR fix: widget is found, split detection runs, discover_widget_split gets set
+        # With IDOR fix: widget not found (wrong org), widget stays unchanged
+        other_widget.refresh_from_db()
+        assert other_widget.discover_widget_split is None, (
+            "Cross-org widget was modified - IDOR vulnerability! "
+            "The widget should not be accessible from a different organization."
+        )

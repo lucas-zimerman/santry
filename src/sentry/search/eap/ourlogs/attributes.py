@@ -3,12 +3,9 @@ from typing import Literal
 from sentry.search.eap import constants
 from sentry.search.eap.columns import (
     ResolvedAttribute,
-    VirtualColumnDefinition,
-    project_context_constructor,
-    project_term_resolver,
     simple_sentry_field,
 )
-from sentry.search.eap.common_columns import COMMON_COLUMNS
+from sentry.search.eap.common_columns import COMMON_COLUMNS, project_virtual_contexts
 from sentry.utils.validators import is_event_id_or_list
 
 OURLOG_ATTRIBUTE_DEFINITIONS = {
@@ -103,16 +100,11 @@ for field in {constants.TIMESTAMP_ALIAS, constants.TIMESTAMP_PRECISE_ALIAS, cons
     assert field in OURLOG_ATTRIBUTE_DEFINITIONS, f"{field} must be defined for ourlogs"
 
 
-OURLOG_VIRTUAL_CONTEXTS = {
-    key: VirtualColumnDefinition(
-        constructor=project_context_constructor(key),
-        term_resolver=project_term_resolver,
-        filter_column="project.id",
-    )
-    for key in constants.PROJECT_FIELDS
-}
+OURLOG_VIRTUAL_CONTEXTS = project_virtual_contexts()
 
-LOGS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS: dict[Literal["string", "number"], dict[str, str]] = {
+LOGS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS: dict[
+    Literal["string", "number", "boolean"], dict[str, str]
+] = {
     "string": {
         definition.internal_name: definition.public_alias
         for definition in OURLOG_ATTRIBUTE_DEFINITIONS.values()
@@ -122,9 +114,15 @@ LOGS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS: dict[Literal["string", "number"], dict[s
         # sentry.service is the project id as a string, but map to project for convenience
         "sentry.service": "project",
     },
+    "boolean": {
+        definition.internal_name: definition.public_alias
+        for definition in OURLOG_ATTRIBUTE_DEFINITIONS.values()
+        if not definition.secondary_alias and definition.search_type == "boolean"
+    },
     "number": {
         definition.internal_name: definition.public_alias
         for definition in OURLOG_ATTRIBUTE_DEFINITIONS.values()
+        # Include boolean attributes because they're stored as numbers (0 or 1)
         if not definition.secondary_alias and definition.search_type != "string"
     },
 }
@@ -149,7 +147,6 @@ LOGS_REPLACEMENT_MAP: dict[str, str] = {
     for definition in OURLOG_ATTRIBUTE_DEFINITIONS.values()
     if definition.replacement
 }
-
 LOGS_INTERNAL_TO_SECONDARY_ALIASES_MAPPING: dict[str, set[str]] = {}
 
 for definition in OURLOG_ATTRIBUTE_DEFINITIONS.values():

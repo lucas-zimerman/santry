@@ -3,7 +3,7 @@ import type {MarkAreaComponentOption} from 'echarts';
 import moment from 'moment-timezone';
 
 import type {AreaChartSeries} from 'sentry/components/charts/areaChart';
-import MarkLine from 'sentry/components/charts/components/markLine';
+import {MarkLine} from 'sentry/components/charts/components/markLine';
 import type {Anomaly} from 'sentry/views/alerts/types';
 import {AnomalyType} from 'sentry/views/alerts/types';
 
@@ -67,7 +67,9 @@ export function getAnomalyMarkerSeries(
             },
           ]);
           // Create a marker line for the start of the anomaly
-          series.push(createAnomalyMarkerSeries(opts.theme.purple300, start));
+          series.push(
+            createAnomalyMarkerSeries(opts.theme.tokens.dataviz.semantic.accent, start)
+          );
         }
         // reset the start/end to capture the next anomaly block
         start = undefined;
@@ -77,7 +79,9 @@ export function getAnomalyMarkerSeries(
   if (start && end) {
     // push in the last block
     // Create a marker line for the start of the anomaly
-    series.push(createAnomalyMarkerSeries(opts.theme.purple300, start));
+    series.push(
+      createAnomalyMarkerSeries(opts.theme.tokens.dataviz.semantic.accent, start)
+    );
     anomalyBlocks.push([
       {
         xAxis: start,
@@ -115,8 +119,8 @@ function createAnomalyMarkerSeries(
   const formatter = ({value}: any) => {
     const time = formatTooltipDate(moment(value), 'MMM D, YYYY LT');
     return [
-      `<div class="tooltip-series"><div>`,
-      `</div>Anomaly Detected</div>`,
+      '<div class="tooltip-series"><div>',
+      '</div>Anomaly Detected</div>',
       `<div class="tooltip-footer">${time}</div>`,
       '<div class="tooltip-arrow"></div>',
     ].join('');

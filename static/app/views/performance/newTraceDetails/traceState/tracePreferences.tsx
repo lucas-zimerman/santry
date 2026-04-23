@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/react';
 
-import clamp from 'sentry/utils/number/clamp';
+import {clamp} from 'sentry/utils/number/clamp';
 import {traceReducerExhaustiveActionCheck} from 'sentry/views/performance/newTraceDetails/traceState';
 
 type TraceLayoutPreferences = 'drawer left' | 'drawer bottom' | 'drawer right';
@@ -57,7 +57,7 @@ export const DEFAULT_TRACE_VIEW_PREFERENCES: TracePreferencesState = {
     parent: true,
     sibling: true,
   },
-  missing_instrumentation: true,
+  missing_instrumentation: false,
   layout: 'drawer right',
   list: {
     width: 0.5,

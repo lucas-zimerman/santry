@@ -1,6 +1,7 @@
 import type {TimeWindowConfig} from 'sentry/components/checkInTimeline/types';
-import {useApiQuery} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {useApiQuery, type UseApiQueryOptions} from 'sentry/utils/queryClient';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import type {CheckStatusBucket} from 'sentry/views/alerts/rules/uptime/types';
 
 interface Options {
@@ -15,10 +16,15 @@ interface Options {
   timeWindowConfig: TimeWindowConfig;
 }
 
+type Result = Record<string, CheckStatusBucket[]>;
+
 /**
  * Fetches Uptime Monitor stats
  */
-export function useUptimeMonitorStats({detectorIds, timeWindowConfig}: Options) {
+export function useUptimeMonitorStats(
+  {detectorIds, timeWindowConfig}: Options,
+  options: Partial<UseApiQueryOptions<Result>> = {}
+) {
   const {start, end, rollupConfig} = timeWindowConfig;
 
   const selectionQuery = {
@@ -28,11 +34,12 @@ export function useUptimeMonitorStats({detectorIds, timeWindowConfig}: Options) 
   };
 
   const organization = useOrganization();
-  const monitorStatsQueryKey = `/organizations/${organization.slug}/uptime-stats/`;
 
-  return useApiQuery<Record<string, CheckStatusBucket[]>>(
+  return useApiQuery<Result>(
     [
-      monitorStatsQueryKey,
+      getApiUrl('/organizations/$organizationIdOrSlug/uptime-stats/', {
+        path: {organizationIdOrSlug: organization.slug},
+      }),
       {
         query: {
           uptimeDetectorId: detectorIds,
@@ -43,6 +50,7 @@ export function useUptimeMonitorStats({detectorIds, timeWindowConfig}: Options) 
     {
       staleTime: 0,
       enabled: rollupConfig.totalBuckets > 0,
+      ...options,
     }
   );
 }

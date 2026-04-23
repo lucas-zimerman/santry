@@ -1,34 +1,35 @@
 import type {ComponentProps} from 'react';
-import {useCallback, useEffect} from 'react';
+import {useEffect} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
 
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {ExternalLink} from '@sentry/scraps/link';
+
 import {addSuccessMessage} from 'sentry/actionCreators/indicator';
 import type {ModalRenderProps} from 'sentry/actionCreators/modal';
 import {closeModal} from 'sentry/actionCreators/modal';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {ExternalLink} from 'sentry/components/core/link';
-import ErrorBoundary from 'sentry/components/errorBoundary';
-import HighlightModalContainer from 'sentry/components/highlightModalContainer';
-import List from 'sentry/components/list';
-import ListItem from 'sentry/components/list/listItem';
-import Placeholder from 'sentry/components/placeholder';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
+import {HighlightModalContainer} from 'sentry/components/highlightModalContainer';
+import {List} from 'sentry/components/list';
+import {ListItem} from 'sentry/components/list/listItem';
+import {Placeholder} from 'sentry/components/placeholder';
 import {t} from 'sentry/locale';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
-import {space} from 'sentry/styles/space';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import type {Organization} from 'sentry/types/organization';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 
-import PlanTable from 'getsentry/components/upgradeNowModal/planTable';
-import usePreviewData from 'getsentry/components/upgradeNowModal/usePreviewData';
-import useUpgradeNowParams from 'getsentry/components/upgradeNowModal/useUpgradeNowParams';
+import {PlanTable} from 'getsentry/components/upgradeNowModal/planTable';
+import {usePreviewData} from 'getsentry/components/upgradeNowModal/usePreviewData';
+import {useUpgradeNowParams} from 'getsentry/components/upgradeNowModal/useUpgradeNowParams';
 import {redirectToManage} from 'getsentry/components/upgradeNowModal/utils';
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
 import type {Subscription} from 'getsentry/types';
-import trackGetsentryAnalytics from 'getsentry/utils/trackGetsentryAnalytics';
+import {trackGetsentryAnalytics} from 'getsentry/utils/trackGetsentryAnalytics';
 
 type Props = ModalRenderProps &
   Omit<ComponentProps<typeof ActionButtons>, 'hasPriceChange'> & {
@@ -122,40 +123,40 @@ const Subheader = styled('h2')`
   text-transform: uppercase;
   font-weight: bold;
 
-  font-size: ${p => p.theme.fontSize.sm};
-  margin-bottom: ${space(1)};
+  font-size: ${p => p.theme.font.size.sm};
+  margin-bottom: ${p => p.theme.space.md};
 `;
 
 const SubheaderPrimary = styled(Subheader)`
-  color: ${p => p.theme.purple300};
+  color: ${p => p.theme.tokens.content.accent};
 `;
 
 const Header = styled('h1')`
-  font-size: ${p => p.theme.headerFontSize};
+  font-size: ${p => p.theme.font.size.xl};
   font-weight: bold;
-  margin: ${space(1)} 0;
+  margin: ${p => p.theme.space.md} 0;
 `;
 
 const ModalLayout = styled('div')`
   display: grid;
-  font-size: ${p => p.theme.fontSize.md};
-  margin-bottom: ${space(2)};
+  font-size: ${p => p.theme.font.size.md};
+  margin-bottom: ${p => p.theme.space.xl};
 
   @media (min-width: ${p => p.theme.breakpoints.sm}) {
     grid-template-columns: 1fr auto;
-    gap: ${space(3)};
+    gap: ${p => p.theme.space['2xl']};
   }
 `;
 
 const UpsellContent = styled('div')`
   grid-column: 1;
   grid-row: 1;
-  font-size: ${p => p.theme.fontSize.lg};
+  font-size: ${p => p.theme.font.size.lg};
 `;
 
 const Note = styled('p')`
-  color: ${p => p.theme.subText};
-  font-size: ${p => p.theme.fontSize.xs};
+  color: ${p => p.theme.tokens.content.secondary};
+  font-size: ${p => p.theme.font.size.xs};
 `;
 
 export const modalCss = css`
@@ -189,7 +190,7 @@ function ActionButtons({
   const api = useApi();
   const {plan, reservations} = useUpgradeNowParams({organization, subscription});
 
-  const onUpdatePlan = useCallback(async () => {
+  const onUpdatePlan = async () => {
     try {
       await api.requestPromise(`/customers/${organization.slug}/subscription/`, {
         method: 'PUT',
@@ -207,7 +208,7 @@ function ActionButtons({
         closeModal();
         addSuccessMessage(t('Subscription Updated!'));
 
-        SidebarPanelStore.activatePanel(SidebarPanelKey.PROFILING_ONBOARDING);
+        OnboardingDrawerStore.open(OnboardingDrawerKey.PROFILING_ONBOARDING);
 
         trackGetsentryAnalytics('upgrade_now.modal.update_now', {
           organization,
@@ -223,9 +224,9 @@ function ActionButtons({
       Sentry.captureException(err);
       redirectToManage(organization);
     }
-  }, [api, organization, subscription, plan, reservations, onComplete, hasPriceChange]);
+  };
 
-  const onClickManageSubscription = useCallback(() => {
+  const onClickManageSubscription = () => {
     trackGetsentryAnalytics('upgrade_now.modal.manage_sub', {
       organization,
       surface: 'profiling',
@@ -234,7 +235,7 @@ function ActionButtons({
       channel: subscription.channel,
       has_billing_scope: organization.access?.includes('org:billing'),
     });
-  }, [organization, subscription]);
+  };
 
   const hasBillingAccess = organization.access?.includes('org:billing');
 
@@ -248,7 +249,7 @@ function ActionButtons({
         {t('Update Now')}
       </Button>
       <LinkButton
-        to={`/settings/${organization.slug}/billing/checkout/?referrer=profiling_onboard_modal-owner-modal`}
+        to={`/checkout/${organization.slug}/?referrer=profiling_onboard_modal-owner-modal`}
         onClick={onClickManageSubscription}
       >
         {t('Manage Subscription')}
@@ -258,9 +259,11 @@ function ActionButtons({
     <ButtonRow>
       <Button
         disabled
-        title={t(
-          'Only members with the role “Owner” or “Billing” can manage subscriptions'
-        )}
+        tooltipProps={{
+          title: t(
+            'Only members with the role "Owner" or "Billing" can manage subscriptions'
+          ),
+        }}
       >
         {t('Manage Subscription')}
       </Button>
@@ -270,7 +273,7 @@ function ActionButtons({
 
 const ButtonRow = styled('p')`
   display: flex;
-  gap: ${space(1.5)};
-  margin-top: ${space(3)};
-  margin-bottom: ${space(2)};
+  gap: ${p => p.theme.space.lg};
+  margin-top: ${p => p.theme.space['2xl']};
+  margin-bottom: ${p => p.theme.space.xl};
 `;

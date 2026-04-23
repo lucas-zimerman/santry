@@ -1,13 +1,12 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
 import {ProjectFixture} from 'sentry-fixture/project';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {render, screen, waitForElementToBeRemoved} from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import type {Organization} from 'sentry/types/organization';
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
 import {useReleaseStats} from 'sentry/utils/useReleaseStats';
 import ResourcesLandingPage from 'sentry/views/insights/browser/resources/views/resourcesLandingPage';
 import {SpanFields, SpanFunction} from 'sentry/views/insights/types';
@@ -24,8 +23,6 @@ const {
 } = SpanFields;
 const {EPM} = SpanFunction;
 
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/usePageFilters');
 jest.mock('sentry/utils/useReleaseStats');
 
 const requestMocks: Record<string, jest.Mock> = {};
@@ -34,6 +31,14 @@ describe('ResourcesLandingPage', () => {
   const organization = OrganizationFixture({
     features: ['insight-modules'],
   });
+
+  const initialRouterConfig = {
+    location: {
+      pathname: `/organizations/${organization.slug}/insights/frontend/assets/`,
+      query: {statsPeriod: '10d'},
+    },
+    route: '/organizations/:orgId/insights/frontend/assets/',
+  };
 
   beforeEach(() => {
     setupMocks();
@@ -45,7 +50,7 @@ describe('ResourcesLandingPage', () => {
   });
 
   it('renders a list of resources', async () => {
-    render(<ResourcesLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<ResourcesLandingPage />, {organization, initialRouterConfig});
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 
     expect(
@@ -58,7 +63,7 @@ describe('ResourcesLandingPage', () => {
   });
 
   it('fetches domain data', async () => {
-    render(<ResourcesLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<ResourcesLandingPage />, {organization, initialRouterConfig});
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 
     expect(requestMocks.domainSelector!.mock.calls).toMatchInlineSnapshot(`
@@ -76,7 +81,9 @@ describe('ResourcesLandingPage', () => {
           "count()",
         ],
         "per_page": 100,
-        "project": [],
+        "project": [
+          "2",
+        ],
         "query": "has:sentry.normalized_description span.category:resource !sentry.normalized_description:"browser-extension://*" span.op:[resource.script,resource.css,resource.font,resource.img]",
         "referrer": "api.insights.get-span-domains",
         "sampling": "NORMAL",
@@ -92,7 +99,7 @@ describe('ResourcesLandingPage', () => {
   });
 
   it('contains correct query in charts', async () => {
-    render(<ResourcesLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<ResourcesLandingPage />, {organization, initialRouterConfig});
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 
     expect(requestMocks.mainTable!.mock.calls).toMatchInlineSnapshot(`
@@ -117,8 +124,10 @@ describe('ResourcesLandingPage', () => {
           "sum(span.self_time)",
         ],
         "per_page": 100,
-        "project": [],
-        "query": "!sentry.normalized_description:"browser-extension://*" ( span.op:resource.script OR file_extension:css OR file_extension:[woff,woff2,ttf,otf,eot] OR file_extension:[jpg,jpeg,png,gif,svg,webp,apng,avif] OR span.op:resource.img ) ",
+        "project": [
+          "2",
+        ],
+        "query": "has:sentry.normalized_description !sentry.normalized_description:"browser-extension://*" ( span.op:resource.script OR file_extension:css OR file_extension:[woff,woff2,ttf,otf,eot] OR file_extension:[jpg,jpeg,png,gif,svg,webp,apng,avif] OR span.op:resource.img ) ",
         "referrer": "api.insights.browser.resources.main-table",
         "sampling": "NORMAL",
         "sort": "-sum(span.self_time)",
@@ -134,34 +143,20 @@ describe('ResourcesLandingPage', () => {
 });
 
 const setupMocks = () => {
-  jest.mocked(usePageFilters).mockReturnValue(
-    PageFilterStateFixture({
-      selection: {
-        datetime: {
-          period: '10d',
-          start: null,
-          end: null,
-          utc: false,
-        },
-        environments: [],
-        projects: [],
-      },
-    })
-  );
-
-  jest.mocked(useLocation).mockReturnValue({
-    pathname: '',
-    search: '',
-    query: {statsPeriod: '10d'},
-    hash: '',
-    state: undefined,
-    action: 'PUSH',
-    key: '',
-  });
-
   ProjectsStore.loadInitialData([
     ProjectFixture({hasInsightsAssets: true, firstTransactionEvent: true}),
   ]);
+
+  PageFiltersStore.onInitializeUrlState({
+    projects: [],
+    environments: [],
+    datetime: {
+      period: '10d',
+      start: null,
+      end: null,
+      utc: false,
+    },
+  });
   jest.mocked(useReleaseStats).mockReturnValue({
     isLoading: false,
     isPending: false,
@@ -251,7 +246,7 @@ const setupMockRequests = (organization: Organization) => {
   });
 
   MockApiClient.addMockResponse({
-    url: `/organizations/${organization.slug}/events-stats/`,
+    url: `/organizations/${organization.slug}/events-timeseries/`,
     method: 'GET',
     match: [
       MockApiClient.matchQuery({
@@ -259,39 +254,19 @@ const setupMockRequests = (organization: Organization) => {
       }),
     ],
     body: {
-      [`${EPM}()`]: {
-        data: [
-          [1699907700, [{count: 7810.2}]],
-          [1699908000, [{count: 1216.8}]],
-        ],
-        meta: {
-          fields: {
-            [`${EPM}()`]: 'rate',
-          },
-          units: {
-            [`${EPM}()`]: '1/second',
-          },
-        },
-      },
-      [`avg(${SPAN_SELF_TIME})`]: {
-        data: [
-          [1699907700, [{count: 1111.2}]],
-          [1699908000, [{count: 2222.8}]],
-        ],
-        meta: {
-          fields: {
-            [`avg(${SPAN_SELF_TIME})`]: 'duration',
-          },
-          units: {
-            [`avg(${SPAN_SELF_TIME})`]: 'millisecond',
-          },
-        },
-      },
+      timeSeries: [
+        TimeSeriesFixture({
+          yAxis: `${EPM}()`,
+        }),
+        TimeSeriesFixture({
+          yAxis: `avg(${SPAN_SELF_TIME})`,
+        }),
+      ],
     },
   });
 
   MockApiClient.addMockResponse({
-    url: `/organizations/org-slug/events/`,
+    url: '/organizations/org-slug/events/',
     method: 'GET',
     match: [
       MockApiClient.matchQuery({

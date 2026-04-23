@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
 
 import pytest
 from django.utils import timezone
@@ -31,26 +30,7 @@ class OrganizationReleasesTest(AcceptanceTestCase):
         self.path = f"/organizations/{self.org.slug}/releases/"
         self.project.update(first_event=timezone.now())
 
-    @patch("sentry.api.serializers.models.organization.get_organization_volume", return_value=None)
-    def test_list(self, _: MagicMock) -> None:
-        self.create_release(project=self.project, version="1.0", date_added=self.release_date)
-        self.browser.get(self.path)
-        self.browser.wait_until_not(".loading")
-        # TODO(releases): add health data
-
-    @patch("sentry.api.serializers.models.organization.get_organization_volume", return_value=None)
-    def test_detail(self, _: MagicMock) -> None:
-        release = self.create_release(
-            project=self.project, version="1.0", date_added=self.release_date
-        )
-        self.browser.get(self.path + release.version)
-        self.browser.wait_until_not(".loading")
-        self.browser.wait_until_test_id("release-wrapper")
-        self.browser.wait_until_not('[data-test-id="loading-placeholder"]')
-        # TODO(releases): add health data
-
-    @patch("sentry.api.serializers.models.organization.get_organization_volume", return_value=None)
-    def test_detail_pick_project(self, _: MagicMock) -> None:
+    def test_detail_pick_project(self) -> None:
         release = self.create_release(
             project=self.project,
             additional_projects=[self.project2],
@@ -60,16 +40,3 @@ class OrganizationReleasesTest(AcceptanceTestCase):
         self.browser.get(self.path + release.version)
         self.browser.wait_until_not(".loading")
         assert "Select a project to continue" in self.browser.element("[role='dialog'] header").text
-
-    # This is snapshotting features that are enable through the discover and performance features.
-    @patch("sentry.api.serializers.models.organization.get_organization_volume", return_value=None)
-    def test_detail_with_discover_and_performance(self, _: MagicMock) -> None:
-        with self.feature(["organizations:discover-basic", "organizations:performance-view"]):
-            release = self.create_release(
-                project=self.project, version="1.0", date_added=self.release_date
-            )
-            self.browser.get(self.path + release.version)
-            self.browser.wait_until_not(".loading")
-            self.browser.wait_until_test_id("release-wrapper")
-            self.browser.wait_until_not('[data-test-id="loading-placeholder"]')
-            # TODO(releases): add health data

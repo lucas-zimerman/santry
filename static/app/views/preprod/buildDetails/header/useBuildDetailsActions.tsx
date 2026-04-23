@@ -1,11 +1,14 @@
 import {useNavigate} from 'react-router-dom';
+import {useMutation} from '@tanstack/react-query';
 
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {openConfirmModal} from 'sentry/components/confirm';
 import {t} from 'sentry/locale';
-import {fetchMutation, useMutation} from 'sentry/utils/queryClient';
-import type RequestError from 'sentry/utils/requestError/requestError';
-import useOrganization from 'sentry/utils/useOrganization';
+import {downloadPreprodArtifact} from 'sentry/utils/downloadPreprodArtifact';
+import {fetchMutation} from 'sentry/utils/queryClient';
+import type {RequestError} from 'sentry/utils/requestError/requestError';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {makeReleasesUrl} from 'sentry/views/preprod/utils/releasesUrl';
+import {handleStaffPermissionError} from 'sentry/views/preprod/utils/staffPermissionError';
 
 interface UseBuildDetailsActionsProps {
   artifactId: string;
@@ -25,14 +28,13 @@ export function useBuildDetailsActions({
   >({
     mutationFn: () => {
       return fetchMutation({
-        url: `/projects/${organization.slug}/${projectId}/preprodartifacts/${artifactId}/delete/`,
+        url: `/organizations/${organization.slug}/preprodartifacts/${artifactId}/delete/`,
         method: 'DELETE',
       });
     },
     onSuccess: () => {
       addSuccessMessage(t('Build deleted successfully'));
-      // TODO(preprod): navigate back to the release page once built?
-      navigate(`/organizations/${organization.slug}/preprod/${projectId}/`);
+      navigate(makeReleasesUrl(organization.slug, projectId));
     },
     onError: () => {
       addErrorMessage(t('Failed to delete build'));
@@ -43,37 +45,75 @@ export function useBuildDetailsActions({
     deleteArtifact();
   };
 
-  const handleDeleteAction = () => {
-    openConfirmModal({
-      message: t(
-        'Are you sure you want to delete this build? This action cannot be undone and will permanently remove all associated files and data.'
-      ),
-      onConfirm: handleDeleteArtifact,
+  const {mutate: rerunAnalysis} = useMutation<void, RequestError>({
+    mutationFn: () => {
+      return fetchMutation({
+        url: '/internal/preprod-artifact/rerun-analysis/',
+        method: 'POST',
+        data: {
+          preprod_artifact_id: artifactId,
+        },
+      });
+    },
+    onSuccess: () => {
+      addSuccessMessage(t('Analysis rerun initiated successfully'));
+    },
+    onError: error => {
+      if (error.status === 403) {
+        handleStaffPermissionError(error.responseJSON?.detail);
+      } else {
+        addErrorMessage(t('Failed to rerun analysis'));
+      }
+    },
+  });
+
+  const handleRerunAction = () => {
+    rerunAnalysis();
+  };
+
+  const handleDownloadAction = async () => {
+    await downloadPreprodArtifact({
+      organizationSlug: organization.slug,
+      projectSlug: projectId,
+      artifactId,
+      onStaffPermissionError: handleStaffPermissionError,
     });
   };
 
-  const handleDownloadAction = () => {
-    try {
-      const downloadUrl = `/api/0/internal/${organization.slug}/${projectId}/files/preprodartifacts/${artifactId}/`;
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = `preprod_artifact_${artifactId}.zip`;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      addSuccessMessage(t('Build downloaded successfully'));
-    } catch (error) {
-      addErrorMessage(t('Failed to download build'));
-    }
+  const {mutate: rerunStatusChecks, isPending: isRerunningStatusChecks} = useMutation<
+    void,
+    RequestError
+  >({
+    mutationFn: () => {
+      return fetchMutation({
+        url: `/organizations/${organization.slug}/preprod-artifact/rerun-status-checks/${artifactId}/`,
+        method: 'POST',
+        data: {
+          check_types: ['size'],
+        },
+      });
+    },
+    onSuccess: () => {
+      addSuccessMessage(t('Status checks rerun initiated successfully'));
+    },
+    onError: () => {
+      addErrorMessage(t('Failed to rerun status checks'));
+    },
+  });
+
+  const handleRerunStatusChecksAction = () => {
+    rerunStatusChecks();
   };
 
   return {
     // State
     isDeletingArtifact,
+    isRerunningStatusChecks,
 
     // Actions
-    handleDeleteAction,
+    handleDeleteArtifact,
+    handleRerunAction,
     handleDownloadAction,
+    handleRerunStatusChecksAction,
   };
 }

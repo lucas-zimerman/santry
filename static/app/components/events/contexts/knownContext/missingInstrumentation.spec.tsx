@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getMissingInstrumentationContextData,
   type MissingInstrumentationContext,
@@ -71,8 +71,8 @@ describe('MissingInstrumentationContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'missing_instrumentation'}
-        alias={'missing_instrumentation'}
+        type="missing_instrumentation"
+        alias="missing_instrumentation"
         value={{...MOCK_MISSING_INSTRUMENTATION_CONTEXT, package: ''}}
       />
     );

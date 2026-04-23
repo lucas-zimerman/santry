@@ -4,7 +4,6 @@ import base64
 import copy
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from django.contrib.auth.models import AnonymousUser
 from django.db import models
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.db.models.expressions import Expression
@@ -34,7 +33,7 @@ from sentry.db.models.manager.base import BaseManager
 from sentry.hybridcloud.models.outbox import ControlOutboxBase
 from sentry.hybridcloud.outbox.base import ControlOutboxProducingModel
 from sentry.hybridcloud.outbox.category import OutboxCategory
-from sentry.types.region import find_regions_for_user
+from sentry.types.cell import find_cells_for_user
 
 if TYPE_CHECKING:
     from sentry.users.models.user import User
@@ -98,9 +97,7 @@ class AuthenticatorManager(BaseManager["Authenticator"]):
             return interface
         return None
 
-    def get_interface(
-        self, user: User | AnonymousUser, interface_id: str
-    ) -> OtpMixin | AuthenticatorInterface:
+    def get_interface(self, user: User, interface_id: str) -> OtpMixin | AuthenticatorInterface:
         """Looks up an interface by interface ID for a user.  If the
         interface is not available but configured a
         `Authenticator.DoesNotExist` will be raised just as if the
@@ -187,9 +184,9 @@ class Authenticator(ControlOutboxProducingModel):
         unique_together = (("user", "type"),)
 
     def outboxes_for_update(self, shard_identifier: int | None = None) -> list[ControlOutboxBase]:
-        regions = find_regions_for_user(self.user_id)
+        cells = find_cells_for_user(self.user_id)
         return OutboxCategory.USER_UPDATE.as_control_outboxes(
-            region_names=regions,
+            cell_names=cells,
             shard_identifier=self.user_id,
             object_identifier=self.user_id,
         )

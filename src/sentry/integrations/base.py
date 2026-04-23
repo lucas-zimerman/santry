@@ -27,7 +27,7 @@ from sentry.organizations.services.organization import (
     organization_service,
 )
 from sentry.pipeline.provider import PipelineProvider
-from sentry.pipeline.views.base import PipelineView
+from sentry.pipeline.views.base import ApiPipelineSteps, PipelineView
 from sentry.shared_integrations.constants import (
     ERR_INTERNAL,
     ERR_UNAUTHORIZED,
@@ -46,11 +46,15 @@ from sentry.users.models.identity import Identity
 from sentry.utils.audit import create_audit_entry
 
 if TYPE_CHECKING:
+    from django.contrib.auth.models import AnonymousUser
     from django.utils.functional import _StrPromise
 
     from sentry.integrations.pipeline import IntegrationPipeline  # noqa: F401
     from sentry.integrations.services.integration import RpcOrganizationIntegration
     from sentry.integrations.services.integration.model import RpcIntegration
+    from sentry.models.organization import Organization
+    from sentry.users.models.user import User
+    from sentry.users.services.user import RpcUser
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +228,9 @@ class IntegrationProvider(PipelineProvider["IntegrationPipeline"], abc.ABC):
     can_add = True
     """whether or not the integration installation be initiated from Sentry"""
 
+    allow_multiple = True
+    """whether multiple installations of this integration are allowed per organization"""
+
     can_disable = False
     """
     if the integration can be uninstalled in Sentry, set to False
@@ -237,17 +244,24 @@ class IntegrationProvider(PipelineProvider["IntegrationPipeline"], abc.ABC):
     the installer's identity to the organization integration
     """
 
-    is_region_restricted: bool = False
-    """
-    Returns True if each integration installation can only be connected on one region of Sentry at a
-    time. It will raise an error if any organization from another region attempts to install it.
-    """
+    # TODO(cells): Remove once jira integration is updated and works for multi-cell.
+    # No integrations should be cell restricted.
+    @property
+    def is_cell_restricted(self) -> bool:
+        """
+        Returns True if each integration installation can only be connected on one cell of Sentry at a
+        time. It will raise an error if any organization from another cell attempts to install it.
+        """
+        return False
 
     features: frozenset[IntegrationFeatures] = frozenset()
     """can be any number of IntegrationFeatures"""
 
     requires_feature_flag = False
     """if this is hidden without the feature flag"""
+
+    feature_flag_name: str | None = None
+    """override the feature flag checked when requires_feature_flag is True"""
 
     @classmethod
     def get_installation(
@@ -308,6 +322,14 @@ class IntegrationProvider(PipelineProvider["IntegrationPipeline"], abc.ABC):
         >>>    return []
         """
         raise NotImplementedError
+
+    def get_pipeline_api_steps(self) -> ApiPipelineSteps[IntegrationPipeline] | None:
+        """
+        Return API step objects for this provider's pipeline, or None if API
+        mode is not supported. Override to enable the pipeline API for this
+        integration.
+        """
+        return None
 
     def build_integration(self, state: Mapping[str, Any]) -> IntegrationData:
         """
@@ -377,6 +399,8 @@ class IntegrationInstallation(abc.ABC):
             organization_id=self.organization_id,
         )
         if integration is None:
+            sentry_sdk.set_tag("integration_id", self.model.id)
+            sentry_sdk.set_tag("organization_id", self.organization_id)
             raise OrganizationIntegrationNotFound("missing org_integration")
         return integration
 
@@ -422,6 +446,27 @@ class IntegrationInstallation(abc.ABC):
 
     def get_dynamic_display_information(self) -> Mapping[str, Any] | None:
         return None
+
+    def _get_debug_metadata_keys(self) -> list[str]:
+        """
+        Override this method in integration subclasses to expose additional
+        non-sensitive metadata fields via admin endpoints and logging.
+
+        Returns:
+            A list of keys that are safe to expose for debugging purposes.
+        """
+        return []
+
+    def get_debug_metadata(self) -> dict[str, Any]:
+        """
+        Returns a dictionary containing key value pairs of metadata useful for
+        debugging. These fields should be safe to log.
+
+        Returns:
+            A dictionary containing only the allowlisted metadata fields.
+        """
+        allowed_keys = self._get_debug_metadata_keys()
+        return {key: self.model.metadata.get(key) for key in allowed_keys}
 
     @abc.abstractmethod
     def get_client(self) -> Any:
@@ -508,7 +553,7 @@ class IntegrationInstallation(abc.ABC):
             raise IntegrationError(self.message_from_error(exc)).with_traceback(sys.exc_info()[2])
 
     def is_rate_limited_error(self, exc: ApiError) -> bool:
-        raise NotImplementedError
+        return False
 
     @property
     def metadata(self) -> dict[str, Any]:
@@ -545,3 +590,18 @@ def get_integration_types(provider: str) -> list[IntegrationDomain]:
         if provider in providers:
             types.append(integration_type)
     return types
+
+
+def is_provider_enabled(
+    provider: IntegrationProvider,
+    organization: Organization | RpcOrganization,
+    actor: User | RpcUser | AnonymousUser | None = None,
+) -> bool:
+    from sentry import features
+
+    if not provider.requires_feature_flag:
+        return True
+    flag = provider.feature_flag_name or "organizations:integrations-%s" % provider.key.replace(
+        "_", "-"
+    )
+    return features.has(flag, organization, actor=actor)

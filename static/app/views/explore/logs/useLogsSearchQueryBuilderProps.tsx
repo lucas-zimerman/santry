@@ -1,66 +1,110 @@
-import {useCallback} from 'react';
+import {useCallback, useMemo} from 'react';
 
+import {useCaseInsensitivity} from 'sentry/components/searchQueryBuilder/hooks';
 import type {TagCollection} from 'sentry/types/group';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import usePrevious from 'sentry/utils/usePrevious';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {usePrevious} from 'sentry/utils/usePrevious';
 import {
-  useSearchQueryBuilderProps,
+  useTraceItemSearchQueryBuilderProps,
   type TraceItemSearchQueryBuilderProps,
 } from 'sentry/views/explore/components/traceItemSearchQueryBuilder';
+import {HiddenLogSearchFields} from 'sentry/views/explore/logs/constants';
 import {
-  useLogsSearch,
-  useSetLogsPageParams,
-} from 'sentry/views/explore/contexts/logs/logsPageParams';
-import {useQueryParamsFields} from 'sentry/views/explore/queryParams/context';
+  useQueryParamsFields,
+  useQueryParamsSearch,
+  useSetQueryParams,
+} from 'sentry/views/explore/queryParams/context';
 import {TraceItemDataset} from 'sentry/views/explore/types';
 import {findSuggestedColumns} from 'sentry/views/explore/utils';
 
 export function useLogsSearchQueryBuilderProps({
+  booleanAttributes,
+  booleanSecondaryAliases,
   numberAttributes,
   stringAttributes,
   numberSecondaryAliases,
   stringSecondaryAliases,
 }: {
+  booleanAttributes: TagCollection;
+  booleanSecondaryAliases: TagCollection;
   numberAttributes: TagCollection;
   numberSecondaryAliases: TagCollection;
   stringAttributes: TagCollection;
   stringSecondaryAliases: TagCollection;
 }) {
-  const logsSearch = useLogsSearch();
+  const logsSearch = useQueryParamsSearch();
   const oldLogsSearch = usePrevious(logsSearch);
   const fields = useQueryParamsFields();
-  const setLogsPageParams = useSetLogsPageParams();
+  const setQueryParams = useSetQueryParams();
+  const [caseInsensitive, setCaseInsensitive] = useCaseInsensitivity();
+  const organization = useOrganization();
+  const hasRawSearchReplacement = organization.features.includes(
+    'search-query-builder-raw-search-replacement'
+  );
+
   const onSearch = useCallback(
     (newQuery: string) => {
       const newSearch = new MutableSearch(newQuery);
       const suggestedColumns = findSuggestedColumns(newSearch, oldLogsSearch, {
         numberAttributes,
         stringAttributes,
+        booleanAttributes,
       });
 
       const existingFields = new Set(fields);
       const newColumns = suggestedColumns.filter(col => !existingFields.has(col));
 
-      setLogsPageParams({
-        search: newSearch,
+      setQueryParams({
+        query: newSearch.formatString(),
         fields: newColumns.length ? [...fields, ...newColumns] : undefined,
       });
     },
-    [oldLogsSearch, numberAttributes, stringAttributes, fields, setLogsPageParams]
+    [
+      booleanAttributes,
+      fields,
+      numberAttributes,
+      oldLogsSearch,
+      setQueryParams,
+      stringAttributes,
+    ]
   );
 
-  const tracesItemSearchQueryBuilderProps: TraceItemSearchQueryBuilderProps = {
-    initialQuery: logsSearch.formatString(),
-    searchSource: 'ourlogs',
-    onSearch,
-    numberAttributes,
-    stringAttributes,
-    itemType: TraceItemDataset.LOGS as TraceItemDataset.LOGS,
-    numberSecondaryAliases,
-    stringSecondaryAliases,
-  };
+  const initialQuery = logsSearch.formatString();
+  const tracesItemSearchQueryBuilderProps = useMemo<TraceItemSearchQueryBuilderProps>(
+    () => ({
+      initialQuery,
+      searchSource: 'ourlogs',
+      onSearch,
+      booleanAttributes,
+      numberAttributes,
+      stringAttributes,
+      itemType: TraceItemDataset.LOGS as TraceItemDataset.LOGS,
+      booleanSecondaryAliases,
+      numberSecondaryAliases,
+      stringSecondaryAliases,
+      caseInsensitive,
+      onCaseInsensitiveClick: setCaseInsensitive,
+      replaceRawSearchKeys: hasRawSearchReplacement ? ['message'] : undefined,
+      matchKeySuggestions: [{key: 'trace', valuePattern: /^[0-9a-fA-F]{32}$/}],
+      hiddenAttributeKeys: HiddenLogSearchFields,
+    }),
+    [
+      booleanAttributes,
+      booleanSecondaryAliases,
+      caseInsensitive,
+      hasRawSearchReplacement,
+      initialQuery,
+      numberAttributes,
+      numberSecondaryAliases,
+      onSearch,
+      setCaseInsensitive,
+      stringAttributes,
+      stringSecondaryAliases,
+    ]
+  );
 
-  const searchQueryBuilderProviderProps = useSearchQueryBuilderProps(
+  const searchQueryBuilderProviderProps = useTraceItemSearchQueryBuilderProps(
     tracesItemSearchQueryBuilderProps
   );
 

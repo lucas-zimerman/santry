@@ -1,6 +1,7 @@
 from .activity import *  # NOQA
 from .apiapplication import *  # NOQA
 from .apiauthorization import *  # NOQA
+from .apidevicecode import *  # NOQA
 from .apigrant import *  # NOQA
 from .apikey import *  # NOQA
 from .apiscopes import *  # NOQA
@@ -14,6 +15,7 @@ from .authprovider import *  # NOQA
 from .authproviderreplica import *  # NOQA
 from .avatars import *  # NOQA
 from .broadcast import *  # NOQA
+from .code_review_event import *  # NOQA
 from .commit import *  # NOQA
 from .commitauthor import *  # NOQA
 from .commitcomparison import *  # NOQA
@@ -29,7 +31,6 @@ from .deletedproject import *  # NOQA
 from .deletedteam import *  # NOQA
 from .deploy import *  # NOQA
 from .distribution import *  # NOQA
-from .dynamicsampling import *  # NOQA
 from .environment import *  # NOQA
 from .event import *  # NOQA
 from .eventattachment import *  # NOQA
@@ -49,7 +50,9 @@ from .groupinbox import *  # NOQA
 from .grouplink import *  # NOQA
 from .groupmeta import *  # NOQA
 from .groupopenperiod import *  # NOQA
+from .groupopenperiodactivity import *  # NOQA
 from .groupowner import *  # NOQA
+from .groupreaction import *  # NOQA
 from .groupredirect import *  # NOQA
 from .grouprelease import *  # NOQA
 from .groupresolution import *  # NOQA
@@ -67,6 +70,8 @@ from .latestreporeleaseenvironment import *  # NOQA
 from .options import *  # NOQA
 from .organization import *  # NOQA
 from .organizationaccessrequest import *  # NOQA
+from .organizationavatarreplica import *  # NOQA
+from .organizationcontributors import *  # NOQA
 from .organizationmapping import *  # NOQA
 from .organizationmember import *  # NOQA
 from .organizationmemberinvite import *  # NOQA
@@ -81,12 +86,12 @@ from .project import *  # NOQA
 from .projectbookmark import *  # NOQA
 from .projectcodeowners import *  # NOQA
 from .projectkey import *  # NOQA
+from .projectkeymapping import *  # NOQA
 from .projectownership import *  # NOQA
 from .projectplatform import *  # NOQA
 from .projectredirect import *  # NOQA
 from .projectsdk import *  # NOQA
 from .projectteam import *  # NOQA
-from .projecttemplate import *  # NOQA
 from .promptsactivity import *  # NOQA
 from .pullrequest import *  # NOQA
 from .recentsearch import *  # NOQA
@@ -101,6 +106,7 @@ from .releaseheadcommit import *  # NOQA
 from .releaseprojectenvironment import *  # NOQA
 from .releases.release_project import *  # NOQA
 from .repository import *  # NOQA
+from .repositorysettings import *  # NOQA
 from .rollbackorganization import *  # NOQA
 from .rollbackuser import *  # NOQA
 from .rule import *  # NOQA
@@ -108,6 +114,7 @@ from .rulefirehistory import *  # NOQA
 from .rulesnooze import *  # NOQA
 from .savedsearch import *  # NOQA
 from .search_common import *  # NOQA
+from sentry.seer.models import *  # NOQA
 from .sentryshot import *  # NOQA
 from .sourcemapprocessingissue import *  # NOQA
 from .statistical_detectors import *  # NOQA

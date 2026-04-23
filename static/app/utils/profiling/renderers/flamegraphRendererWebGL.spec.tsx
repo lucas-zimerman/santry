@@ -106,8 +106,8 @@ describe('flamegraphRendererWebGL', () => {
   });
 
   it('inits shaders', () => {
-    const VERTEX = `void main() { gl_Position = vec4(pos, 0.0, 1.0); }`;
-    const FRAGMENT = `void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }`;
+    const VERTEX = 'void main() { gl_Position = vec4(pos, 0.0, 1.0); }';
+    const FRAGMENT = 'void main() { gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }';
 
     const context = makeContextMock({
       createShader: jest.fn().mockReturnValueOnce(VERTEX).mockReturnValueOnce(FRAGMENT),
@@ -140,7 +140,7 @@ describe('flamegraphRendererWebGL', () => {
     const renderer = new FlamegraphRendererWebGL(canvas, flamegraph, theme);
 
     expect(renderer.getColorForFrame(flamegraph.frames[0]!)).toEqual([
-      0.9625, 0.7125, 0.7125,
+      1, 0.6775000000000001, 0.6775000000000001,
     ]);
     expect(
       renderer.getColorForFrame({

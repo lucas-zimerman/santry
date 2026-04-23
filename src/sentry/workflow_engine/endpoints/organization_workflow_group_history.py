@@ -7,7 +7,7 @@ from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.serializers import serialize
 from sentry.api.utils import get_date_range_from_params
 from sentry.apidocs.constants import RESPONSE_FORBIDDEN, RESPONSE_NOT_FOUND, RESPONSE_UNAUTHORIZED
@@ -17,14 +17,14 @@ from sentry.models.organization import Organization
 from sentry.workflow_engine.endpoints.organization_workflow_index import (
     OrganizationWorkflowEndpoint,
 )
-from sentry.workflow_engine.endpoints.serializers import (
+from sentry.workflow_engine.endpoints.serializers.workflow_group_history_serializer import (
     WorkflowGroupHistorySerializer,
     fetch_workflow_groups_paginated,
 )
 from sentry.workflow_engine.models import Workflow
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationWorkflowGroupHistoryEndpoint(OrganizationWorkflowEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.EXPERIMENTAL,

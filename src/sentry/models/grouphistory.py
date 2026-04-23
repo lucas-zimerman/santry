@@ -15,7 +15,7 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
@@ -170,7 +170,7 @@ class GroupHistoryManager(BaseManager["GroupHistory"]):
         )
 
 
-@region_silo_model
+@cell_silo_model
 class GroupHistory(Model):
     """
     This model is used to track certain status changes for groups,
@@ -212,9 +212,6 @@ class GroupHistory(Model):
             (GroupHistoryStatus.ESCALATING, _("Escalating")),
         ),
     )
-    prev_history = FlexibleForeignKey(
-        "sentry.GroupHistory", null=True
-    )  # This field has no immediate use, but might be useful.
     prev_history_date = models.DateTimeField(
         null=True
     )  # This field is used to simplify query calculations.
@@ -313,7 +310,6 @@ def record_group_history(
         user_id=user_id,
         team_id=team_id,
         status=status,
-        prev_history=prev_history,
         prev_history_date=prev_history.date_added if prev_history else None,
     )
 
@@ -352,7 +348,6 @@ def bulk_record_group_history(
                 team_id=team_id,
                 user_id=user_id,
                 status=status,
-                prev_history=get_prev_history(group, status),
                 prev_history_date=get_prev_history_date(group, status),
             )
             for group in groups

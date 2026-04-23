@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import type {CloudResourceContext} from 'sentry/components/events/contexts/knownContext/cloudResource';
 import {getCloudResourceContextData} from 'sentry/components/events/contexts/knownContext/cloudResource';
 
@@ -79,8 +79,8 @@ describe('CloudResourceContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'cloud_resource'}
-        alias={'cloud_resource'}
+        type="cloud_resource"
+        alias="cloud_resource"
         value={{...MOCK_CLOUD_RESOURCE, ['host.id']: ''}}
       />
     );

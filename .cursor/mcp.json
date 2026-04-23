@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "sentry": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "https://mcp.sentry.dev/sse"]
+      "url": "https://mcp.sentry.dev/mcp/sentry?experimental=1"
+    },
+    "devinfra-mcp": {
+      "url": "https://devinfra-mcp.getsentry.net/mcp"
     }
   }
 }

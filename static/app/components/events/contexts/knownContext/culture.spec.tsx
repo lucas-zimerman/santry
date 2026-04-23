@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getCultureContextData,
   type CultureContext,
@@ -69,8 +69,8 @@ describe('CultureContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'culture'}
-        alias={'culture'}
+        type="culture"
+        alias="culture"
         value={{...MOCK_CULTURE_CONTEXT, timezone: ''}}
       />
     );

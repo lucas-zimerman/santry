@@ -27,7 +27,7 @@ from sentry.db.models import (
     LegacyTextJSONField,
     Model,
     UUIDField,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from sentry.models.project import Project
+    from sentry.workflow_engine.models import Detector
 
 MONITOR_CONFIG = {
     "type": "object",
@@ -209,7 +210,7 @@ class ScheduleType:
         return dict(cls.as_choices())[value]
 
 
-@region_silo_model
+@cell_silo_model
 class Monitor(Model):
     __relocation_scope__ = RelocationScope.Organization
 
@@ -235,12 +236,6 @@ class Monitor(Model):
     """
     Organization unique slug of the monitor. Used to identify the monitor in
     check-in payloads. The slug can be changed.
-    """
-
-    is_muted = models.BooleanField(default=False, db_default=False)
-    """
-    Monitor is operating normally but will not produce incidents or produce
-    occurrences into the issues platform.
     """
 
     name = models.CharField(max_length=128)
@@ -330,7 +325,7 @@ class Monitor(Model):
             "name": self.name,
             "status": self.status,
             "config": self.config,
-            "is_muted": self.is_muted,
+            "is_muted": is_monitor_muted(self),
             "slug": self.slug,
             "owner_user_id": self.owner_user_id,
             "owner_team_id": self.owner_team_id,
@@ -439,11 +434,30 @@ class Monitor(Model):
         return old_pk
 
 
-@receiver(pre_save, sender=Monitor)
-def check_organization_monitor_limits(sender, instance, **kwargs):
+def is_monitor_muted(monitor: Monitor) -> bool:
+    """
+    A monitor is considered muted if ALL of its environments are muted.
+    If a monitor has no environments, it is considered unmuted.
+    """
+    env_counts = MonitorEnvironment.objects.filter(monitor_id=monitor.id).aggregate(
+        total=models.Count("id"), muted=models.Count("id", filter=Q(is_muted=True))
+    )
+
+    # If no environments exist, monitor is not muted
+    if env_counts["total"] == 0:
+        return False
+
+    # Monitor is muted only if ALL environments are muted
+    return env_counts["total"] == env_counts["muted"]
+
+
+def check_organization_monitor_limit(organization_id: int) -> None:
+    """
+    Check if adding a new monitor would exceed the organization's monitor limit.
+    Raises MonitorLimitsExceeded if the limit would be exceeded.
+    """
     if (
-        instance.pk is None
-        and sender.objects.filter(organization_id=instance.organization_id).count()
+        Monitor.objects.filter(organization_id=organization_id).count()
         == settings.MAX_MONITORS_PER_ORG
     ):
         raise MonitorLimitsExceeded(
@@ -451,7 +465,13 @@ def check_organization_monitor_limits(sender, instance, **kwargs):
         )
 
 
-@region_silo_model
+@receiver(pre_save, sender=Monitor)
+def check_organization_monitor_limits_on_save(sender, instance, **kwargs):
+    if instance.pk is None:
+        check_organization_monitor_limit(instance.organization_id)
+
+
+@cell_silo_model
 class MonitorCheckIn(Model):
     __relocation_scope__ = RelocationScope.Excluded
 
@@ -617,7 +637,7 @@ class MonitorEnvironmentManager(BaseManager["MonitorEnvironment"]):
         monitor_env, created = MonitorEnvironment.objects.get_or_create(
             monitor=monitor,
             environment_id=environment.id,
-            defaults={"status": MonitorStatus.ACTIVE},
+            defaults={"status": MonitorStatus.ACTIVE, "is_muted": is_monitor_muted(monitor)},
         )
 
         # recompute per-project monitor check-in rate limit quota
@@ -627,7 +647,7 @@ class MonitorEnvironmentManager(BaseManager["MonitorEnvironment"]):
         return monitor_env
 
 
-@region_silo_model
+@cell_silo_model
 class MonitorEnvironment(Model):
     __relocation_scope__ = RelocationScope.Excluded
 
@@ -710,6 +730,9 @@ class MonitorEnvironment(Model):
         except MonitorIncident.DoesNotExist:
             return None
 
+    def build_occurrence_fingerprint(self) -> str:
+        return f"crons:{self.id}"
+
 
 @receiver(pre_save, sender=MonitorEnvironment)
 def check_monitor_environment_limits(sender, instance, **kwargs):
@@ -730,7 +753,7 @@ def default_grouphash():
     return uuid.uuid4().hex
 
 
-@region_silo_model
+@cell_silo_model
 class MonitorIncident(Model):
     __relocation_scope__ = RelocationScope.Excluded
 
@@ -782,7 +805,7 @@ class MonitorIncident(Model):
         ]
 
 
-@region_silo_model
+@cell_silo_model
 class MonitorEnvBrokenDetection(Model):
     """
     Records an instance where we have detected a monitor environment to be
@@ -801,8 +824,18 @@ class MonitorEnvBrokenDetection(Model):
         db_table = "sentry_monitorenvbrokendetection"
 
 
+def get_cron_monitor(detector: Detector) -> Monitor:
+    """
+    Given a detector get the matching cron monitor.
+    """
+    data_source = detector.data_sources.first()
+    assert data_source
+    return Monitor.objects.get(id=int(data_source.source_id))
+
+
 @data_source_type_registry.register(DATA_SOURCE_CRON_MONITOR)
 class CronMonitorDataSourceHandler(DataSourceTypeHandler[Monitor]):
+    @override
     @staticmethod
     def bulk_get_query_object(
         data_sources: list[DataSource],
@@ -823,6 +856,7 @@ class CronMonitorDataSourceHandler(DataSourceTypeHandler[Monitor]):
         }
         return {ds.id: qs_lookup.get(ds.source_id) for ds in data_sources}
 
+    @override
     @staticmethod
     def related_model(instance) -> list[ModelRelation]:
         return [ModelRelation(Monitor, {"id": instance.source_id})]
@@ -837,3 +871,8 @@ class CronMonitorDataSourceHandler(DataSourceTypeHandler[Monitor]):
     def get_current_instance_count(org: Organization) -> int:
         # We don't have a limit at the moment, so no need to count.
         raise NotImplementedError
+
+    @override
+    @staticmethod
+    def get_relocation_model_name() -> str:
+        return "monitors.monitor"

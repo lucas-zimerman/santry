@@ -1,6 +1,9 @@
 import {Fragment} from 'react';
+import {Outlet} from 'react-router-dom';
 
-import SystemAlerts from 'sentry/views/app/systemAlerts';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
+
+import SystemAlerts from './systemAlerts';
 
 interface AppContentProps {
   children: React.ReactNode;
@@ -14,10 +17,25 @@ interface AppContentProps {
  * on all pages.
  */
 export function AppBodyContent({children}: AppContentProps) {
+  const hasPageFrame = useHasPageFrameFeature();
+
   return (
     <Fragment>
-      <SystemAlerts className="messages-container" />
+      {/* In page frame mode, SystemAlerts are rendered below the sticky TopBar
+          in organizationLayout to prevent them from scrolling away out of view */}
+      {!hasPageFrame && <SystemAlerts className="messages-container" />}
       {children}
     </Fragment>
+  );
+}
+
+/**
+ * Route component version that renders children via Outlet.
+ */
+export function AppBodyContentRoute() {
+  return (
+    <AppBodyContent>
+      <Outlet />
+    </AppBodyContent>
   );
 }

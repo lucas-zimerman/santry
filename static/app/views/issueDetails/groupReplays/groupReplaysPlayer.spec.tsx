@@ -1,15 +1,15 @@
 import {duration} from 'moment-timezone';
+import {OrganizationFixture} from 'sentry-fixture/organization';
 import {ProjectFixture} from 'sentry-fixture/project';
 import {RRWebInitFrameEventsFixture} from 'sentry-fixture/replay/rrweb';
 import {ReplayRecordFixture} from 'sentry-fixture/replayRecord';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {render as baseRender, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
 import type {Organization} from 'sentry/types/organization';
-import ReplayReader from 'sentry/utils/replays/replayReader';
+import {ReplayReader} from 'sentry/utils/replays/replayReader';
 
-import GroupReplaysPlayer from './groupReplaysPlayer';
+import {GroupReplaysPlayer} from './groupReplaysPlayer';
 
 jest.mock('sentry/utils/replays/hooks/useLoadReplayReader');
 
@@ -44,20 +44,7 @@ const mockReplay = ReplayReader.factory({
 });
 
 const render = (children: React.ReactElement, orgParams: Partial<Organization> = {}) => {
-  const {organization} = initializeOrg({
-    organization: {slug: mockOrgSlug, ...orgParams},
-    router: {
-      routes: [
-        {path: '/'},
-        {path: '/organizations/:orgId/issues/:groupId/'},
-        {path: 'replays/'},
-      ],
-      location: {
-        pathname: '/organizations/org-slug/replays/',
-        query: {},
-      },
-    },
-  });
+  const organization = OrganizationFixture({slug: mockOrgSlug, ...orgParams});
 
   return baseRender(children, {
     organization,

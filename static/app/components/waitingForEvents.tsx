@@ -1,16 +1,17 @@
-import {useEffect, useState} from 'react';
 import styled from '@emotion/styled';
+import {skipToken, useQuery} from '@tanstack/react-query';
 
 import waitingForEventImg from 'sentry-images/spot/waiting-for-event.svg';
 
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Link} from 'sentry/components/core/link';
+import {LinkButton} from '@sentry/scraps/button';
+import {Link} from '@sentry/scraps/link';
+
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
-import useApi from 'sentry/utils/useApi';
+import {apiOptions} from 'sentry/utils/api/apiOptions';
 import CreateSampleEventButton from 'sentry/views/onboarding/createSampleEventButton';
+import {makeProjectsPathname} from 'sentry/views/projects/pathname';
 
 type Props = {
   org: Organization;
@@ -25,43 +26,27 @@ type Props = {
 };
 
 function WaitingForEvents({org, project, sampleIssueId: sampleIssueIdProp}: Props) {
-  const api = useApi();
-
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<boolean | string>(false);
-  const [sampleIssueId, setSampleIssueId] = useState(sampleIssueIdProp);
-
-  useEffect(() => {
-    async function loadSampleData() {
-      if (!project) {
-        return;
+  const {data, error, isPending} = useQuery(
+    apiOptions.as<Array<{id: string}>>()(
+      '/projects/$organizationIdOrSlug/$projectIdOrSlug/issues/',
+      {
+        staleTime: Infinity,
+        data: {limit: 1},
+        path:
+          project && sampleIssueIdProp === undefined
+            ? {
+                organizationIdOrSlug: org.slug,
+                projectIdOrSlug: project.slug,
+              }
+            : skipToken,
       }
+    )
+  );
 
-      if (sampleIssueIdProp !== undefined) {
-        return;
-      }
-
-      setLoading(true);
-
-      try {
-        const data = await api.requestPromise(
-          `/projects/${org.slug}/${project.slug}/issues/`,
-          {
-            method: 'GET',
-            data: {limit: 1},
-          }
-        );
-        setSampleIssueId((data.length > 0 && data[0].id) || '');
-      } catch (err: any) {
-        setError(err?.responseJSON?.detail ?? true);
-      }
-    }
-
-    loadSampleData();
-  }, [api, org, project, sampleIssueIdProp]);
+  const sampleIssueId = sampleIssueIdProp ?? data?.[0]?.id ?? '';
 
   const sampleLink =
-    project && (loading || error ? null : sampleIssueId) ? (
+    project && (isPending || error ? null : sampleIssueId) ? (
       <p>
         <Link to={`/${org.slug}/${project.slug}/issues/${sampleIssueId}/?sample`}>
           {t('Or see your sample event')}
@@ -74,7 +59,9 @@ function WaitingForEvents({org, project, sampleIssueId: sampleIssueIdProp}: Prop
           project={project}
           source="issues_list"
           disabled={!project}
-          title={project ? undefined : t('Select a project to create a sample event')}
+          tooltipProps={{
+            title: project ? undefined : t('Select a project to create a sample event'),
+          }}
         >
           {t('Create a sample event')}
         </CreateSampleEventButton>
@@ -96,9 +83,10 @@ function WaitingForEvents({org, project, sampleIssueId: sampleIssueIdProp}: Prop
             <LinkButton
               data-test-id="install-instructions"
               priority="primary"
-              to={`/${org.slug}/${project.slug}/getting-started/${
-                project.platform || ''
-              }`}
+              to={makeProjectsPathname({
+                path: `/${project.slug}/getting-started/`,
+                organization: org,
+              })}
             >
               {t('Installation Instructions')}
             </LinkButton>
@@ -115,15 +103,15 @@ export default WaitingForEvents;
 const Wrapper = styled('div')`
   display: flex;
   justify-content: center;
-  font-size: ${p => p.theme.fontSize.lg};
+  font-size: ${p => p.theme.font.size.lg};
   border-radius: 0 0 3px 3px;
-  padding: 40px ${space(3)};
+  padding: 40px ${p => p.theme.space['2xl']};
   min-height: 260px;
 
   @media (max-width: ${p => p.theme.breakpoints.sm}) {
     flex-direction: column;
     align-items: center;
-    padding: ${space(3)};
+    padding: ${p => p.theme.space['2xl']};
     text-align: center;
   }
 `;

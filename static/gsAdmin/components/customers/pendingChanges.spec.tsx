@@ -1,5 +1,6 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
 
+import {MetricHistoryFixture} from 'getsentry-test/fixtures/metricHistory';
 import {PlanDetailsLookupFixture} from 'getsentry-test/fixtures/planDetailsLookup';
 import {PlanMigrationFixture} from 'getsentry-test/fixtures/planMigration';
 import {SeerReservedBudgetFixture} from 'getsentry-test/fixtures/reservedBudget';
@@ -11,7 +12,7 @@ import {render, screen} from 'sentry-test/reactTestingLibrary';
 
 import {DataCategory} from 'sentry/types/core';
 
-import PendingChanges from 'admin/components/customers/pendingChanges';
+import {PendingChanges} from 'admin/components/customers/pendingChanges';
 import {PendingChangesFixture} from 'getsentry/__fixtures__/pendingChanges';
 import {PlanFixture} from 'getsentry/__fixtures__/plan';
 import {ANNUAL, RESERVED_BUDGET_QUOTA} from 'getsentry/constants';
@@ -46,6 +47,7 @@ describe('PendingChanges', () => {
           name: 'Team (Enterprise)',
           contractInterval: 'annual',
           billingInterval: 'annual',
+          budgetTerm: 'on-demand',
         }),
         plan: 'am1_team_ent',
         planName: 'Team (Enterprise)',
@@ -87,7 +89,7 @@ describe('PendingChanges', () => {
     expect(container).toHaveTextContent(
       'The following changes will take effect on Feb 16, 2022'
     );
-    expect(container).toHaveTextContent('On-demand maximum — $0.00 → $500.00');
+    expect(container).toHaveTextContent('On-Demand maximum — $0.00 → $500.00');
   });
 
   it('renders pending changes with all categories', () => {
@@ -100,6 +102,7 @@ describe('PendingChanges', () => {
           name: 'Team (Enterprise)',
           contractInterval: 'annual',
           billingInterval: 'annual',
+          budgetTerm: 'on-demand',
         }),
         plan: 'am3_team_ent',
         planName: 'Team (Enterprise)',
@@ -140,7 +143,7 @@ describe('PendingChanges', () => {
     expect(container).toHaveTextContent(
       'The following changes will take effect on Feb 20, 2024'
     );
-    expect(container).toHaveTextContent('On-demand maximum — $0.00 → $500.00');
+    expect(container).toHaveTextContent('On-Demand maximum — $0.00 → $500.00');
   });
 
   it('renders on-demand budgets', () => {
@@ -189,7 +192,7 @@ describe('PendingChanges', () => {
       'The following changes will take effect on Feb 16, 2022'
     );
     expect(container).toHaveTextContent(
-      'On-demand budget — shared on-demand budget of $100 → per-category on-demand budget (errors at $3, transactions at $2, and attachments at $1)'
+      'On-Demand Budget — shared on-demand budget of $100 → per-category on-demand budget (errors at $3, transactions at $2, and attachments at $1)'
     );
   });
 
@@ -234,7 +237,7 @@ describe('PendingChanges', () => {
     );
     expect(container).toHaveTextContent('Plan changes — Developer → Team (Enterprise)');
     expect(container).toHaveTextContent(
-      'On-demand budget — shared on-demand budget of $100 → per-category on-demand budget (errors at $3, transactions at $2, and attachments at $1)'
+      'On-Demand Budget — shared on-demand budget of $100 → per-category on-demand budget (errors at $3, transactions at $2, and attachments at $1)'
     );
     expect(screen.getAllByText(/The following changes will take effect on/)).toHaveLength(
       1
@@ -298,7 +301,7 @@ describe('PendingChanges', () => {
     expect(container).toHaveTextContent(
       'Reserved performance units — 100,000 → 0 transactions'
     );
-    expect(container).toHaveTextContent('Reserved replays — 500 → 50 replays');
+    expect(container).toHaveTextContent('Reserved replays — 500 → 50 session replays');
     expect(container).toHaveTextContent('Reserved spans — 0 → 10,000,000 spans');
 
     // no actual changes
@@ -478,7 +481,7 @@ describe('PendingChanges', () => {
       'Reserved accepted spans — reserved budget → 10,000,000 spans'
     );
     expect(container).toHaveTextContent(
-      'Reserved stored spans — reserved budget → 0 spansIndexed'
+      'Reserved stored spans — reserved budget → 0 stored spans'
     );
     expect(container).not.toHaveTextContent('Reserved spans —');
     expect(container).not.toHaveTextContent('Reserved spansIndexed —');
@@ -487,7 +490,7 @@ describe('PendingChanges', () => {
       'Reserved cost-per-event for spans — $0.01000000 → None'
     );
     expect(container).toHaveTextContent(
-      'Reserved cost-per-event for spansIndexed — $0.02000000 → None'
+      'Reserved cost-per-event for stored spans — $0.02000000 → None'
     );
     expect(container).toHaveTextContent(
       'Reserved budgets — $0.00 for seer budget, $100,000.00 for spans budget → $0.00 for seer budget'
@@ -500,5 +503,31 @@ describe('PendingChanges', () => {
     });
     const {container} = render(<PendingChanges subscription={subscription} />);
     expect(container).not.toHaveTextContent('Reserved budgets —');
+  });
+
+  it('renders size analysis reserved changes with human-readable name', () => {
+    const subscription = SubscriptionFixture({
+      organization: OrganizationFixture(),
+      pendingChanges: PendingChangesFixture({
+        planDetails: PlanDetailsLookupFixture('am3_business'),
+        plan: 'am3_business',
+        planName: 'Business',
+        reserved: {
+          sizeAnalyses: 100,
+        },
+      }),
+    });
+    subscription.categories = {
+      ...subscription.categories,
+      sizeAnalyses: MetricHistoryFixture({
+        category: 'sizeAnalyses' as any,
+        reserved: 50,
+      }),
+    };
+
+    const {container} = render(<PendingChanges subscription={subscription} />);
+    expect(container).toHaveTextContent('Reserved size analysis builds');
+    expect(container).toHaveTextContent('50 → 100');
+    expect(container).not.toHaveTextContent('sizeAnalyses');
   });
 });

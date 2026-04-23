@@ -1,16 +1,12 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFiltersFixture, PageFilterStateFixture} from 'sentry-fixture/pageFilters';
+import {PageFiltersFixture} from 'sentry-fixture/pageFilters';
 import {ProjectFixture} from 'sentry-fixture/project';
 
-import {render, screen} from 'sentry-test/reactTestingLibrary';
+import {render, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import FrontendOverviewPage from 'sentry/views/insights/pages/frontend/frontendOverviewPage';
-
-jest.mock('sentry/utils/usePageFilters');
-jest.mock('sentry/utils/useLocation');
 
 const organization = OrganizationFixture({features: ['performance-view']});
 const pageFilterSelection = PageFiltersFixture({
@@ -37,45 +33,58 @@ describe('FrontendOverviewPage', () => {
 
   describe('data fetching', () => {
     it('fetches correct data with unknown + frontend platform', async () => {
-      render(<FrontendOverviewPage />, {organization});
+      render(<FrontendOverviewPage />, {
+        organization,
+        initialRouterConfig: {
+          location: {
+            pathname: '/insights/frontend/',
+            query: {statsPeriod: '10d', project: '1'},
+          },
+          route: '/insights/frontend/',
+        },
+      });
 
-      expect(await screen.findByRole('heading', {level: 1})).toHaveTextContent(
-        'Frontend'
-      );
-      expect(mainTableApiCall).toHaveBeenCalledWith(
-        '/organizations/org-slug/events/',
-        expect.objectContaining({
-          query: expect.objectContaining({
-            query:
-              '( ( transaction.op:pageload OR transaction.op:navigation OR transaction.op:ui.render OR transaction.op:interaction ) OR project.id:[1] ) !transaction.op:http.server event.type:transaction',
-          }),
-        })
+      await waitFor(() =>
+        expect(mainTableApiCall).toHaveBeenCalledWith(
+          '/organizations/org-slug/events/',
+          expect.objectContaining({
+            query: expect.objectContaining({
+              query:
+                '( ( transaction.op:pageload OR transaction.op:navigation OR transaction.op:ui.render OR transaction.op:interaction ) OR project.id:[1] ) !transaction.op:http.server event.type:transaction',
+            }),
+          })
+        )
       );
     });
 
     it('fetches correct data with unknown platform', async () => {
-      jest.mocked(usePageFilters).mockReturnValue(
-        PageFilterStateFixture({
-          selection: {
-            datetime: pageFilterSelection.datetime,
-            environments: [],
-            projects: [2],
+      PageFiltersStore.onInitializeUrlState(
+        PageFiltersFixture({
+          ...pageFilterSelection,
+          projects: [2],
+        })
+      );
+      render(<FrontendOverviewPage />, {
+        organization,
+        initialRouterConfig: {
+          location: {
+            pathname: '/insights/frontend/',
+            query: {statsPeriod: '10d', project: '2'},
           },
-        })
-      );
-      render(<FrontendOverviewPage />, {organization});
+          route: '/insights/frontend/',
+        },
+      });
 
-      expect(await screen.findByRole('heading', {level: 1})).toHaveTextContent(
-        'Frontend'
-      );
-      expect(mainTableApiCall).toHaveBeenCalledWith(
-        '/organizations/org-slug/events/',
-        expect.objectContaining({
-          query: expect.objectContaining({
-            query:
-              '( ( transaction.op:pageload OR transaction.op:navigation OR transaction.op:ui.render OR transaction.op:interaction ) ) !transaction.op:http.server event.type:transaction',
-          }),
-        })
+      await waitFor(() =>
+        expect(mainTableApiCall).toHaveBeenCalledWith(
+          '/organizations/org-slug/events/',
+          expect.objectContaining({
+            query: expect.objectContaining({
+              query:
+                '( ( transaction.op:pageload OR transaction.op:navigation OR transaction.op:ui.render OR transaction.op:interaction ) ) !transaction.op:http.server event.type:transaction',
+            }),
+          })
+        )
       );
     });
   });
@@ -176,18 +185,6 @@ const setupMocks = () => {
     body: [],
   });
 
-  jest.mocked(useLocation).mockReturnValue({
-    pathname: '/insights/backend/http/',
-    search: '',
-    query: {statsPeriod: '10d', 'span.domain': 'git', project: '1'},
-    hash: '',
-    state: undefined,
-    action: 'PUSH',
-    key: '',
-  });
-
-  jest
-    .mocked(usePageFilters)
-    .mockReturnValue(PageFilterStateFixture({selection: pageFilterSelection}));
+  PageFiltersStore.onInitializeUrlState(pageFilterSelection);
   ProjectsStore.loadInitialData(projects);
 };

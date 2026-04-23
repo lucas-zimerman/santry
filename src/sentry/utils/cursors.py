@@ -37,12 +37,7 @@ class Cursor:
         )
 
     def __repr__(self) -> str:
-        return "<{}: value={} offset={} is_prev={}>".format(
-            type(self).__name__,
-            self.value,
-            self.offset,
-            int(self.is_prev),
-        )
+        return f"<{type(self).__name__}: value={self.value} offset={self.offset} is_prev={int(self.is_prev)}>"
 
     def __bool__(self) -> bool:
         return bool(self.has_results)
@@ -75,6 +70,18 @@ class StringCursor(Cursor):
         try:
             value = bits[0]
             return StringCursor(value, int(bits[1]), int(bits[2]))
+        except (TypeError, ValueError):
+            raise ValueError
+
+
+class EAPPageTokenCursor(Cursor):
+    @classmethod
+    def from_string(cls, cursor_str: str) -> Cursor:
+        bits = cursor_str.split(":")
+        if len(bits) != 3:
+            raise ValueError
+        try:
+            return Cursor(bits[0], int(bits[1]), int(bits[2]))
         except (TypeError, ValueError):
             raise ValueError
 

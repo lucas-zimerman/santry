@@ -1,6 +1,7 @@
 import styled from '@emotion/styled';
 
-import {getEscapedKey} from 'sentry/components/core/compactSelect/utils';
+import {getEscapedKey} from '@sentry/scraps/compactSelect';
+
 import {ASK_SEER_ITEM_KEY} from 'sentry/components/searchQueryBuilder/askSeer/askSeerOption';
 import {FormattedQuery} from 'sentry/components/searchQueryBuilder/formattedQuery';
 import {KeyDescription} from 'sentry/components/searchQueryBuilder/tokens/filterKeyListBox/keyDescription';
@@ -9,6 +10,7 @@ import type {
   FilterValueItem,
   KeyItem,
   KeySectionItem,
+  LogicFilterItem,
   RawSearchFilterIsValueItem,
   RawSearchItem,
   RecentQueryItem,
@@ -17,7 +19,11 @@ import type {
   FieldDefinitionGetter,
   FilterKeySection,
 } from 'sentry/components/searchQueryBuilder/types';
-import type {Token, TokenResult} from 'sentry/components/searchSyntax/parser';
+import {
+  WildcardOperators,
+  type Token,
+  type TokenResult,
+} from 'sentry/components/searchSyntax/parser';
 import {
   getKeyLabel as getFilterKeyLabel,
   getKeyName,
@@ -27,15 +33,18 @@ import type {RecentSearch, Tag, TagCollection} from 'sentry/types/group';
 import {defined} from 'sentry/utils';
 import {FieldKind, prettifyTagKey, type FieldDefinition} from 'sentry/utils/fields';
 import {escapeFilterValue} from 'sentry/utils/tokenizeSearch';
+import {TypeBadge} from 'sentry/views/explore/components/typeBadge';
 
 export const ALL_CATEGORY_VALUE = '__all';
 export const RECENT_SEARCH_CATEGORY_VALUE = '__recent_searches';
+export const LOGIC_CATEGORY_VALUE = '__logic_filters';
 
 export const ALL_CATEGORY = {value: ALL_CATEGORY_VALUE, label: t('All')};
 export const RECENT_SEARCH_CATEGORY = {
   value: RECENT_SEARCH_CATEGORY_VALUE,
   label: t('Recent'),
 };
+export const LOGIC_CATEGORY = {value: LOGIC_CATEGORY_VALUE, label: t('Logic')};
 
 const RECENT_FILTER_KEY_PREFIX = '__recent_filter_key__';
 const RECENT_QUERY_KEY_PREFIX = '__recent_search__';
@@ -110,8 +119,14 @@ export function createItem(
     textValue: tag.key,
     hideCheck: true,
     showDetailsInOverlay: true,
-    details: <KeyDescription tag={tag} />,
+    details: () => <KeyDescription tag={tag} />,
     type: 'item',
+    trailingItems: () => (
+      <TypeBadge
+        kind={(fieldDefinition?.kind || tag?.kind) ?? undefined}
+        valueType={fieldDefinition?.valueType ?? undefined}
+      />
+    ),
   };
 }
 
@@ -127,7 +142,7 @@ export function createRawSearchItem(value: string): RawSearchItem {
     showDetailsInOverlay: true,
     details: null,
     type: 'raw-search',
-    trailingItems: <SearchItemLabel>{t('Raw Search')}</SearchItemLabel>,
+    trailingItems: () => <SearchItemLabel>{t('Raw Search')}</SearchItemLabel>,
   };
 }
 
@@ -150,10 +165,51 @@ export function createRawSearchFilterIsValueItem(
   key: string,
   value: string
 ): RawSearchFilterIsValueItem {
-  const filter = `${key}:${escapeFilterValue(value)}`;
+  const filter = `${key}:${value}`;
 
   return {
-    key: getEscapedKey(`${key}:${value}`),
+    key: getEscapedKey(filter),
+    label: <FormattedQuery query={filter} />,
+    value: filter,
+    textValue: filter,
+    hideCheck: true,
+    showDetailsInOverlay: true,
+    details: null,
+    type: 'raw-search-filter-is-value',
+  };
+}
+
+export function createRawSearchFilterContainsValueItem(
+  key: string,
+  value: string
+): RawSearchFilterIsValueItem {
+  const filter = `${key}:${WildcardOperators.CONTAINS}${escapeFilterValue(value)}`;
+
+  return {
+    key: getEscapedKey(`${key}:${WildcardOperators.CONTAINS}${value}`),
+    label: <FormattedQuery query={filter} />,
+    value: filter,
+    textValue: filter,
+    hideCheck: true,
+    showDetailsInOverlay: true,
+    details: null,
+    type: 'raw-search-filter-is-value',
+  };
+}
+
+export function createRawSearchFuzzyFilterItem(
+  key: string,
+  value: string
+): RawSearchFilterIsValueItem {
+  const formattedValue = escapeFilterValue(value)
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replaceAll(' ', '*');
+
+  const filter = `${key}:*${formattedValue}*`;
+
+  return {
+    key: getEscapedKey(filter),
     label: <FormattedQuery query={filter} />,
     value: filter,
     textValue: filter,
@@ -204,14 +260,31 @@ export function createAskSeerItem(): AskSeerItem {
   return {
     key: getEscapedKey(ASK_SEER_ITEM_KEY),
     value: ASK_SEER_ITEM_KEY,
-    textValue: 'Ask Seer',
+    textValue: 'Ask AI to build your query',
     type: 'ask-seer' as const,
-    label: t('Ask Seer'),
+    label: t('Ask AI to build your query'),
     hideCheck: true,
   };
 }
 
+export function createLogicFilterItem({
+  value,
+}: {
+  value: 'AND' | 'OR' | '(' | ')';
+}): LogicFilterItem {
+  return {
+    key: getEscapedKey(value),
+    type: 'logic-filter' as const,
+    value,
+    label: value,
+    textValue: value,
+    hideCheck: true,
+    showDetailsInOverlay: true,
+    trailingItems: () => <TypeBadge isLogicFilter />,
+  };
+}
+
 const SearchItemLabel = styled('div')`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   white-space: nowrap;
 `;

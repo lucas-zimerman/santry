@@ -25,7 +25,7 @@ describe('ErrorDetectorDetails', () => {
       body: [],
     });
     MockApiClient.addMockResponse({
-      url: '/organizations/org-slug/issues/?limit=5&query=is%3Aunresolved%20detector%3A2&statsPeriod=14d',
+      url: '/organizations/org-slug/issues/?limit=5&project=1&query=is%3Aunresolved%20detector%3A2&statsPeriod=14d',
       method: 'GET',
       body: [GroupFixture()],
     });
@@ -33,6 +33,22 @@ describe('ErrorDetectorDetails', () => {
       url: '/organizations/org-slug/users/1/',
       method: 'GET',
       body: UserFixture(),
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/issues/1/',
+      body: GroupFixture(),
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/issues/',
+      body: [],
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/detectors/',
+      body: [],
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/workflows/',
+      body: [],
     });
   });
 

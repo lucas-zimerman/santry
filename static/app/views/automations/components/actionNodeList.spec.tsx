@@ -1,17 +1,21 @@
 import {ActionFixture} from 'sentry-fixture/automations';
+import {MetricDetectorFixture} from 'sentry-fixture/detectors';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 import {ActionHandlerFixture} from 'sentry-fixture/workflowEngine';
 
 import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 import {textWithMarkupMatcher} from 'sentry-test/utils';
 
+import {Form} from 'sentry/components/forms/form';
+import {FormModel} from 'sentry/components/forms/model';
 import {
   ActionGroup,
   ActionType,
   type ActionHandler,
 } from 'sentry/types/workflowEngine/actions';
-import ActionNodeList from 'sentry/views/automations/components/actionNodeList';
+import {ActionNodeList} from 'sentry/views/automations/components/actionNodeList';
 import {AutomationBuilderErrorContext} from 'sentry/views/automations/components/automationBuilderErrorContext';
+import {AutomationFormProvider} from 'sentry/views/automations/components/forms/context';
 
 const slackActionHandler = ActionHandlerFixture();
 const actionHandlers: ActionHandler[] = [
@@ -44,6 +48,13 @@ const actionHandlers: ActionHandler[] = [
   }),
 ];
 
+const defaultErrorContextProps = {
+  errors: {},
+  mutationErrors: undefined,
+  setErrors: jest.fn(),
+  removeError: jest.fn(),
+};
+
 describe('ActionNodeList', () => {
   const organization = OrganizationFixture({features: ['workflow-engine-ui']});
 
@@ -70,9 +81,7 @@ describe('ActionNodeList', () => {
 
   it('renders correct action options', async () => {
     render(
-      <AutomationBuilderErrorContext.Provider
-        value={{errors: {}, setErrors: jest.fn(), removeError: jest.fn()}}
-      >
+      <AutomationBuilderErrorContext.Provider value={defaultErrorContextProps}>
         <ActionNodeList {...defaultProps} />
       </AutomationBuilderErrorContext.Provider>,
       {
@@ -96,9 +105,7 @@ describe('ActionNodeList', () => {
 
   it('adds actions', async () => {
     render(
-      <AutomationBuilderErrorContext.Provider
-        value={{errors: {}, setErrors: jest.fn(), removeError: jest.fn()}}
-      >
+      <AutomationBuilderErrorContext.Provider value={defaultErrorContextProps}>
         <ActionNodeList {...defaultProps} />
       </AutomationBuilderErrorContext.Provider>,
       {
@@ -114,9 +121,7 @@ describe('ActionNodeList', () => {
   it('updates existing actions', async () => {
     const slackAction = ActionFixture();
     render(
-      <AutomationBuilderErrorContext.Provider
-        value={{errors: {}, setErrors: jest.fn(), removeError: jest.fn()}}
-      >
+      <AutomationBuilderErrorContext.Provider value={defaultErrorContextProps}>
         <ActionNodeList {...defaultProps} actions={[slackAction]} />
       </AutomationBuilderErrorContext.Provider>,
       {
@@ -134,9 +139,7 @@ describe('ActionNodeList', () => {
   it('deletes existing actions', async () => {
     const slackAction = ActionFixture();
     render(
-      <AutomationBuilderErrorContext.Provider
-        value={{errors: {}, setErrors: jest.fn(), removeError: jest.fn()}}
-      >
+      <AutomationBuilderErrorContext.Provider value={defaultErrorContextProps}>
         <ActionNodeList {...defaultProps} actions={[slackAction]} />
       </AutomationBuilderErrorContext.Provider>,
       {
@@ -147,5 +150,57 @@ describe('ActionNodeList', () => {
     await screen.findByText(textWithMarkupMatcher('Slack message'));
     await userEvent.click(screen.getByRole('button', {name: 'Delete row'}));
     expect(mockOnDeleteRow).toHaveBeenCalledWith(slackAction.id);
+  });
+
+  it('shows an error for actions with unavailable handlers', async () => {
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/available-actions/`,
+      body: [], // No available actions
+    });
+
+    const slackAction = ActionFixture();
+    render(
+      <AutomationBuilderErrorContext.Provider value={defaultErrorContextProps}>
+        <ActionNodeList {...defaultProps} actions={[slackAction]} />
+      </AutomationBuilderErrorContext.Provider>,
+      {
+        organization,
+      }
+    );
+
+    expect(
+      await screen.findByText(
+        'The Slack action is no longer available. Please remove and reconfigure this action.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Delete row'})).toBeInTheDocument();
+  });
+
+  it('shows a warning message for an incompatible action', async () => {
+    const model = new FormModel();
+    model.setInitialData({
+      detectorIds: ['123'],
+    });
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/detectors/`,
+      body: [MetricDetectorFixture({id: '123'})],
+    });
+    const jiraAction = ActionFixture({type: ActionType.JIRA});
+    render(
+      <AutomationFormProvider>
+        <Form model={model}>
+          <AutomationBuilderErrorContext.Provider value={defaultErrorContextProps}>
+            <ActionNodeList {...defaultProps} actions={[jiraAction]} />
+          </AutomationBuilderErrorContext.Provider>
+        </Form>
+      </AutomationFormProvider>,
+      {
+        organization,
+      }
+    );
+
+    expect(
+      await screen.findByText('This action will not fire for metric issues.')
+    ).toBeInTheDocument();
   });
 });

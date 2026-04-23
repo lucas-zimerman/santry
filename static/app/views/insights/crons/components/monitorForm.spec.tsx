@@ -5,13 +5,13 @@ import {TeamFixture} from 'sentry-fixture/team';
 import {UserFixture} from 'sentry-fixture/user';
 
 import {initializeOrg} from 'sentry-test/initializeOrg';
-import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
-import selectEvent from 'sentry-test/selectEvent';
+import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
+import {selectEvent} from 'sentry-test/selectEvent';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {useMembers} from 'sentry/utils/useMembers';
 import {useTeams} from 'sentry/utils/useTeams';
-import MonitorForm from 'sentry/views/insights/crons/components/monitorForm';
+import {MonitorForm} from 'sentry/views/insights/crons/components/monitorForm';
 import {ScheduleType} from 'sentry/views/insights/crons/types';
 
 jest.mock('sentry/utils/useTeams');
@@ -48,6 +48,30 @@ describe('MonitorForm', () => {
     });
   });
 
+  it('shows validation errors on required sibling fields after first field change', async () => {
+    render(
+      <MonitorForm
+        apiMethod="POST"
+        apiEndpoint={`/organizations/${organization.slug}/monitors/`}
+        onSubmitSuccess={jest.fn()}
+      />,
+      {organization}
+    );
+
+    // Initially no validation error tooltips should be rendered
+    expect(document.querySelectorAll('[data-tooltip]')).toHaveLength(0);
+
+    // Change one field (schedule) to trigger first-change validation
+    const schedule = screen.getByRole('textbox', {name: 'Crontab Schedule'});
+    await userEvent.clear(schedule);
+    await userEvent.type(schedule, '5 * * * *');
+
+    // Validation error tooltips should now appear on other required empty fields
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-tooltip]').length).toBeGreaterThan(0);
+    });
+  });
+
   it('displays human readable schedule', async () => {
     render(
       <MonitorForm
@@ -77,7 +101,7 @@ describe('MonitorForm', () => {
         apiMethod="POST"
         apiEndpoint={apiEndpont}
         onSubmitSuccess={mockHandleSubmitSuccess}
-        submitLabel="Add Monitor"
+        submitLabel="Add Cron Monitor"
       />,
       {
         organization,
@@ -132,7 +156,7 @@ describe('MonitorForm', () => {
       method: 'POST',
     });
 
-    await userEvent.click(screen.getByRole('button', {name: 'Add Monitor'}));
+    await userEvent.click(screen.getByRole('button', {name: 'Add Cron Monitor'}));
 
     const config = {
       checkinMargin: '5',
@@ -281,5 +305,25 @@ describe('MonitorForm', () => {
         },
       })
     );
+  });
+
+  it('filters non-ASCII characters from crontab schedule', async () => {
+    render(
+      <MonitorForm
+        apiMethod="POST"
+        apiEndpoint={`/organizations/${organization.slug}/monitors/`}
+        onSubmitSuccess={jest.fn()}
+      />,
+      {organization}
+    );
+
+    const schedule = screen.getByRole('textbox', {name: 'Crontab Schedule'});
+
+    // Type schedule with emoji and Unicode characters
+    await userEvent.clear(schedule);
+    await userEvent.type(schedule, '5 * * * *😀中文');
+
+    // Non-ASCII characters should be filtered out, leaving only valid ASCII
+    expect(schedule).toHaveValue('5 * * * *');
   });
 });

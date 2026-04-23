@@ -6,10 +6,10 @@ import pytest
 from sentry.sentry_apps.metrics import SentryAppEventType
 from sentry.sentry_apps.tasks.sentry_apps import broadcast_webhooks_for_organization
 from sentry.testutils.cases import TestCase
-from sentry.testutils.silo import region_silo_test
+from sentry.testutils.silo import cell_silo_test
 
 
-@region_silo_test
+@cell_silo_test
 class BroadcastWebhooksForOrganizationTest(TestCase):
     def setUp(self) -> None:
         self.organization = self.create_organization()
@@ -169,7 +169,7 @@ class BroadcastWebhooksForOrganizationTest(TestCase):
             self.installation_1.id, "issue.created", payload
         )
 
-    def test_valid_event_types_accepted(self):
+    def test_valid_event_types_accepted(self) -> None:
         """Test that all valid SentryAppEventType values are accepted."""
         valid_combinations = [
             ("error", "created"),
@@ -305,7 +305,7 @@ class BroadcastWebhooksForOrganizationTest(TestCase):
         # Verify installations were fetched for the correct organization
         mock_installations.assert_called_once_with(organization_id=different_org.id)
 
-    def test_event_type_construction(self):
+    def test_event_type_construction(self) -> None:
         """Test that event types are constructed correctly."""
         test_cases = [
             ("issue", "created", "issue.created"),
@@ -516,7 +516,7 @@ class BroadcastWebhooksForOrganizationTest(TestCase):
     @patch("sentry.sentry_apps.tasks.sentry_apps.send_resource_change_webhook")
     @patch("sentry.sentry_apps.tasks.sentry_apps.app_service.installations_for_organization")
     def test_broadcast_queues_tasks_asynchronously(self, mock_installations, mock_send_webhook):
-        """Test that webhook sending is queued as Celery tasks, not executed synchronously."""
+        """Test that webhook sending is queued as tasks, not executed synchronously."""
         mock_installations.return_value = [self.installation_1, self.installation_2]
 
         payload = {"test": "data"}

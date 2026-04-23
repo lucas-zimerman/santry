@@ -24,6 +24,11 @@ from sentry.utils.sdk import Scope, bind_organization_context
 from .organization import OrganizationPermission
 
 
+class ProjectDoesNotExist(ResourceDoesNotExist):
+    def __init__(self) -> None:
+        super().__init__(detail="Project does not exist")
+
+
 class ProjectEventsError(Exception):
     pass
 
@@ -76,6 +81,21 @@ class ProjectReleasePermission(ProjectPermission):
         "POST": ["project:write", "project:admin", "project:releases", "org:ci"],
         "PUT": ["project:write", "project:admin", "project:releases", "org:ci"],
         "DELETE": ["project:admin", "project:releases"],
+    }
+
+
+class ProjectDistributionPermission(ProjectPermission):
+    scope_map = {
+        "GET": ["project:distribution"],
+    }
+
+
+class ProjectDistributionOrProjectPermission(ProjectPermission):
+    scope_map = {
+        "GET": ["project:distribution", "project:read", "project:write", "project:admin"],
+        "POST": ["project:write", "project:admin"],
+        "PUT": ["project:write", "project:admin"],
+        "DELETE": ["project:admin"],
     }
 
 
@@ -175,12 +195,12 @@ class ProjectEndpoint(Endpoint):
                     raise ProjectMoved(new_url, redirect.project.slug)
 
                 # otherwise project doesn't exist
-                raise ResourceDoesNotExist
+                raise ProjectDoesNotExist
             except ProjectRedirect.DoesNotExist:
-                raise ResourceDoesNotExist
+                raise ProjectDoesNotExist
 
         if project.status != ObjectStatus.ACTIVE:
-            raise ResourceDoesNotExist
+            raise ProjectDoesNotExist
 
         self.check_object_permissions(request, project)
 
@@ -188,7 +208,9 @@ class ProjectEndpoint(Endpoint):
 
         bind_organization_context(project.organization)
 
-        request._request.organization = project.organization  # type: ignore[attr-defined]  # XXX: we should not be stuffing random attributes into HttpRequest
+        request._request.organization = (
+            project.organization
+        )  # XXX: we should not be stuffing random attributes into HttpRequest
 
         kwargs["project"] = project
         return (args, kwargs)

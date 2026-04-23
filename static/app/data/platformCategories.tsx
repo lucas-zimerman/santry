@@ -59,6 +59,15 @@ export const mobile: PlatformKey[] = [
   'cocoa-swift',
 ];
 
+export const android: PlatformKey[] = ['android', 'java-android'];
+
+export const apple: PlatformKey[] = [
+  'apple-ios',
+  'apple-macos',
+  'cocoa-objc',
+  'cocoa-swift',
+];
+
 // Mirrors `BACKEND` in src/sentry/utils/platform_categories.py
 // When changing this file, make sure to keep src/sentry/utils/platform_categories.py in sync.
 export const backend: PlatformKey[] = [
@@ -109,6 +118,7 @@ export const backend: PlatformKey[] = [
   'python-falcon',
   'python-fastapi',
   'python-flask',
+  'python-litestar',
   'python-pylons',
   'python-pymongo',
   'python-pyramid',
@@ -276,7 +286,7 @@ export const platformsWithNestedInstrumentationGuides: PlatformKey[] = [
 ];
 
 // List of platforms that have performance onboarding checklist content
-export const withPerformanceOnboarding: Set<PlatformKey> = new Set([
+export const withPerformanceOnboarding = new Set<PlatformKey>([
   'javascript',
   'javascript-react',
   'javascript-nextjs',
@@ -289,7 +299,7 @@ export const withPerformanceOnboarding: Set<PlatformKey> = new Set([
 
 // List of platforms that do not have performance support. We make use of this list in the product to not provide any Performance
 // views such as Performance onboarding checklist.
-export const withoutPerformanceSupport: Set<PlatformKey> = new Set([
+export const withoutPerformanceSupport = new Set<PlatformKey>([
   'elixir',
   'minidump',
   'nintendo-switch',
@@ -298,13 +308,23 @@ export const withoutPerformanceSupport: Set<PlatformKey> = new Set([
 ]);
 
 // List of platforms that have logging onboarding checklist content
-export const withLoggingOnboarding: Set<PlatformKey> = new Set([
+export const withLoggingOnboarding = new Set<PlatformKey>([
   'android',
   'apple',
   'apple-ios',
   'apple-macos',
   'bun',
+  'cocoa-objc',
+  'cocoa-swift',
   'dart',
+  'dotnet',
+  'dotnet-aspnet',
+  'dotnet-aspnetcore',
+  'dotnet-awslambda',
+  'dotnet-gcpfunctions',
+  'dotnet-maui',
+  'dotnet-winforms',
+  'dotnet-wpf',
   'flutter',
   'go',
   'go-echo',
@@ -314,6 +334,104 @@ export const withLoggingOnboarding: Set<PlatformKey> = new Set([
   'go-http',
   'go-iris',
   'go-martini',
+  'go-negroni',
+  'godot',
+  'java',
+  'java-log4j2',
+  'java-logback',
+  'java-spring',
+  'java-spring-boot',
+  'javascript',
+  'javascript-angular',
+  'javascript-astro',
+  'javascript-ember',
+  'javascript-gatsby',
+  'javascript-nextjs',
+  'javascript-nuxt',
+  'javascript-react',
+  'javascript-react-router',
+  'javascript-remix',
+  'javascript-solid',
+  'javascript-solidstart',
+  'javascript-svelte',
+  'javascript-sveltekit',
+  'javascript-tanstackstart-react',
+  'javascript-vue',
+  'native',
+  'node',
+  'node-azurefunctions',
+  'node-connect',
+  'node-cloudflare-pages',
+  'node-cloudflare-workers',
+  'node-express',
+  'node-fastify',
+  'node-gcpfunctions',
+  'node-hapi',
+  'node-hono',
+  'node-koa',
+  'node-nestjs',
+  'php',
+  'php-laravel',
+  'php-symfony',
+  'python',
+  'python-aiohttp',
+  'python-asgi',
+  'python-awslambda',
+  'python-bottle',
+  'python-celery',
+  'python-chalice',
+  'python-django',
+  'python-falcon',
+  'python-fastapi',
+  'python-flask',
+  'python-gcpfunctions',
+  'python-litestar',
+  'python-pylons',
+  'python-pyramid',
+  'python-quart',
+  'python-rq',
+  'python-sanic',
+  'python-serverless',
+  'python-starlette',
+  'python-tornado',
+  'python-tryton',
+  'python-wsgi',
+  'elixir',
+  'react-native',
+  'ruby',
+  'ruby-rack',
+  'ruby-rails',
+  'rust',
+  'unity',
+  'unreal',
+]);
+
+// List of platforms that do not have logging support. We make use of this list in the product to not provide any Logging
+export const withoutLoggingSupport = new Set<PlatformKey>(['dotnet-xamarin']);
+
+// List of platforms that have metrics onboarding checklist content
+export const withMetricsOnboarding = new Set<PlatformKey>([
+  'android',
+  'flutter',
+  'apple',
+  'apple-ios',
+  'apple-macos',
+  'dotnet',
+  'dotnet-aspnet',
+  'dotnet-aspnetcore',
+  'dotnet-awslambda',
+  'dotnet-gcpfunctions',
+  'dotnet-maui',
+  'dotnet-winforms',
+  'dotnet-wpf',
+  'react-native',
+  'go',
+  'go-echo',
+  'go-fasthttp',
+  'go-fiber',
+  'go-gin',
+  'go-http',
+  'go-iris',
   'go-negroni',
   'java',
   'java-log4j2',
@@ -337,10 +455,11 @@ export const withLoggingOnboarding: Set<PlatformKey> = new Set([
   'javascript-tanstackstart-react',
   'javascript-vue',
   'node',
+  'node-awslambda',
   'node-azurefunctions',
-  'node-connect',
   'node-cloudflare-pages',
   'node-cloudflare-workers',
+  'node-connect',
   'node-express',
   'node-fastify',
   'node-gcpfunctions',
@@ -350,6 +469,7 @@ export const withLoggingOnboarding: Set<PlatformKey> = new Set([
   'node-nestjs',
   'php',
   'php-laravel',
+  'php-symfony',
   'python',
   'python-aiohttp',
   'python-asgi',
@@ -362,7 +482,7 @@ export const withLoggingOnboarding: Set<PlatformKey> = new Set([
   'python-fastapi',
   'python-flask',
   'python-gcpfunctions',
-  'python-pylons',
+  'python-litestar',
   'python-pyramid',
   'python-quart',
   'python-rq',
@@ -375,19 +495,36 @@ export const withLoggingOnboarding: Set<PlatformKey> = new Set([
   'ruby',
   'ruby-rack',
   'ruby-rails',
-  'rust',
+  'unity',
 ]);
 
-// List of platforms that do not have logging support. We make use of this list in the product to not provide any Logging
-export const withoutLoggingSupport: Set<PlatformKey> = new Set([
-  'cocoa-objc',
-  'cocoa-swift',
-  'elixir',
+// List of platforms that do not have metrics support. We make use of this list in the product to not provide any Metrics
+export const withoutMetricsSupport = new Set<PlatformKey>(['dotnet-xamarin']);
+
+export const limitedMetricsSupportPrefixes = new Set<string>([
+  'android',
+  'apple',
+  'bun',
+  'dart',
+  'deno',
   'dotnet',
-  'php-symfony',
+  'electron',
+  'go',
+  'godot',
+  'java',
+  'javascript',
+  'native',
+  'nintendo-switch',
+  'node',
+  'playstation',
+  'python',
+  'php',
+  'react-native',
+  'ruby',
+  'flutter',
   'unity',
   'unreal',
-  'native',
+  'xbox',
 ]);
 
 export const profiling: PlatformKey[] = [
@@ -396,9 +533,12 @@ export const profiling: PlatformKey[] = [
   'apple-ios',
   'apple-macos',
   'dotnet',
-  'dotnet-winforms',
-  'dotnet-wpf',
   'flutter',
+  'java',
+  'java-log4j2',
+  'java-logback',
+  'java-spring',
+  'java-spring-boot',
   'javascript',
   'javascript-angular',
   'javascript-astro',
@@ -441,6 +581,7 @@ export const profiling: PlatformKey[] = [
   'python-fastapi',
   'python-flask',
   'python-gcpfunctions',
+  'python-litestar',
   'python-pylons',
   'python-pyramid',
   'python-quart',
@@ -524,6 +665,7 @@ export const releaseHealth: PlatformKey[] = [
   'dotnet-xamarin',
   'unity',
   'java',
+  'kotlin',
 ];
 
 // These are the backend platforms that can set up replay -- e.g. they can be set up via a linked JS framework or via JS loader.
@@ -555,6 +697,7 @@ export const replayBackendPlatforms: readonly PlatformKey[] = [
   'python-falcon',
   'python-fastapi',
   'python-flask',
+  'python-litestar',
   'python-pyramid',
   'python-quart',
   'python-sanic',
@@ -700,22 +843,44 @@ export const feedbackOnboardingPlatforms: readonly PlatformKey[] = [
 const platformKeys = platforms.map(p => p.id);
 
 // Feature flag platforms with gettingStartedDocs. Note backend js platforms start with 'node-'.
-export const featureFlagOnboardingPlatforms: readonly PlatformKey[] = platformKeys.filter(
-  id => id.startsWith('javascript') || id.startsWith('python')
-);
+export const featureFlagOnboardingPlatforms: readonly PlatformKey[] = [
+  ...platformKeys.filter(
+    id => id.startsWith('javascript') || id.startsWith('node') || id.startsWith('python')
+  ),
+  'bun',
+  'deno',
+];
 
 // Feature flag platforms to show the issue details distribution drawer for.
-export const featureFlagDrawerPlatforms: readonly PlatformKey[] = platformKeys.filter(
-  id => id.startsWith('javascript') || id.startsWith('python')
-);
+export const featureFlagDrawerPlatforms: readonly PlatformKey[] = [
+  ...platformKeys.filter(
+    id => id.startsWith('javascript') || id.startsWith('node') || id.startsWith('python')
+  ),
+  'bun',
+  'deno',
+];
 
 export const agentMonitoringPlatforms: ReadonlySet<PlatformKey> = new Set([
+  ...platformKeys.filter(id => id.startsWith('javascript')),
+  ...platformKeys.filter(id => id.startsWith('node')),
+  ...platformKeys.filter(id => id.startsWith('python')),
+  'deno',
+  'bun',
+]);
+
+export const javascriptMetaFrameworks: readonly PlatformKey[] = [
+  'javascript-astro',
   'javascript-nextjs',
-  'javascript-remix',
+  'javascript-nuxt',
   'javascript-react-router',
+  'javascript-remix',
   'javascript-solidstart',
   'javascript-sveltekit',
   'javascript-tanstackstart-react',
+] as const;
+
+export const mcpMonitoringPlatforms: ReadonlySet<PlatformKey> = new Set([
+  ...javascriptMetaFrameworks,
   ...platformKeys.filter(id => id.startsWith('node')),
   ...platformKeys.filter(id => id.startsWith('python')),
 ]);

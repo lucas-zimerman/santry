@@ -1,13 +1,14 @@
 import type {Location, LocationDescriptor} from 'history';
 import moment from 'moment-timezone';
 
+import {isWebVitalsEvent} from 'sentry/components/events/interfaces/performance/utils';
 import {getTraceDateTimeRange} from 'sentry/components/events/interfaces/spans/utils';
 import {getEventTimestampInSeconds} from 'sentry/components/events/interfaces/utils';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
-import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
+import {ALL_ACCESS_PROJECTS} from 'sentry/components/pageFilters/constants';
+import {normalizeDateTimeParams} from 'sentry/components/pageFilters/parse';
 import type {Event, EventTransaction} from 'sentry/types/event';
 import type {Organization} from 'sentry/types/organization';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {SavedQueryDatasets} from 'sentry/utils/discover/types';
 import {hasDatasetSelector} from 'sentry/views/dashboards/utils';
 import type {TraceViewSources} from 'sentry/views/performance/newTraceDetails/traceHeader/breadcrumbs';
@@ -42,7 +43,7 @@ export function generateTraceTarget(
       organization,
       traceSlug: traceId,
       dateSelection,
-      timestamp: getEventTimestampInSeconds(event),
+      timestamp: isWebVitalsEvent(event) ? undefined : getEventTimestampInSeconds(event),
       eventId: event.eventID,
       location,
       source,
@@ -55,9 +56,7 @@ export function generateTraceTarget(
     fields: ['title', 'event.type', 'project', 'trace.span', 'timestamp'],
     orderby: '-timestamp',
     query: `trace:${traceId}`,
-    projects: organization.features.includes('global-views')
-      ? [ALL_ACCESS_PROJECTS]
-      : [Number(event.projectID)],
+    projects: [ALL_ACCESS_PROJECTS],
     version: 2,
     ...dateSelection,
   });

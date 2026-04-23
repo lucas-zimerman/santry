@@ -2,30 +2,31 @@ import {Fragment, useCallback, useMemo, useState} from 'react';
 import styled from '@emotion/styled';
 import debounce from 'lodash/debounce';
 
-import {Button} from 'sentry/components/core/button';
-import {ExternalLink} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import Count from 'sentry/components/count';
-import EmptyStateWarning, {EmptyStreamWrapper} from 'sentry/components/emptyStateWarning';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Pagination from 'sentry/components/pagination';
-import PerformanceDuration from 'sentry/components/performanceDuration';
+import {Button} from '@sentry/scraps/button';
+import {Container, Flex, Grid} from '@sentry/scraps/layout';
+import {ExternalLink} from '@sentry/scraps/link';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {Count} from 'sentry/components/count';
+import {EmptyStateWarning, EmptyStreamWrapper} from 'sentry/components/emptyStateWarning';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {Pagination} from 'sentry/components/pagination';
+import {PerformanceDuration} from 'sentry/components/performanceDuration';
 import {SPAN_PROPS_DOCS_URL} from 'sentry/constants';
 import {IconArrow} from 'sentry/icons/iconArrow';
 import {IconChevron} from 'sentry/icons/iconChevron';
 import {IconWarning} from 'sentry/icons/iconWarning';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
-import {useExploreQuery} from 'sentry/views/explore/contexts/pageParamsContext';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
 import type {TracesTableResult} from 'sentry/views/explore/hooks/useExploreTracesTable';
 import {usePaginationAnalytics} from 'sentry/views/explore/hooks/usePaginationAnalytics';
 import type {TraceResult} from 'sentry/views/explore/hooks/useTraces';
+import {useQueryParamsQuery} from 'sentry/views/explore/queryParams/context';
 import {
   Description,
   ProjectBadgeWrapper,
@@ -42,7 +43,6 @@ import {
   StyledPanel,
   StyledPanelHeader,
   StyledPanelItem,
-  TracePanelContent,
   WrappingText,
 } from 'sentry/views/explore/tables/tracesTable/styles';
 
@@ -51,11 +51,11 @@ interface TracesTableProps {
 }
 
 export function TracesTable({tracesTableResult}: TracesTableProps) {
-  const query = useExploreQuery();
+  const query = useQueryParamsQuery();
 
   const {result} = tracesTableResult;
-
-  const {data, isPending, isError, getResponseHeader} = result;
+  const {isPending, isError} = result;
+  const data = result.data?.json;
 
   const showErrorState = !isPending && isError;
   const showEmptyState = !isPending && !showErrorState && (data?.data?.length ?? 0) === 0;
@@ -68,68 +68,76 @@ export function TracesTable({tracesTableResult}: TracesTableProps) {
   return (
     <Fragment>
       <StyledPanel>
-        <TracePanelContent>
-          <StyledPanelHeader align="left" lightText>
-            {t('Trace ID')}
-          </StyledPanelHeader>
-          <StyledPanelHeader align="left" lightText>
-            {t('Trace Root')}
-          </StyledPanelHeader>
-          <StyledPanelHeader align="right" lightText>
-            {query ? t('Matching Spans') : t('Total Spans')}
-          </StyledPanelHeader>
-          <StyledPanelHeader align="left" lightText>
-            {t('Timeline')}
-          </StyledPanelHeader>
-          <StyledPanelHeader align="right" lightText>
-            {t('Root Duration')}
-          </StyledPanelHeader>
-          <StyledPanelHeader align="right" lightText>
-            <Header>
-              {t('Timestamp')}
-              <IconArrow size="xs" direction="down" />
-            </Header>
-          </StyledPanelHeader>
-          {isPending && (
-            <StyledPanelItem span={6} overflow>
-              <LoadingIndicator />
-            </StyledPanelItem>
-          )}
-          {showErrorState && (
-            <StyledPanelItem span={6} overflow>
-              <WarningStreamWrapper>
-                <IconWarning data-test-id="error-indicator" color="gray300" size="lg" />
-              </WarningStreamWrapper>
-            </StyledPanelItem>
-          )}
-          {showEmptyState && (
-            <StyledPanelItem span={6} overflow>
-              <EmptyStateWarning withIcon>
-                <EmptyStateText size="xl">{t('No trace results found')}</EmptyStateText>
-                <EmptyStateText size="md">
-                  {tct('Try adjusting your filters or refer to [docSearchProps].', {
-                    docSearchProps: (
-                      <ExternalLink href={SPAN_PROPS_DOCS_URL}>
-                        {t('docs for search properties')}
-                      </ExternalLink>
-                    ),
-                  })}
-                </EmptyStateText>
-              </EmptyStateWarning>
-            </StyledPanelItem>
-          )}
-          {data?.data?.map((trace, i) => (
-            <TraceRow
-              key={trace.trace}
-              trace={trace}
-              defaultExpanded={query && i === 0}
-              query={query}
-            />
-          ))}
-        </TracePanelContent>
+        <Container width="100%" minWidth={0} overflowX="auto">
+          <Grid width="100%" columns="116px auto repeat(3, min-content) 95px">
+            <StyledPanelHeader justify="start" lightText radius="md 0 0 0">
+              {t('Trace ID')}
+            </StyledPanelHeader>
+
+            <StyledPanelHeader justify="start" lightText>
+              {t('Trace Root')}
+            </StyledPanelHeader>
+
+            <StyledPanelHeader justify="end" lightText>
+              {query ? t('Matching Spans') : t('Total Spans')}
+            </StyledPanelHeader>
+
+            <StyledPanelHeader justify="start" lightText>
+              {t('Timeline')}
+            </StyledPanelHeader>
+
+            <StyledPanelHeader justify="end" lightText>
+              {t('Root Duration')}
+            </StyledPanelHeader>
+
+            <StyledPanelHeader justify="end" lightText radius="0 md 0 0">
+              <Flex gap="xs">
+                {t('Timestamp')}
+                <IconArrow size="xs" direction="down" />
+              </Flex>
+            </StyledPanelHeader>
+
+            {isPending && (
+              <StyledPanelItem span={6} overflow>
+                <LoadingIndicator />
+              </StyledPanelItem>
+            )}
+            {showErrorState && (
+              <StyledPanelItem span={6} overflow>
+                <WarningStreamWrapper>
+                  <IconWarning data-test-id="error-indicator" variant="muted" size="lg" />
+                </WarningStreamWrapper>
+              </StyledPanelItem>
+            )}
+            {showEmptyState && (
+              <StyledPanelItem span={6} overflow>
+                <EmptyStateWarning withIcon>
+                  <EmptyStateText size="xl">{t('No trace results found')}</EmptyStateText>
+                  <EmptyStateText size="md">
+                    {tct('Try adjusting your filters or refer to [docSearchProps].', {
+                      docSearchProps: (
+                        <ExternalLink href={SPAN_PROPS_DOCS_URL}>
+                          {t('docs for search properties')}
+                        </ExternalLink>
+                      ),
+                    })}
+                  </EmptyStateText>
+                </EmptyStateWarning>
+              </StyledPanelItem>
+            )}
+            {data?.data?.map((trace, i) => (
+              <TraceRow
+                key={trace.trace}
+                trace={trace}
+                defaultExpanded={query && i === 0}
+                query={query}
+              />
+            ))}
+          </Grid>
+        </Container>
       </StyledPanel>
       <Pagination
-        pageLinks={getResponseHeader?.('Link')}
+        pageLinks={result.data?.headers.Link}
         paginationAnalyticsEvent={paginationAnalyticsEvent}
       />
     </Fragment>
@@ -165,7 +173,7 @@ function TraceRow({
   }, [projects, selection.projects]);
 
   const traceProjects = useMemo(() => {
-    const seenProjects: Set<string> = new Set();
+    const seenProjects = new Set<string>();
 
     const leadingProjects: string[] = [];
     const trailingProjects: string[] = [];
@@ -188,6 +196,9 @@ function TraceRow({
     return [...leadingProjects, ...trailingProjects];
   }, [selectedProjects, trace]);
 
+  const projectSlugs =
+    traceProjects.length > 0 ? traceProjects : trace.project ? [trace.project] : [];
+
   return (
     <Fragment>
       <StyledPanelItem align="center" center onClick={onClickExpand}>
@@ -196,7 +207,7 @@ function TraceRow({
           aria-label={t('Toggle trace details')}
           aria-expanded={expanded}
           size="zero"
-          borderless
+          priority="transparent"
           onClick={() =>
             trackAnalytics('trace_explorer.toggle_trace_details', {
               organization,
@@ -206,7 +217,9 @@ function TraceRow({
           }
         />
         <TraceIdRenderer
+          projectSlugs={projectSlugs}
           traceId={trace.trace}
+          traceName={trace.name}
           timestamp={trace.end}
           onClick={event => {
             event.stopPropagation();
@@ -222,15 +235,7 @@ function TraceRow({
         <Tooltip title={trace.name} containerDisplayMode="block" showOnlyOnOverflow>
           <Description>
             <ProjectBadgeWrapper>
-              <ProjectsRenderer
-                projectSlugs={
-                  traceProjects.length > 0
-                    ? traceProjects
-                    : trace.project
-                      ? [trace.project]
-                      : []
-                }
-              />
+              <ProjectsRenderer projectSlugs={projectSlugs} />
             </ProjectBadgeWrapper>
             {trace.name ? (
               <WrappingText>{trace.name}</WrappingText>
@@ -291,17 +296,12 @@ function Breakdown({trace}: {trace: TraceResult}) {
   );
 }
 
-const Header = styled('span')`
-  display: flex;
-  gap: ${space(0.5)};
-`;
-
 const StyledButton = styled(Button)`
-  margin-right: ${space(0.5)};
+  margin-right: ${p => p.theme.space.xs};
 `;
 
 const WarningStreamWrapper = styled(EmptyStreamWrapper)`
   > svg {
-    fill: ${p => p.theme.gray300};
+    fill: ${p => p.theme.colors.gray400};
   }
 `;

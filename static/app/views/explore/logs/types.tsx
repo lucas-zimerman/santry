@@ -26,6 +26,7 @@ export enum OurLogKnownFieldKey {
   TIMESTAMP = 'timestamp',
   TIMESTAMP_PRECISE = 'timestamp_precise',
   OBSERVED_TIMESTAMP_PRECISE = 'observed_timestamp',
+  LOGGER = 'logger.name',
 
   PAYLOAD_SIZE = 'payload_size',
 
@@ -55,6 +56,12 @@ export enum OurLogKnownFieldKey {
 
   // Deprecated fields
   TIMESTAMP_NANOS = 'sentry.timestamp_nanos',
+
+  // Replay integration
+  REPLAY_ID = 'replay_id',
+
+  // INTERNAL only (these only appear for staff)
+  INTERNAL_ONLY_INGESTED_AT = 'tags[sentry._internal.ingested_at,number]',
 }
 
 export type OurLogFieldKey = OurLogCustomFieldKey | OurLogKnownFieldKey;

@@ -2,9 +2,10 @@ import {useTheme, type Theme} from '@emotion/react';
 import type {Location} from 'history';
 
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
+import {Pagination} from 'sentry/components/pagination';
 import type {GridColumnHeader} from 'sentry/components/tables/gridEditable';
-import GridEditable, {COL_WIDTH_UNDEFINED} from 'sentry/components/tables/gridEditable';
+import {COL_WIDTH_UNDEFINED, GridEditable} from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
@@ -15,7 +16,7 @@ import {RATE_UNIT_TITLE, RateUnit} from 'sentry/utils/discover/fields';
 import {VisuallyCompleteWithData} from 'sentry/utils/performanceForSentry';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
 import {DataTitles} from 'sentry/views/insights/common/views/spans/types';
@@ -63,22 +64,22 @@ const COLUMN_ORDER: Column[] = [
     width: COL_WIDTH_UNDEFINED,
   },
   {
-    key: `http_response_rate(3)`,
+    key: 'http_response_rate(3)',
     name: t('3XXs'),
     width: 50,
   },
   {
-    key: `http_response_rate(4)`,
+    key: 'http_response_rate(4)',
     name: t('4XXs'),
     width: 50,
   },
   {
-    key: `http_response_rate(5)`,
+    key: 'http_response_rate(5)',
     name: t('5XXs'),
     width: 50,
   },
   {
-    key: `avg(span.self_time)`,
+    key: 'avg(span.self_time)',
     name: DataTitles.avg,
     width: COL_WIDTH_UNDEFINED,
   },
@@ -129,6 +130,9 @@ export function DomainsTable({response, sort}: Props) {
       query: {...query, [QueryParameterNames.DOMAINS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...COLUMN_ORDER],
+  });
 
   return (
     <VisuallyCompleteWithData
@@ -141,7 +145,7 @@ export function DomainsTable({response, sort}: Props) {
         isLoading={isLoading}
         error={response.error}
         data={data}
-        columnOrder={COLUMN_ORDER}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -158,6 +162,7 @@ export function DomainsTable({response, sort}: Props) {
             }),
           renderBodyCell: (column, row) =>
             renderBodyCell(column, row, meta, location, organization, theme),
+          onResizeColumn: handleResizeColumn,
         }}
       />
       <Pagination

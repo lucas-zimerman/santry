@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -9,11 +10,12 @@ from rest_framework.response import Response
 
 from sentry import audit_log, options, roles
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectPermission
 from sentry.api.decorators import sudo_required
 from sentry.models.options.project_option import ProjectOption
 from sentry.models.organizationmember import OrganizationMember
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.utils.email import MessageBuilder
 from sentry.utils.http import absolute_uri
@@ -28,7 +30,7 @@ class RelaxedProjectPermission(ProjectPermission):
     scope_map = {"POST": ["org:admin"]}
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectTransferEndpoint(ProjectEndpoint):
     publish_status = {
         "POST": ApiPublishStatus.UNKNOWN,
@@ -36,13 +38,19 @@ class ProjectTransferEndpoint(ProjectEndpoint):
     permission_classes = (RelaxedProjectPermission,)
 
     enforce_rate_limit = True
-    rate_limits = {
-        "POST": {
-            RateLimitCategory.USER: RateLimit(
-                limit=3, window=60 * 60
-            ),  # 3 POST requests per hour per user
-        }
-    }
+
+    def rate_limits(*args: Any, **kwargs: Any) -> RateLimitConfig:
+        limit = options.get("api.project-transfer.rate-limit-overrides")
+        return RateLimitConfig(
+            limit_overrides={
+                "POST": {
+                    RateLimitCategory.USER: RateLimit(
+                        limit=limit,
+                        window=60 * 60,
+                    ),
+                },
+            },
+        )
 
     @sudo_required
     def post(self, request: Request, project) -> Response:

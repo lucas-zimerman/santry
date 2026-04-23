@@ -1,11 +1,10 @@
 import styled from '@emotion/styled';
 
+import {FeatureBadge} from '@sentry/scraps/badge';
+import {Flex, Stack} from '@sentry/scraps/layout';
+
 import {HeaderTitleLegend} from 'sentry/components/charts/styles';
-import {FeatureBadge} from 'sentry/components/core/badge/featureBadge';
-import QuestionTooltip from 'sentry/components/questionTooltip';
-import TextOverflow from 'sentry/components/textOverflow';
-import {space} from 'sentry/styles/space';
-import {MEPTag} from 'sentry/utils/performance/contexts/metricsEnhancedPerformanceDataContext';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import type {
   GenericPerformanceWidgetProps,
   WidgetDataConstraint,
@@ -15,58 +14,35 @@ import type {
 export function WidgetHeader<T extends WidgetDataConstraint>(
   props: GenericPerformanceWidgetProps<T> & WidgetDataProps<T>
 ) {
-  const {title, titleTooltip, Subtitle, HeaderActions, InteractiveTitle} = props;
+  const {title, Subtitle, HeaderActions, InteractiveTitle} = props;
 
   return (
-    <WidgetHeaderContainer>
-      <TitleContainer>
+    <Flex justify="between" align="start" gap="md">
+      <Stack align="start">
         <StyledHeaderTitleLegend data-test-id="performance-widget-title">
           {InteractiveTitle ? (
             <InteractiveTitle {...props} />
           ) : (
             <TextOverflow>{title}</TextOverflow>
           )}
-          <MEPTag />
-          {titleTooltip && (
-            <QuestionTooltip position="top" size="sm" title={titleTooltip} />
-          )}
         </StyledHeaderTitleLegend>
         {Subtitle ? <Subtitle {...props} /> : null}
-      </TitleContainer>
-      <HeaderActionsContainer>
+      </Stack>
+      <Flex align="center" gap="md">
         {HeaderActions && <HeaderActions {...props} />}
-      </HeaderActionsContainer>
-    </WidgetHeaderContainer>
+      </Flex>
+    </Flex>
   );
 }
 
 const StyledHeaderTitleLegend = styled(HeaderTitleLegend)`
   position: relative;
   z-index: initial;
-  top: -${space(0.5)};
+  top: -${p => p.theme.space.xs};
 
   ${FeatureBadge} {
     position: relative;
-    top: -${space(0.25)};
-    margin-left: ${space(0.25)};
+    top: -${p => p.theme.space['2xs']};
+    margin-left: ${p => p.theme.space['2xs']};
   }
-`;
-
-const TitleContainer = styled('div')`
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-`;
-
-const WidgetHeaderContainer = styled('div')`
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: ${space(1)};
-`;
-
-const HeaderActionsContainer = styled('div')`
-  display: flex;
-  align-items: center;
-  gap: ${space(1)};
 `;

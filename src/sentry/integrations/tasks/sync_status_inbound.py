@@ -6,6 +6,7 @@ from typing import Any
 import sentry_sdk
 from django.db.models import Q
 from django.utils import timezone as django_timezone
+from taskbroker_client.retry import Retry
 
 from sentry import analytics
 from sentry.analytics.events.issue_resolved import IssueResolvedEvent
@@ -13,6 +14,7 @@ from sentry.api.helpers.group_index.update import get_current_release_version_of
 from sentry.constants import ObjectStatus
 from sentry.integrations.models.integration import Integration
 from sentry.integrations.services.integration import integration_service
+from sentry.models.activity import Activity
 from sentry.models.group import Group, GroupStatus
 from sentry.models.groupresolution import GroupResolution
 from sentry.models.organization import Organization
@@ -20,9 +22,7 @@ from sentry.models.release import Release, ReleaseStatus, follows_semver_version
 from sentry.signals import issue_resolved, issue_unresolved
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task, retry, track_group_async_operation
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import integrations_tasks
-from sentry.taskworker.retry import Retry
 from sentry.types.activity import ActivityType
 from sentry.types.group import GroupSubStatus
 
@@ -191,19 +191,10 @@ def group_was_recently_resolved(group: Group) -> bool:
 
 @instrumented_task(
     name="sentry.integrations.tasks.sync_status_inbound",
-    queue="integrations",
-    default_retry_delay=60 * 5,
-    max_retries=5,
-    silo_mode=SiloMode.REGION,
+    namespace=integrations_tasks,
     processing_deadline_duration=150,
-    taskworker_config=TaskworkerConfig(
-        namespace=integrations_tasks,
-        processing_deadline_duration=30,
-        retry=Retry(
-            times=5,
-            delay=60 * 5,
-        ),
-    ),
+    retry=Retry(times=5, delay=60 * 5),
+    silo_mode=SiloMode.CELL,
 )
 @retry(exclude=(Integration.DoesNotExist,))
 @track_group_async_operation
@@ -284,6 +275,16 @@ def sync_status_inbound(
                 )
                 if not created:
                     resolution.update(datetime=django_timezone.now(), **resolution_params)
+
+                # Link the activity to the resolution so regressions can find it.
+                if created:
+                    latest_resolution_activity = (
+                        Activity.objects.filter(group=group, type=activity_type.value)
+                        .order_by("-datetime")
+                        .first()
+                    )
+                    if latest_resolution_activity and not latest_resolution_activity.ident:
+                        latest_resolution_activity.update(ident=resolution.id)
 
             issue_resolved.send_robust(
                 organization_id=organization_id,

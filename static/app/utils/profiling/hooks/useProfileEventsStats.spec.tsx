@@ -1,23 +1,12 @@
-import type {ReactNode} from 'react';
+import {OrganizationFixture} from 'sentry-fixture/organization';
 
 import {initializeOrg} from 'sentry-test/initializeOrg';
-import {makeTestQueryClient} from 'sentry-test/queryClient';
-import {renderHook, waitFor} from 'sentry-test/reactTestingLibrary';
+import {renderHookWithProviders, waitFor} from 'sentry-test/reactTestingLibrary';
 
 import {useProfileEventsStats} from 'sentry/utils/profiling/hooks/useProfileEventsStats';
-import {QueryClientProvider} from 'sentry/utils/queryClient';
-import {OrganizationContext} from 'sentry/views/organizationContext';
-
-const {organization} = initializeOrg();
-function TestContext({children}: {children?: ReactNode}) {
-  return (
-    <QueryClientProvider client={makeTestQueryClient()}>
-      <OrganizationContext value={organization}>{children}</OrganizationContext>
-    </QueryClientProvider>
-  );
-}
 
 describe('useProfileEvents', () => {
+  const organization = OrganizationFixture();
   afterEach(() => {
     MockApiClient.clearMockResponses();
   });
@@ -29,8 +18,8 @@ describe('useProfileEvents', () => {
       match: [MockApiClient.matchQuery({dataset: 'discover'})],
     });
 
-    const {result} = renderHook(useProfileEventsStats, {
-      wrapper: TestContext,
+    const {result} = renderHookWithProviders(useProfileEventsStats, {
+      organization,
       initialProps: {
         dataset: 'profiles' as const,
         yAxes: [],
@@ -38,7 +27,7 @@ describe('useProfileEvents', () => {
       },
     });
 
-    await waitFor(() => result.current.isSuccess);
+    await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data).toEqual({
       data: [],
       meta: {
@@ -75,8 +64,8 @@ describe('useProfileEvents', () => {
       ],
     });
 
-    const {result} = renderHook(useProfileEventsStats, {
-      wrapper: TestContext,
+    const {result} = renderHookWithProviders(useProfileEventsStats, {
+      organization,
       initialProps: {
         dataset: 'profiles' as const,
         yAxes,
@@ -85,7 +74,7 @@ describe('useProfileEvents', () => {
       },
     });
 
-    await waitFor(() => result.current.isSuccess);
+    await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data).toEqual({
       data: [{axis: 'count()', values: [1, 2]}],
       meta: {
@@ -136,8 +125,8 @@ describe('useProfileEvents', () => {
       ],
     });
 
-    const {result} = renderHook(useProfileEventsStats, {
-      wrapper: TestContext,
+    const {result} = renderHookWithProviders(useProfileEventsStats, {
+      organization,
       initialProps: {
         dataset: 'profiles' as const,
         yAxes,
@@ -146,7 +135,7 @@ describe('useProfileEvents', () => {
       },
     });
 
-    await waitFor(() => result.current.isSuccess);
+    await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data).toEqual({
       data: [
         {axis: 'count()', values: [1, 2]},
@@ -163,16 +152,6 @@ describe('useProfileEvents', () => {
 
   it('handles 1 axis using discover', async () => {
     const {organization: organizationUsingTransactions} = initializeOrg();
-
-    function TestContextUsingTransactions({children}: {children?: ReactNode}) {
-      return (
-        <QueryClientProvider client={makeTestQueryClient()}>
-          <OrganizationContext value={organizationUsingTransactions}>
-            {children}
-          </OrganizationContext>
-        </QueryClientProvider>
-      );
-    }
 
     const yAxes = ['count()'];
 
@@ -198,8 +177,8 @@ describe('useProfileEvents', () => {
       ],
     });
 
-    const {result} = renderHook(useProfileEventsStats, {
-      wrapper: TestContextUsingTransactions,
+    const {result} = renderHookWithProviders(useProfileEventsStats, {
+      organization: organizationUsingTransactions,
       initialProps: {
         dataset: 'profiles' as const,
         yAxes,
@@ -208,7 +187,7 @@ describe('useProfileEvents', () => {
       },
     });
 
-    await waitFor(() => result.current.isSuccess);
+    await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data).toEqual({
       data: [{axis: 'count()', values: [1, 2]}],
       meta: {

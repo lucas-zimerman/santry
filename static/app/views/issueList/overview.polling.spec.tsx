@@ -1,22 +1,24 @@
 import {GroupFixture} from 'sentry-fixture/group';
 import {GroupStatsFixture} from 'sentry-fixture/groupStats';
-import {LocationFixture} from 'sentry-fixture/locationFixture';
 import {MemberFixture} from 'sentry-fixture/member';
+import {ProjectFixture} from 'sentry-fixture/project';
 import {TagsFixture} from 'sentry-fixture/tags';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 import {textWithMarkupMatcher} from 'sentry-test/utils';
 
-import StreamGroup from 'sentry/components/stream/group';
-import TagStore from 'sentry/stores/tagStore';
+import {StreamGroup} from 'sentry/components/stream/group';
+import {TagStore} from 'sentry/stores/tagStore';
+import type {Group} from 'sentry/types/group';
 import IssueList from 'sentry/views/issueList/overview';
 
-jest.mock('sentry/views/issueList/filters', () => jest.fn(() => null));
+jest.mock('sentry/views/issueList/filters', () => ({
+  IssueListFilters: jest.fn(() => null),
+}));
 jest.mock('sentry/components/stream/group', () => ({
   __esModule: true,
-  default: jest.fn(({id}: {id: string}) => <div data-test-id={id} />),
-  LoadingStreamGroup: jest.fn(({id}: {id: string}) => <div data-test-id={id} />),
+  StreamGroup: jest.fn(({group}: {group: Group}) => <div data-test-id={group.id} />),
+  LoadingStreamGroup: jest.fn(() => <div data-test-id="loading-group" />),
 }));
 
 jest.mock('js-cookie', () => ({
@@ -38,26 +40,13 @@ describe('IssueList -> Polling', () => {
     MockApiClient.clearMockResponses();
   });
 
-  const {organization, project, routerProps} = initializeOrg({
-    organization: {
-      access: ['project:releases'],
-    },
-  });
+  const project = ProjectFixture();
   const group = GroupFixture({project});
   const group2 = GroupFixture({project, id: '2'});
 
-  const defaultProps = {
-    location: LocationFixture({
-      query: {query: 'is:unresolved'},
-      search: 'query=is:unresolved',
-    }),
-    params: {},
-    organization,
-  };
-
   /* helpers */
   const renderComponent = async () => {
-    render(<IssueList {...routerProps} {...defaultProps} />, {
+    render(<IssueList />, {
       initialRouterConfig: {
         location: {
           pathname: '/organizations/org-slug/issues/',

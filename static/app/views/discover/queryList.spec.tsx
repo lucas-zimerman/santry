@@ -1,9 +1,7 @@
 import {DiscoverSavedQueryFixture} from 'sentry-fixture/discover';
 import {LocationFixture} from 'sentry-fixture/locationFixture';
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
   render,
   screen,
@@ -27,8 +25,6 @@ describe('Discover > QueryList', () => {
   let updateHomepageMock: jest.Mock;
   let eventsStatsMock: jest.Mock;
   const refetchSavedQueries = jest.fn();
-
-  const {router} = initializeOrg();
 
   beforeAll(async () => {
     await import('sentry/components/modals/widgetBuilder/addToDashboardModal');
@@ -86,7 +82,6 @@ describe('Discover > QueryList', () => {
   it('renders an empty list', () => {
     render(
       <QueryList
-        router={RouterFixture()}
         organization={organization}
         savedQueries={[]}
         savedQuerySearchQuery="no matches"
@@ -94,10 +89,7 @@ describe('Discover > QueryList', () => {
         renderPrebuilt={false}
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     expect(screen.getByText('No saved queries match that filter')).toBeInTheDocument();
@@ -107,17 +99,13 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries}
         renderPrebuilt
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     await waitFor(() => {
@@ -146,21 +134,16 @@ describe('Discover > QueryList', () => {
     organization = OrganizationFixture({
       features: ['discover-basic', 'discover-query', 'performance-view'],
     });
-    render(
+    const {router} = render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={[]}
         renderPrebuilt
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        router,
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     await waitFor(() => {
@@ -196,10 +179,12 @@ describe('Discover > QueryList', () => {
     );
 
     await userEvent.click(screen.getAllByTestId(/card-*/).at(0)!);
-    expect(router.push).toHaveBeenLastCalledWith({
-      pathname: '/organizations/org-slug/explore/discover/results/',
-      query: expect.objectContaining({queryDataset: 'error-events'}),
-    });
+    expect(router.location.pathname).toBe(
+      '/organizations/org-slug/explore/discover/results/'
+    );
+    expect(router.location.query).toEqual(
+      expect.objectContaining({queryDataset: 'error-events'})
+    );
   });
 
   it('passes dataset to the query if flag is enabled', async () => {
@@ -209,17 +194,13 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={org}
         savedQueries={savedQueries}
         renderPrebuilt
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     await waitFor(() => {
@@ -245,21 +226,16 @@ describe('Discover > QueryList', () => {
   });
 
   it('can duplicate and trigger change callback', async () => {
-    render(
+    const {router} = render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries}
         pageLinks=""
         renderPrebuilt={false}
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        router,
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const card = screen.getAllByTestId(/card-*/).at(0)!;
@@ -270,10 +246,12 @@ describe('Discover > QueryList', () => {
     await userEvent.click(withinCard.getByText('Duplicate Query'));
 
     await waitFor(() => {
-      expect(router.push).toHaveBeenCalledWith({
-        pathname: location.pathname,
-        query: {},
-      });
+      expect(router.location).toEqual(
+        expect.objectContaining({
+          pathname: location.pathname,
+          query: {},
+        })
+      );
     });
 
     expect(duplicateMock).toHaveBeenCalled();
@@ -284,16 +262,12 @@ describe('Discover > QueryList', () => {
       <QueryList
         savedQuerySearchQuery=""
         renderPrebuilt={false}
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries}
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const card = screen.getAllByTestId(/card-*/).at(1);
@@ -307,46 +281,38 @@ describe('Discover > QueryList', () => {
   });
 
   it('redirects to Discover on card click', async () => {
-    render(
+    const {router} = render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries}
         pageLinks=""
         renderPrebuilt={false}
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        router,
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     await userEvent.click(screen.getAllByTestId(/card-*/).at(0)!);
-    expect(router.push).toHaveBeenLastCalledWith({
-      pathname: '/organizations/org-slug/explore/discover/results/',
-      query: {id: '1', statsPeriod: '14d'},
-    });
+    expect(router.location).toEqual(
+      expect.objectContaining({
+        pathname: '/organizations/org-slug/explore/discover/results/',
+        query: {id: '1', statsPeriod: '14d'},
+      })
+    );
   });
 
   it('can redirect on last query deletion', async () => {
-    render(
+    const {router} = render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries.slice(1)}
         renderPrebuilt={false}
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        router,
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const card = screen.getAllByTestId(/card-*/).at(0)!;
@@ -358,11 +324,11 @@ describe('Discover > QueryList', () => {
     expect(deleteMock).toHaveBeenCalled();
 
     await waitFor(() => {
-      expect(router.push).toHaveBeenCalledWith({
-        pathname: location.pathname,
-        query: {cursor: undefined, statsPeriod: '14d'},
-      });
+      expect(router.location.query).toEqual(
+        expect.objectContaining({statsPeriod: '14d'})
+      );
     });
+    expect(router.location.query.cursor).toBeUndefined();
   });
 
   it('renders Add to Dashboard in context menu', async () => {
@@ -373,17 +339,13 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={featuredOrganization}
         savedQueries={savedQueries.slice(1)}
         pageLinks=""
         renderPrebuilt={false}
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const card = screen.getAllByTestId(/card-*/).at(0)!;
@@ -407,17 +369,13 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries.slice(1)}
         pageLinks=""
         renderPrebuilt={false}
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const card = screen.getAllByTestId(/card-*/).at(0)!;
@@ -450,17 +408,13 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={featuredOrganization}
         savedQueries={[savedQueryWithMultiYAxis]}
         pageLinks=""
         renderPrebuilt={false}
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const chart = await screen.findByTestId('area-chart');
@@ -479,17 +433,13 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={organization}
         savedQueries={savedQueries.slice(1)}
         renderPrebuilt={false}
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     await userEvent.click(screen.getByTestId('menu-trigger'));
@@ -510,7 +460,6 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={featuredOrganization}
         savedQueries={[
           DiscoverSavedQueryFixture({
@@ -547,7 +496,6 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         organization={featuredOrganization}
         savedQueries={[
           DiscoverSavedQueryFixture({
@@ -584,7 +532,6 @@ describe('Discover > QueryList', () => {
       render(
         <QueryList
           savedQuerySearchQuery=""
-          router={RouterFixture()}
           organization={featuredOrganization}
           renderPrebuilt={false}
           savedQueries={[
@@ -598,10 +545,7 @@ describe('Discover > QueryList', () => {
           pageLinks=""
           location={location}
           refetchSavedQueries={refetchSavedQueries}
-        />,
-        {
-          deprecatedRouterMocks: true,
-        }
+        />
       );
 
       const contextMenu = await screen.findByTestId('menu-trigger');
@@ -622,23 +566,25 @@ describe('Discover > QueryList', () => {
       await waitFor(() => {
         expect(openAddToDashboardModal).toHaveBeenCalledWith(
           expect.objectContaining({
-            widget: {
-              displayType: 'area',
-              interval: undefined,
-              limit: 5,
-              queries: [
-                {
-                  aggregates: ['count()'],
-                  columns: ['test'],
-                  conditions: '',
-                  fields: ['test'],
-                  name: '',
-                  orderby: 'test',
-                },
-              ],
-              title: 'Saved query #1',
-              widgetType: 'transaction-like',
-            },
+            widgets: [
+              {
+                displayType: 'area',
+                interval: undefined,
+                limit: 5,
+                queries: [
+                  {
+                    aggregates: ['count()'],
+                    columns: ['test'],
+                    conditions: '',
+                    fields: ['test'],
+                    name: '',
+                    orderby: 'test',
+                  },
+                ],
+                title: 'Saved query #1',
+                widgetType: 'transaction-like',
+              },
+            ],
           })
         );
       });
@@ -651,7 +597,6 @@ describe('Discover > QueryList', () => {
       render(
         <QueryList
           savedQuerySearchQuery=""
-          router={RouterFixture()}
           renderPrebuilt={false}
           organization={featuredOrganization}
           savedQueries={[
@@ -666,10 +611,7 @@ describe('Discover > QueryList', () => {
           pageLinks=""
           location={location}
           refetchSavedQueries={refetchSavedQueries}
-        />,
-        {
-          deprecatedRouterMocks: true,
-        }
+        />
       );
 
       const contextMenu = await screen.findByTestId('menu-trigger');
@@ -690,23 +632,25 @@ describe('Discover > QueryList', () => {
       await waitFor(() => {
         expect(openAddToDashboardModal).toHaveBeenCalledWith(
           expect.objectContaining({
-            widget: {
-              displayType: 'area',
-              interval: undefined,
-              limit: undefined,
-              queries: [
-                {
-                  aggregates: ['count()'],
-                  columns: [],
-                  conditions: '',
-                  fields: [],
-                  name: '',
-                  orderby: '',
-                },
-              ],
-              title: 'Saved query #1',
-              widgetType: 'transaction-like',
-            },
+            widgets: [
+              {
+                displayType: 'area',
+                interval: undefined,
+                limit: undefined,
+                queries: [
+                  {
+                    aggregates: ['count()'],
+                    columns: [],
+                    conditions: '',
+                    fields: [],
+                    name: '',
+                    orderby: '',
+                  },
+                ],
+                title: 'Saved query #1',
+                widgetType: 'transaction-like',
+              },
+            ],
           })
         );
       });
@@ -719,7 +663,6 @@ describe('Discover > QueryList', () => {
       render(
         <QueryList
           savedQuerySearchQuery=""
-          router={RouterFixture()}
           organization={featuredOrganization}
           renderPrebuilt={false}
           savedQueries={[
@@ -756,7 +699,6 @@ describe('Discover > QueryList', () => {
       render(
         <QueryList
           savedQuerySearchQuery=""
-          router={RouterFixture()}
           organization={featuredOrganization}
           renderPrebuilt={false}
           savedQueries={[
@@ -794,7 +736,6 @@ describe('Discover > QueryList', () => {
     render(
       <QueryList
         savedQuerySearchQuery=""
-        router={RouterFixture()}
         renderPrebuilt={false}
         organization={featuredOrganization}
         savedQueries={[
@@ -809,10 +750,7 @@ describe('Discover > QueryList', () => {
         pageLinks=""
         location={location}
         refetchSavedQueries={refetchSavedQueries}
-      />,
-      {
-        deprecatedRouterMocks: true,
-      }
+      />
     );
 
     const contextMenu = await screen.findByTestId('menu-trigger');
@@ -833,23 +771,25 @@ describe('Discover > QueryList', () => {
     await waitFor(() => {
       expect(openAddToDashboardModal).toHaveBeenCalledWith(
         expect.objectContaining({
-          widget: {
-            displayType: 'area',
-            interval: undefined,
-            limit: undefined,
-            queries: [
-              {
-                aggregates: ['count()'],
-                columns: [],
-                conditions: '',
-                fields: [],
-                name: '',
-                orderby: '',
-              },
-            ],
-            title: 'Saved query #1',
-            widgetType: 'transaction-like',
-          },
+          widgets: [
+            {
+              displayType: 'area',
+              interval: undefined,
+              limit: undefined,
+              queries: [
+                {
+                  aggregates: ['count()'],
+                  columns: [],
+                  conditions: '',
+                  fields: [],
+                  name: '',
+                  orderby: '',
+                },
+              ],
+              title: 'Saved query #1',
+              widgetType: 'transaction-like',
+            },
+          ],
         })
       );
     });

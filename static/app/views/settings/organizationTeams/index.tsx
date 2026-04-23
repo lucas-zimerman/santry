@@ -1,30 +1,28 @@
-import {useCallback, useEffect, useMemo} from 'react';
+import {useCallback, useMemo} from 'react';
+import {useQueryClient} from '@tanstack/react-query';
 
-import {loadStats} from 'sentry/actionCreators/projects';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {t} from 'sentry/locale';
-import TeamStore from 'sentry/stores/teamStore';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
+import {TeamStore} from 'sentry/stores/teamStore';
 import type {AccessRequest} from 'sentry/types/organization';
-import {
-  setApiQueryData,
-  useApiQuery,
-  useQueryClient,
-  type ApiQueryKey,
-} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {setApiQueryData, useApiQuery} from 'sentry/utils/queryClient';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
-import OrganizationTeams from './organizationTeams';
+import {OrganizationTeams} from './organizationTeams';
 
-function OrganizationTeamsContainer(props: RouteComponentProps) {
-  const api = useApi();
+export default function OrganizationTeamsContainer() {
   const organization = useOrganization({allowNull: true});
   const queryClient = useQueryClient();
 
-  const queryKey: ApiQueryKey = useMemo(
-    () => [`/organizations/${organization?.slug}/access-requests/`],
+  const queryKey = useMemo(
+    () =>
+      [
+        getApiUrl('/organizations/$organizationIdOrSlug/access-requests/', {
+          path: {organizationIdOrSlug: organization?.slug!},
+        }),
+      ] as const,
     [organization?.slug]
   );
 
@@ -37,20 +35,6 @@ function OrganizationTeamsContainer(props: RouteComponentProps) {
     retry: false,
     enabled: !!organization?.slug,
   });
-
-  useEffect(() => {
-    if (!organization?.slug) {
-      return;
-    }
-    loadStats(api, {
-      orgId: organization?.slug,
-      query: {
-        since: (Date.now() / 1000 - 3600 * 24).toString(),
-        stat: 'generated',
-        group: 'project',
-      },
-    });
-  }, [organization?.slug, api]);
 
   const handleRemoveAccessRequest = useCallback(
     (id: string, isApproved: boolean) => {
@@ -89,14 +73,11 @@ function OrganizationTeamsContainer(props: RouteComponentProps) {
 
   return (
     <OrganizationTeams
-      {...props}
+      organization={organization}
       access={new Set(organization?.access)}
       features={new Set(organization?.features)}
-      organization={organization}
       requestList={requestList}
       onRemoveAccessRequest={handleRemoveAccessRequest}
     />
   );
 }
-
-export default OrganizationTeamsContainer;

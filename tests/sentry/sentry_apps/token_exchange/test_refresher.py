@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 from django.db.utils import OperationalError
 
+from sentry.analytics.events.sentry_app_token_exchanged import SentryAppTokenExchangedEvent
 from sentry.integrations.types import EventLifecycleOutcome
 from sentry.models.apiapplication import ApiApplication
 from sentry.models.apitoken import ApiToken
@@ -17,6 +18,7 @@ from sentry.testutils.asserts import (
     assert_halt_metric,
 )
 from sentry.testutils.cases import TestCase
+from sentry.testutils.helpers.analytics import assert_last_analytics_event
 from sentry.testutils.silo import control_silo_test
 
 
@@ -218,10 +220,36 @@ class TestRefresher(TestCase):
             user=self.user,
         ).run()
 
-        record.assert_called_with(
-            "sentry_app.token_exchanged",
-            sentry_app_installation_id=self.install.id,
-            exchange_type="refresh",
+        assert_last_analytics_event(
+            record,
+            SentryAppTokenExchangedEvent(
+                sentry_app_installation_id=self.install.id,
+                exchange_type="refresh",
+            ),
+        )
+
+    @patch("sentry.integrations.utils.metrics.EventLifecycle.record_event")
+    def test_race_condition_on_token_refresh(self, mock_record: MagicMock) -> None:
+        from sentry.locks import locks
+
+        lock = locks.get(
+            ApiToken.get_lock_key(self.token.id),
+            duration=10,
+            name="api_token_refresh",
+        )
+        lock.acquire()
+
+        with pytest.raises(SentryAppIntegratorError) as e:
+            self.refresher.run()
+
+        assert e.value.message == "Token refresh already in progress"
+        assert e.value.status_code == 409
+
+        assert_count_of_metric(
+            mock_record=mock_record, outcome=EventLifecycleOutcome.STARTED, outcome_count=1
+        )
+        assert_count_of_metric(
+            mock_record=mock_record, outcome=EventLifecycleOutcome.HALTED, outcome_count=1
         )
 
     def test_returns_token_on_outbox_error(self) -> None:

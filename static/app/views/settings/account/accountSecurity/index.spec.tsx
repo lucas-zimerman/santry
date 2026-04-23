@@ -1,7 +1,6 @@
 import {AccountEmailsFixture} from 'sentry-fixture/accountEmails';
 import {AuthenticatorsFixture} from 'sentry-fixture/authenticators';
 import {OrganizationsFixture} from 'sentry-fixture/organizations';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
 import {
   render,
@@ -11,7 +10,7 @@ import {
   waitFor,
 } from 'sentry-test/reactTestingLibrary';
 
-import ModalStore from 'sentry/stores/modalStore';
+import {ModalStore} from 'sentry/stores/modalStore';
 import {testableWindowLocation} from 'sentry/utils/testableWindowLocation';
 import AccountSecurity from 'sentry/views/settings/account/accountSecurity';
 import AccountSecurityWrapper from 'sentry/views/settings/account/accountSecurity/accountSecurityWrapper';
@@ -22,9 +21,7 @@ const ACCOUNT_EMAILS_ENDPOINT = '/users/me/emails/';
 const AUTH_ENDPOINT = '/auth/';
 
 describe('AccountSecurity', () => {
-  const router = RouterFixture();
   beforeEach(() => {
-    MockApiClient.clearMockResponses();
     MockApiClient.addMockResponse({
       url: ORG_ENDPOINT,
       body: OrganizationsFixture(),
@@ -36,25 +33,20 @@ describe('AccountSecurity', () => {
   });
 
   function renderComponent() {
-    return render(
-      <AccountSecurityWrapper>
-        <AccountSecurity
-          deleteDisabled={false}
-          authenticators={[]}
-          hasVerifiedEmail
-          countEnrolled={0}
-          handleRefresh={jest.fn()}
-          onDisable={jest.fn()}
-          orgsRequire2fa={[]}
-          location={router.location}
-          route={router.routes[0]!}
-          routes={router.routes}
-          router={router}
-          routeParams={router.params}
-          params={{...router.params, authId: '15'}}
-        />
-      </AccountSecurityWrapper>
-    );
+    return render(<AccountSecurityWrapper />, {
+      initialRouterConfig: {
+        location: {
+          pathname: '/settings/account/security/',
+        },
+        route: '/settings/account/security/',
+        children: [
+          {
+            index: true,
+            element: <AccountSecurity />,
+          },
+        ],
+      },
+    });
   }
 
   it('renders empty', async () => {
@@ -326,32 +318,25 @@ describe('AccountSecurity', () => {
 
     renderComponent();
 
-    await userEvent.type(
-      await screen.findByRole('textbox', {name: 'Current Password'}),
-      'oldpassword'
-    );
-    await userEvent.type(
-      screen.getByRole('textbox', {name: 'New Password'}),
-      'newpassword'
-    );
-    await userEvent.type(
-      screen.getByRole('textbox', {name: 'Verify New Password'}),
-      'newpassword'
-    );
+    await userEvent.type(await screen.findByLabelText('Current Password'), 'oldpassword');
+    await userEvent.type(screen.getByLabelText('New Password'), 'newpassword');
+    await userEvent.type(screen.getByLabelText('Verify New Password'), 'newpassword');
 
     await userEvent.click(screen.getByRole('button', {name: 'Change password'}));
 
-    expect(mock).toHaveBeenCalledWith(
-      url,
-      expect.objectContaining({
-        method: 'PUT',
-        data: {
-          password: 'oldpassword',
-          passwordNew: 'newpassword',
-          passwordVerify: 'newpassword',
-        },
-      })
-    );
+    await waitFor(() => {
+      expect(mock).toHaveBeenCalledWith(
+        url,
+        expect.objectContaining({
+          method: 'PUT',
+          data: {
+            password: 'oldpassword',
+            passwordNew: 'newpassword',
+            passwordVerify: 'newpassword',
+          },
+        })
+      );
+    });
   });
 
   it('requires current password to be entered', async () => {
@@ -367,14 +352,8 @@ describe('AccountSecurity', () => {
 
     renderComponent();
 
-    await userEvent.type(
-      await screen.findByRole('textbox', {name: 'New Password'}),
-      'newpassword'
-    );
-    await userEvent.type(
-      screen.getByRole('textbox', {name: 'Verify New Password'}),
-      'newpassword'
-    );
+    await userEvent.type(await screen.findByLabelText('New Password'), 'newpassword');
+    await userEvent.type(screen.getByLabelText('Verify New Password'), 'newpassword');
 
     await userEvent.click(screen.getByRole('button', {name: 'Change password'}));
 

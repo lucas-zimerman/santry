@@ -1,26 +1,35 @@
-import {createContext, useContext} from 'react';
+import {createContext, useContext, useState} from 'react';
 
-import type {Project} from 'sentry/types/project';
-import type {DetectorType} from 'sentry/types/workflowEngine/detectors';
+import type {Detector, DetectorType} from 'sentry/types/workflowEngine/detectors';
 
 type DetectorFormContextType = {
   detectorType: DetectorType;
-  project: Project;
+  /**
+   * Tracks whether the user has manually set the detector name.
+   * Used by useSetAutomaticName to disable automatic name generation.
+   */
+  hasSetDetectorName: boolean;
+  setHasSetDetectorName: (value: boolean) => void;
+  detector?: Detector;
 };
 
 const DetectorFormContext = createContext<DetectorFormContextType | null>(null);
 
 export function DetectorFormProvider({
   detectorType,
-  project,
+  detector,
   children,
 }: {
   children: React.ReactNode;
   detectorType: DetectorType;
-  project: Project;
+  detector?: Detector;
 }) {
+  const [hasSetDetectorName, setHasSetDetectorName] = useState(false);
+
   return (
-    <DetectorFormContext.Provider value={{detectorType, project}}>
+    <DetectorFormContext.Provider
+      value={{detectorType, hasSetDetectorName, setHasSetDetectorName, detector}}
+    >
       {children}
     </DetectorFormContext.Provider>
   );

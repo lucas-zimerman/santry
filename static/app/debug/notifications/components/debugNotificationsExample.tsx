@@ -1,12 +1,13 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
-import {CodeSnippet} from 'sentry/components/codeSnippet';
-import {Button} from 'sentry/components/core/button';
-import {Container, Flex, Grid} from 'sentry/components/core/layout';
-import {SegmentedControl} from 'sentry/components/core/segmentedControl';
-import {Heading, Text} from 'sentry/components/core/text';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {Button} from '@sentry/scraps/button';
+import {CodeBlock} from '@sentry/scraps/code';
+import {Container, Flex, Grid} from '@sentry/scraps/layout';
+import {SegmentedControl} from '@sentry/scraps/segmentedControl';
+import {Heading, Text} from '@sentry/scraps/text';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import type {NotificationTemplateRegistration} from 'sentry/debug/notifications/types';
 import {useLocalStorageState} from 'sentry/utils/useLocalStorageState';
 
@@ -21,7 +22,7 @@ export function DebugNotificationsExample({
   registration: NotificationTemplateRegistration;
 }) {
   const [displayFormat, setDisplayFormat] = useLocalStorageState(
-    'debug-notifications-example-displayed-raw',
+    'debug-notifications-example-display-format',
     ExampleDataFormat.FORMATTED
   );
   return (
@@ -47,19 +48,19 @@ export function DebugNotificationsExample({
         {displayFormat === ExampleDataFormat.FORMATTED ? (
           <Text>{registration.example.subject}</Text>
         ) : (
-          <CodeSnippet language="javascript">
+          <CodeBlock language="javascript">
             {JSON.stringify(registration.example.subject)}
-          </CodeSnippet>
+          </CodeBlock>
         )}
         <Text variant="success" bold>
           Body
         </Text>
         {displayFormat === ExampleDataFormat.FORMATTED ? (
-          <Text>{registration.example.body}</Text>
+          <Text>{JSON.stringify(registration.example.body)}</Text>
         ) : (
-          <CodeSnippet language="javascript">
+          <CodeBlock language="javascript">
             {JSON.stringify(registration.example.body)}
-          </CodeSnippet>
+          </CodeBlock>
         )}
         {registration.example.actions.length > 0 && (
           <Fragment>
@@ -72,7 +73,7 @@ export function DebugNotificationsExample({
                   <InlineButton
                     key={index}
                     onClick={() => {}}
-                    title={action.link}
+                    tooltipProps={{title: action.link}}
                     size="sm"
                   >
                     {action.label}
@@ -80,9 +81,9 @@ export function DebugNotificationsExample({
                 ))}
               </div>
             ) : (
-              <CodeSnippet language="json">
+              <CodeBlock language="json">
                 {JSON.stringify(registration.example.actions, null, 2)}
-              </CodeSnippet>
+              </CodeBlock>
             )}
           </Fragment>
         )}
@@ -106,9 +107,9 @@ export function DebugNotificationsExample({
                 <PlaceholderChart />
               </Tooltip>
             ) : (
-              <CodeSnippet language="json">
+              <CodeBlock language="json">
                 {JSON.stringify(registration.example.chart, null, 2)}
-              </CodeSnippet>
+              </CodeBlock>
             )}
           </Fragment>
         )}
@@ -120,9 +121,9 @@ export function DebugNotificationsExample({
             {displayFormat === ExampleDataFormat.FORMATTED ? (
               <Text>{registration.example.footer}</Text>
             ) : (
-              <CodeSnippet language="javascript">
+              <CodeBlock language="javascript">
                 {JSON.stringify(registration.example.footer)}
-              </CodeSnippet>
+              </CodeBlock>
             )}
           </Fragment>
         )}
@@ -134,8 +135,8 @@ export function DebugNotificationsExample({
 const PlaceholderChart = styled('div')`
   height: 100px;
   width: 200px;
-  border: 1px solid ${p => p.theme.border};
-  border-radius: ${p => p.theme.borderRadius};
+  border: 1px solid ${p => p.theme.tokens.border.primary};
+  border-radius: ${p => p.theme.radius.md};
   background: linear-gradient(
     to bottom right,
     ${p => p.theme.tokens.background.primary},
@@ -146,7 +147,7 @@ const PlaceholderChart = styled('div')`
 
 const InlineButton = styled(Button)`
   display: inline-block;
-  margin: ${p => `0 ${p.theme.space.md} ${p.theme.space.md} 0`};
+  margin: ${p => `0 ${p.theme.space.xs} 0 0`};
 `;
 
 const ExampleGrid = styled(Grid)`

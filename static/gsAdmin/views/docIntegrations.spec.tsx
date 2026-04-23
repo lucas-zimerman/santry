@@ -1,5 +1,4 @@
 import {DocIntegrationFixture} from 'getsentry-test/fixtures/docIntegration';
-import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
   render,
   renderGlobalModal,
@@ -10,20 +9,18 @@ import {
 
 import * as indicators from 'sentry/actionCreators/indicator';
 
-import DocIntegrationDetails from 'admin/views/docIntegrationDetails';
-import DocIntegrations from 'admin/views/docIntegrations';
+import {DocIntegrationDetails} from 'admin/views/docIntegrationDetails';
+import {DocIntegrations} from 'admin/views/docIntegrations';
 
 describe('Doc Integrations', () => {
   it('renders', () => {
-    const {routerProps} = initializeOrg();
-
     MockApiClient.addMockResponse({
       url: '/doc-integrations/',
       method: 'GET',
       body: [],
     });
 
-    render(<DocIntegrations {...routerProps} />);
+    render(<DocIntegrations />);
 
     expect(
       screen.getByRole('heading', {name: 'Document Integrations'})
@@ -51,7 +48,7 @@ describe('Doc Integration Details', () => {
         location: {
           pathname: `/admin/doc-integrations/${mockDocIntegration.slug}/`,
         },
-        route: `/admin/doc-integrations/:docIntegrationSlug/`,
+        route: '/admin/doc-integrations/:docIntegrationSlug/',
       },
     });
 
@@ -86,7 +83,7 @@ describe('Doc Integration Details', () => {
         location: {
           pathname: `/admin/doc-integrations/${mockDocIntegration.slug}/`,
         },
-        route: `/admin/doc-integrations/:docIntegrationSlug/`,
+        route: '/admin/doc-integrations/:docIntegrationSlug/',
       },
     });
 
@@ -143,7 +140,7 @@ describe('Doc Integration Details', () => {
         location: {
           pathname: `/admin/doc-integrations/${mockDocIntegration.slug}/`,
         },
-        route: `/admin/doc-integrations/:docIntegrationSlug/`,
+        route: '/admin/doc-integrations/:docIntegrationSlug/',
       },
     });
     expect(
@@ -199,7 +196,7 @@ describe('Doc Integration Details', () => {
         location: {
           pathname: `/admin/doc-integrations/${mockDocIntegration.slug}/`,
         },
-        route: `/admin/doc-integrations/:docIntegrationSlug/`,
+        route: '/admin/doc-integrations/:docIntegrationSlug/',
       },
     });
 

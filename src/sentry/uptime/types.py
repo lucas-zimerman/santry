@@ -1,11 +1,15 @@
 import enum
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
-from typing import Literal, Required, TypedDict
+from typing import Any, Literal, Required, TypedDict
 
-from sentry_kafka_schemas.schema_types.uptime_results_v1 import CheckStatus, CheckStatusReasonType
+from sentry_kafka_schemas.schema_types.uptime_results_v1 import (
+    Assertion,
+    CheckStatus,
+    CheckStatusReasonType,
+)
 
 DATA_SOURCE_UPTIME_SUBSCRIPTION = "uptime_subscription"
 """
@@ -16,6 +20,29 @@ the uptime sbuscription data source.
 GROUP_TYPE_UPTIME_DOMAIN_CHECK_FAILURE = "uptime_domain_failure"
 """
 The GroupType slug for UptimeDomainCheckFailure GroupTypes.
+"""
+
+DEFAULT_RECOVERY_THRESHOLD = 1
+"""
+Default number of consecutive successful checks required to mark monitor as recovered.
+"""
+
+DEFAULT_DOWNTIME_THRESHOLD = 3
+"""
+Default number of consecutive failed checks required to mark monitor as down.
+"""
+
+DEFAULT_2XX_STATUS_ASSERTION: dict[str, Any] = {
+    "root": {
+        "op": "and",
+        "children": [
+            {"op": "status_code_check", "operator": {"cmp": "greater_than"}, "value": 199},
+            {"op": "status_code_check", "operator": {"cmp": "less_than"}, "value": 300},
+        ],
+    }
+}
+"""
+Default assertion that checks for a 2xx status code response.
 """
 
 RegionScheduleMode = Literal["round_robin"]
@@ -95,6 +122,16 @@ class CheckConfig(TypedDict, total=False):
     Defines how we'll schedule checks based on other active regions.
     """
 
+    assertion: Any | None
+    """
+    The runtime assertion to execute, or null.
+    """
+
+    capture_response_on_failure: bool
+    """
+    Whether to capture response body and headers on check failures.
+    """
+
 
 class IncidentStatus(IntEnum):
     """
@@ -122,6 +159,11 @@ class EapCheckEntry:
     incident_status: IncidentStatus
     environment: str
     region: str
+    # TODO Abdullah Khan: Remove default values for trace_item_id
+    # and assertion_failure_data once getsentry is updated to use the new schema.
+    trace_item_id: str = ""
+    # Parsed JSON, can be a dict, so exclude it from hashing/comparison.
+    assertion_failure_data: Assertion | None = field(compare=False, default=None)
 
 
 @dataclass(frozen=True)
@@ -134,8 +176,7 @@ class UptimeSummary:
     failed_checks: int
     downtime_checks: int
     missed_window_checks: int
-    # TODO(epurkhiser): Remove None option once we're only using the uptime results table
-    avg_duration_us: float | None
+    avg_duration_us: float
 
 
 class UptimeMonitorMode(enum.IntEnum):

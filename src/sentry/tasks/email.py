@@ -2,13 +2,13 @@ import logging
 from smtplib import SMTPDataError
 from typing import Any
 
+from taskbroker_client.retry import Retry
+
 from sentry.auth import access
 from sentry.models.group import Group
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task, retry
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import notifications_control_tasks, notifications_tasks
-from sentry.taskworker.retry import Retry
 from sentry.users.services.user.model import RpcUser
 from sentry.users.services.user.service import user_service
 from sentry.utils.email import send_messages
@@ -72,18 +72,10 @@ def _send_email(message: dict[str, Any]) -> None:
 
 @instrumented_task(
     name="sentry.tasks.email.send_email",
-    queue="email",
-    default_retry_delay=60 * 5,
-    max_retries=None,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=notifications_tasks,
-        processing_deadline_duration=90,
-        retry=Retry(
-            times=2,
-            delay=60 * 5,
-        ),
-    ),
+    namespace=notifications_tasks,
+    processing_deadline_duration=90,
+    retry=Retry(times=2, delay=60 * 5),
+    silo_mode=SiloMode.CELL,
 )
 @retry(on=(TemporaryEmailError,))
 def send_email(message: dict[str, Any]) -> None:
@@ -92,18 +84,10 @@ def send_email(message: dict[str, Any]) -> None:
 
 @instrumented_task(
     name="sentry.tasks.email.send_email_control",
-    queue="email.control",
-    default_retry_delay=60 * 5,
-    max_retries=None,
+    namespace=notifications_control_tasks,
+    processing_deadline_duration=90,
+    retry=Retry(times=2, delay=60 * 5),
     silo_mode=SiloMode.CONTROL,
-    taskworker_config=TaskworkerConfig(
-        namespace=notifications_control_tasks,
-        processing_deadline_duration=90,
-        retry=Retry(
-            times=2,
-            delay=60 * 5,
-        ),
-    ),
 )
 @retry(on=(TemporaryEmailError,))
 def send_email_control(message: dict[str, Any]) -> None:

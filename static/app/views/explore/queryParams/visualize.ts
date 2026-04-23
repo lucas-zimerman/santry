@@ -12,7 +12,7 @@ import {decodeList} from 'sentry/utils/queryString';
 import {determineDefaultChartType} from 'sentry/views/explore/contexts/pageParamsContext/visualizes';
 import {ChartType} from 'sentry/views/insights/common/components/chart';
 
-export const MAX_VISUALIZES = 4;
+export const MAX_VISUALIZES = 8;
 
 interface VisualizeOptions {
   chartType?: ChartType;
@@ -85,7 +85,7 @@ export class VisualizeFunction extends Visualize {
     this.parsedFunction = parseFunction(yAxis);
   }
 
-  clone(): Visualize {
+  clone(): VisualizeFunction {
     return new VisualizeFunction(this.yAxis, {
       chartType: this.selectedChartType,
       visible: this.visible,
@@ -100,7 +100,7 @@ export class VisualizeFunction extends Visualize {
     chartType?: ChartType;
     visible?: boolean;
     yAxis?: string;
-  }): Visualize {
+  }): VisualizeFunction {
     return new VisualizeFunction(yAxis ?? this.yAxis, {
       chartType: chartType ?? this.selectedChartType,
       visible: visible ?? this.visible,

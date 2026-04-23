@@ -1,23 +1,23 @@
 from sentry.api.serializers import serialize
 from sentry.constants import ObjectStatus
-from sentry.deletions.models.scheduleddeletion import RegionScheduledDeletion
+from sentry.deletions.models.scheduleddeletion import CellScheduledDeletion
 from sentry.monitors.grouptype import MonitorIncidentType
 from sentry.monitors.models import Monitor, ScheduleType
 from sentry.monitors.serializers import MonitorSerializer
 from sentry.monitors.types import DATA_SOURCE_CRON_MONITOR
 from sentry.testutils.cases import APITestCase
 from sentry.testutils.outbox import outbox_runner
-from sentry.testutils.silo import region_silo_test
+from sentry.testutils.silo import cell_silo_test
 from sentry.workflow_engine.models import DataSource, DataSourceDetector, Detector
 
 
-@region_silo_test
+@cell_silo_test
 class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
     """Test PUT/DELETE operations for monitor incident detectors."""
 
     endpoint = "sentry-api-0-organization-detector-details"
 
-    def setUp(self):
+    def setUp(self) -> None:
         super().setUp()
         self.login_as(user=self.user)
         self.monitor = Monitor.objects.create(
@@ -47,7 +47,7 @@ class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
             detector=self.detector,
         )
 
-    def test_get_monitor_incident_detector_details(self):
+    def test_get_monitor_incident_detector_details(self) -> None:
         """Test getting a monitor incident detector details with proper monitor serialization."""
         response = self.get_success_response(
             self.organization.slug,
@@ -59,9 +59,15 @@ class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
             "id": str(self.detector.id),
             "projectId": str(self.project.id),
             "name": "Monitor Incident Detector",
+            "description": None,
             "type": MonitorIncidentType.slug,
             "workflowIds": [],
-            "owner": f"user:{self.user.id}",
+            "owner": {
+                "email": self.user.email,
+                "id": str(self.user.id),
+                "name": self.user.get_username(),
+                "type": "user",
+            },
             "createdBy": None,
             "dateCreated": response.data["dateCreated"],
             "dateUpdated": response.data["dateUpdated"],
@@ -85,7 +91,7 @@ class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
             "openIssues": 0,
         }
 
-    def test_update_monitor_incident_detector(self):
+    def test_update_monitor_incident_detector(self) -> None:
         """Test updating a monitor incident detector name and owner."""
         team = self.create_team(organization=self.organization)
 
@@ -106,7 +112,11 @@ class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
         )
 
         assert response.data["name"] == "Updated Monitor Detector"
-        assert response.data["owner"] == f"team:{team.id}"
+        assert response.data["owner"] == {
+            "id": str(team.id),
+            "name": team.slug,
+            "type": "team",
+        }
         assert response.data["type"] == MonitorIncidentType.slug
 
         self.monitor.refresh_from_db()
@@ -128,7 +138,43 @@ class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
         assert self.monitor.name == original_monitor_name
         assert self.monitor.config == original_monitor_config
 
-    def test_delete_monitor_incident_detector(self):
+    def test_update_monitor_incident_detector_with_data_sources(self) -> None:
+        """Test updating a monitor detector with dataSources field (including existing slug)."""
+        data = {
+            "name": "Updated Name",
+            "dataSources": [
+                {
+                    "name": "Updated Monitor Name",
+                    "slug": self.monitor.slug,  # Keep the existing slug
+                    "config": {
+                        "checkin_margin": 1,
+                        "failure_issue_threshold": 1,
+                        "max_runtime": 30,
+                        "recovery_threshold": 1,
+                        "timezone": "UTC",
+                        "schedule": "0 0 * * 5",
+                        "schedule_type": "crontab",
+                    },
+                }
+            ],
+        }
+
+        response = self.get_success_response(
+            self.organization.slug,
+            self.detector.id,
+            **data,
+            status_code=200,
+            method="PUT",
+        )
+
+        assert response.data["name"] == "Updated Name"
+
+        self.monitor.refresh_from_db()
+        assert self.monitor.name == "Updated Monitor Name"
+        assert self.monitor.slug == "test-monitor"  # Slug unchanged
+        assert self.monitor.config["schedule"] == "0 0 * * 5"
+
+    def test_delete_monitor_incident_detector(self) -> None:
         """Test deleting a monitor incident detector."""
         with outbox_runner():
             self.get_success_response(
@@ -137,7 +183,7 @@ class OrganizationMonitorIncidentDetectorDetailsTest(APITestCase):
                 method="DELETE",
             )
 
-        assert RegionScheduledDeletion.objects.filter(
+        assert CellScheduledDeletion.objects.filter(
             model_name="Detector", object_id=self.detector.id
         ).exists()
 

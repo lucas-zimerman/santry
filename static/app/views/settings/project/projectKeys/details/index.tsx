@@ -1,32 +1,31 @@
 import {useTheme} from '@emotion/react';
+import {useQueryClient} from '@tanstack/react-query';
 
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
-import type {Organization} from 'sentry/types/organization';
-import type {Project, ProjectKey} from 'sentry/types/project';
-import {browserHistory} from 'sentry/utils/browserHistory';
-import {setApiQueryData, useApiQuery, useQueryClient} from 'sentry/utils/queryClient';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
-import useApi from 'sentry/utils/useApi';
+import type {ProjectKey} from 'sentry/types/project';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
+import {setApiQueryData, useApiQuery} from 'sentry/utils/queryClient';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
+import {useApi} from 'sentry/utils/useApi';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useParams} from 'sentry/utils/useParams';
 import RouteError from 'sentry/views/routeError';
-import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
+import {SettingsPageHeader} from 'sentry/views/settings/components/settingsPageHeader';
 import {KeySettings} from 'sentry/views/settings/project/projectKeys/details/keySettings';
-import KeyStats from 'sentry/views/settings/project/projectKeys/details/keyStats';
+import {KeyStats} from 'sentry/views/settings/project/projectKeys/details/keyStats';
 import {ProjectPermissionAlert} from 'sentry/views/settings/project/projectPermissionAlert';
+import {useProjectSettingsOutlet} from 'sentry/views/settings/project/projectSettingsLayout';
 
-type Props = {
-  organization: Organization;
-  project: Project;
-} & RouteComponentProps<{
-  keyId: string;
-  projectId: string;
-}>;
-
-export default function ProjectKeyDetails({organization, params, project}: Props) {
+export default function ProjectKeyDetails() {
+  const organization = useOrganization();
+  const {project} = useProjectSettingsOutlet();
+  const params = useParams<{keyId: string; projectId: string}>();
   const {keyId, projectId} = params;
   const api = useApi();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const theme = useTheme();
 
@@ -35,22 +34,36 @@ export default function ProjectKeyDetails({organization, params, project}: Props
     isError,
     isPending,
   } = useApiQuery<ProjectKey>(
-    [`/projects/${organization.slug}/${projectId}/keys/${keyId}/`],
+    [
+      getApiUrl('/projects/$organizationIdOrSlug/$projectIdOrSlug/keys/$keyId/', {
+        path: {
+          organizationIdOrSlug: organization.slug,
+          projectIdOrSlug: projectId,
+          keyId,
+        },
+      }),
+    ],
     {staleTime: 0}
   );
 
   function onDataChange(data: ProjectKey) {
     setApiQueryData<ProjectKey>(
       queryClient,
-      [`/projects/${organization.slug}/${projectId}/keys/${keyId}/`],
+      [
+        getApiUrl('/projects/$organizationIdOrSlug/$projectIdOrSlug/keys/$keyId/', {
+          path: {
+            organizationIdOrSlug: organization.slug,
+            projectIdOrSlug: projectId,
+            keyId,
+          },
+        }),
+      ],
       data
     );
   }
 
   const handleRemove = () => {
-    browserHistory.push(
-      normalizeUrl(`/settings/${organization.slug}/projects/${projectId}/keys/`)
-    );
+    navigate(normalizeUrl(`/settings/${organization.slug}/projects/${projectId}/keys/`));
   };
 
   if (isError) {

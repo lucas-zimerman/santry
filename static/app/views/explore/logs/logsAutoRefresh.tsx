@@ -1,14 +1,15 @@
 import {Fragment, useEffect, type ReactNode} from 'react';
 
-import {Switch} from 'sentry/components/core/switch';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {Switch} from '@sentry/scraps/switch';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {t, tct} from 'sentry/locale';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import type {Sort} from 'sentry/utils/discover/fields';
 import {AggregationKey} from 'sentry/utils/fields';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import usePrevious from 'sentry/utils/usePrevious';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {usePrevious} from 'sentry/utils/usePrevious';
 import {
   useLogsAutoRefresh,
   useLogsAutoRefreshEnabled,
@@ -16,8 +17,8 @@ import {
   type AutoRefreshState,
 } from 'sentry/views/explore/contexts/logs/logsAutoRefreshContext';
 import {useLogsPageData} from 'sentry/views/explore/contexts/logs/logsPageData';
-import {useLogsAnalyticsPageSource} from 'sentry/views/explore/contexts/logs/logsPageParams';
-import {AutoRefreshLabel} from 'sentry/views/explore/logs/styles';
+import {useLogsAnalyticsPageSource} from 'sentry/views/explore/logs/logsQueryParamsProvider';
+import {AutoRefreshLabel, AutoRefreshText} from 'sentry/views/explore/logs/styles';
 import {useLogsAutoRefreshInterval} from 'sentry/views/explore/logs/useLogsAutoRefreshInterval';
 import {checkSortIsTimeBasedDescending} from 'sentry/views/explore/logs/utils';
 import {
@@ -81,6 +82,15 @@ export function AutorefreshToggle({averageLogsPerSecond = 0}: AutorefreshToggleP
     }
   }, [selectionString, previousSelection, setAutorefresh]);
 
+  const sortBysAreTimeBasedDescending = checkSortIsTimeBasedDescending(sortBys);
+
+  // Changing the sort should also disable autorefresh as there is only one sort (and direction) currently allowed.
+  useEffect(() => {
+    if (!sortBysAreTimeBasedDescending && autoRefresh !== 'idle') {
+      setAutorefresh('idle');
+    }
+  }, [setAutorefresh, sortBysAreTimeBasedDescending, autoRefresh]);
+
   const hasAbsoluteDates = Boolean(selection.datetime.start && selection.datetime.end);
 
   const preFlightDisableReason = getPreFlightDisableReason({
@@ -126,7 +136,7 @@ export function AutorefreshToggle({averageLogsPerSecond = 0}: AutorefreshToggleP
             }}
           />
         </Tooltip>
-        {t('Auto-refresh')}
+        <AutoRefreshText>{t('Auto-refresh')}</AutoRefreshText>
       </AutoRefreshLabel>
     </Fragment>
   );

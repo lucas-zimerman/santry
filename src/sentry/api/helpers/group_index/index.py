@@ -44,8 +44,7 @@ advanced_search_features: Sequence[tuple[Callable[[SearchFilter], Any], str]] = 
     (lambda search_filter: search_filter.value.is_wildcard(), "wildcard search"),
 ]
 
-DEFAULT_QUERY = "is:unresolved issue.priority:[high, medium]"
-TAXONOMY_DEFAULT_QUERY = "is:unresolved"
+DEFAULT_QUERY = "is:unresolved"
 
 
 def parse_and_convert_issue_search_query(
@@ -95,11 +94,7 @@ def build_query_params_from_request(
     has_query = request.GET.get("query")
     query = request.GET.get("query", None)
     if query is None:
-        query = (
-            TAXONOMY_DEFAULT_QUERY
-            if features.has("organizations:issue-taxonomy", organization)
-            else DEFAULT_QUERY
-        )
+        query = DEFAULT_QUERY
 
     query = query.strip()
 
@@ -275,28 +270,6 @@ def prep_search(
     return result, query_kwargs
 
 
-def get_first_last_release(
-    request: Request,
-    group: Group,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    first_release_s = group.get_first_release()
-    if first_release_s is not None:
-        last_release_s = group.get_last_release()
-    else:
-        last_release_s = None
-
-    if first_release_s is not None and last_release_s is not None:
-        first_release, last_release = serialize_releases(
-            request, group, [first_release_s, last_release_s]
-        )
-        return first_release, last_release
-    elif first_release_s is not None:
-        (first_release,) = serialize_releases(request, group, [first_release_s])
-        return (first_release, None)
-    else:
-        return None, None
-
-
 def serialize_releases(request: Request, group: Group, versions: list[str]) -> list[dict[str, Any]]:
     releases = {
         release.version: release
@@ -315,3 +288,26 @@ def serialize_releases(request: Request, group: Group, versions: list[str]) -> l
         item if item is not None else {"version": version}
         for item, version in zip(serialized_releases, versions)
     ]
+
+
+def get_first_last_release(
+    request: Request,
+    group: Group,
+    environment_names: list[str] | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    first_release_s = group.get_first_release(environment_names=environment_names)
+    if first_release_s is not None:
+        last_release_s = group.get_last_release(environment_names=environment_names)
+    else:
+        last_release_s = None
+
+    if first_release_s is not None and last_release_s is not None:
+        first_release, last_release = serialize_releases(
+            request, group, [first_release_s, last_release_s]
+        )
+        return first_release, last_release
+    elif first_release_s is not None:
+        (first_release,) = serialize_releases(request, group, [first_release_s])
+        return (first_release, None)
+    else:
+        return None, None

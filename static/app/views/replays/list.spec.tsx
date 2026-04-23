@@ -1,15 +1,20 @@
+import type {ReactNode} from 'react';
 import {OrganizationFixture} from 'sentry-fixture/organization';
+import {UserFixture} from 'sentry-fixture/user';
 
-import {render, screen, waitFor} from 'sentry-test/reactTestingLibrary';
+import {render, screen, waitFor, within} from 'sentry-test/reactTestingLibrary';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import useDeadRageSelectors from 'sentry/utils/replays/hooks/useDeadRageSelectors';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ConfigStore} from 'sentry/stores/configStore';
+import {useDeadRageSelectors} from 'sentry/utils/replays/hooks/useDeadRageSelectors';
 import {
   useHaveSelectedProjectsSentAnyReplayEvents,
   useReplayOnboardingSidebarPanel,
 } from 'sentry/utils/replays/hooks/useReplayOnboarding';
-import useProjectSdkNeedsUpdate from 'sentry/utils/useProjectSdkNeedsUpdate';
-import useAllMobileProj from 'sentry/views/replays/detail/useAllMobileProj';
+import {useProjectSdkNeedsUpdate} from 'sentry/utils/useProjectSdkNeedsUpdate';
+import {SecondaryNavigationContextProvider} from 'sentry/views/navigation/secondaryNavigationContext';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useAllMobileProj} from 'sentry/views/replays/detail/useAllMobileProj';
 import ListPage from 'sentry/views/replays/list';
 
 jest.mock('sentry/utils/replays/hooks/useDeadRageSelectors');
@@ -50,18 +55,31 @@ function getMockOrganizationFixture({features}: {features: string[]}) {
   return mockOrg;
 }
 
+function TopBarActionsWrapper({children}: {children: ReactNode}) {
+  return (
+    <SecondaryNavigationContextProvider>
+      <TopBar.Slot.Provider>
+        <TopBar.Slot.Outlet name="actions">
+          {props => <div {...props} data-test-id="topbar-actions-slot" />}
+        </TopBar.Slot.Outlet>
+        {children}
+      </TopBar.Slot.Provider>
+    </SecondaryNavigationContextProvider>
+  );
+}
+
 describe('ReplayList', () => {
   let mockFetchReplayListRequest: jest.Mock;
+  const user = UserFixture({id: '1'});
+
   beforeEach(() => {
+    ConfigStore.set('user', user);
     PageFiltersStore.init();
-    PageFiltersStore.onInitializeUrlState(
-      {
-        projects: [],
-        environments: [],
-        datetime: {start: null, end: null, period: '14d', utc: null},
-      },
-      new Set(['projects'])
-    );
+    PageFiltersStore.onInitializeUrlState({
+      projects: [],
+      environments: [],
+      datetime: {start: null, end: null, period: '14d', utc: null},
+    });
 
     mockUseHaveSelectedProjectsSentAnyReplayEvents.mockClear();
     mockUseProjectSdkNeedsUpdate.mockClear();
@@ -73,7 +91,7 @@ describe('ReplayList', () => {
       body: [],
     });
     mockFetchReplayListRequest = MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/replays/`,
+      url: '/organizations/org-slug/replays/',
       body: {},
     });
     // Request made by SearchQueryBuilder:
@@ -94,10 +112,12 @@ describe('ReplayList', () => {
       isError: false,
       isFetching: false,
       needsUpdate: false,
+      data: [],
     });
 
     render(<ListPage />, {
       organization: mockOrg,
+      additionalWrapper: SecondaryNavigationContextProvider,
     });
 
     await screen.findByText('Get to the root cause faster');
@@ -114,10 +134,12 @@ describe('ReplayList', () => {
       isError: false,
       isFetching: false,
       needsUpdate: false,
+      data: [],
     });
 
     render(<ListPage />, {
       organization: mockOrg,
+      additionalWrapper: SecondaryNavigationContextProvider,
     });
 
     await screen.findByText('Get to the root cause faster');
@@ -134,10 +156,12 @@ describe('ReplayList', () => {
       isError: false,
       isFetching: false,
       needsUpdate: false,
+      data: [],
     });
 
     render(<ListPage />, {
       organization: mockOrg,
+      additionalWrapper: SecondaryNavigationContextProvider,
     });
 
     await screen.findByText('Get to the root cause faster');
@@ -154,10 +178,12 @@ describe('ReplayList', () => {
       isError: false,
       isFetching: false,
       needsUpdate: true,
+      data: [],
     });
 
     render(<ListPage />, {
       organization: mockOrg,
+      additionalWrapper: SecondaryNavigationContextProvider,
     });
 
     await screen.findByTestId('replay-table');
@@ -176,14 +202,79 @@ describe('ReplayList', () => {
       isError: false,
       isFetching: false,
       needsUpdate: false,
+      data: [],
     });
 
     render(<ListPage />, {
       organization: mockOrg,
+      additionalWrapper: SecondaryNavigationContextProvider,
     });
 
     await waitFor(() => expect(screen.queryAllByTestId('replay-table')).toHaveLength(1));
 
     expect(mockFetchReplayListRequest).toHaveBeenCalled();
+  });
+
+  it('should show access denied when user does not have granular replay permissions', async () => {
+    const mockOrg = OrganizationFixture({
+      features: [...AM2_FEATURES],
+      hasGranularReplayPermissions: true,
+      replayAccessMembers: [999], // User ID 1 is not in this list
+    });
+    mockUseHaveSelectedProjectsSentAnyReplayEvents.mockReturnValue({
+      fetching: false,
+      hasSentOneReplay: true,
+    });
+    mockUseProjectSdkNeedsUpdate.mockReturnValue({
+      isError: false,
+      isFetching: false,
+      needsUpdate: false,
+      data: [],
+    });
+
+    render(<ListPage />, {
+      organization: mockOrg,
+      additionalWrapper: SecondaryNavigationContextProvider,
+    });
+
+    expect(
+      await screen.findByText("You don't have access to this feature")
+    ).toBeInTheDocument();
+    expect(mockFetchReplayListRequest).not.toHaveBeenCalled();
+  });
+
+  it('renders Save as inline and Hide Widgets in the controls bar when page frame is enabled', async () => {
+    const mockOrg = getMockOrganizationFixture({
+      features: [...AM2_FEATURES, 'page-frame'],
+    });
+    mockUseHaveSelectedProjectsSentAnyReplayEvents.mockReturnValue({
+      fetching: false,
+      hasSentOneReplay: true,
+    });
+    mockUseProjectSdkNeedsUpdate.mockReturnValue({
+      isError: false,
+      isFetching: false,
+      needsUpdate: false,
+      data: [],
+    });
+
+    render(<ListPage />, {
+      organization: mockOrg,
+      additionalWrapper: TopBarActionsWrapper,
+    });
+
+    await screen.findByTestId('replay-table');
+
+    const topbarActions = screen.getByTestId('topbar-actions-slot');
+    // With page-frame enabled, buttons are NOT in the topbar actions slot
+    expect(
+      within(topbarActions).queryByRole('button', {name: 'Hide Widgets'})
+    ).not.toBeInTheDocument();
+    expect(
+      within(topbarActions).queryByRole('button', {name: /save as/i})
+    ).not.toBeInTheDocument();
+    // But they should exist in the page (in the controls bar)
+    expect(screen.getAllByRole('button', {name: /save as/i})).toHaveLength(1);
+    expect(screen.getAllByRole('button', {name: 'Hide Widgets'})).toHaveLength(1);
   });
 });

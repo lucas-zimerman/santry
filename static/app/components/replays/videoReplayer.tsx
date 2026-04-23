@@ -201,9 +201,10 @@ export class VideoReplayer {
     el.style.zIndex = index.toString();
     el.style.position = 'absolute';
     sourceEl.setAttribute('type', 'video/mp4');
-    sourceEl.setAttribute('src', `${this._videoApiPrefix}${segmentData.id}/`);
+    // the #t=0.001 is a hack for mobile safari to show the first frame of the video as a placeholder
+    sourceEl.setAttribute('src', `${this._videoApiPrefix}${segmentData.id}/#t=0.001`);
     el.setAttribute('muted', '');
-    el.setAttribute('playinline', '');
+    el.setAttribute('playsinline', '');
     el.setAttribute('preload', 'auto');
     el.setAttribute('playbackRate', `${this.config.speed}`);
     el.appendChild(sourceEl);
@@ -231,7 +232,7 @@ export class VideoReplayer {
    * Pause timer only if replay is running. Otherwise, no need to
    * pause if timer is not already running.
    */
-  private pauseTimer(videoOffsetMs?: number | undefined) {
+  private pauseTimer(videoOffsetMs?: number) {
     // This is valid to run when replay is not playing (seeking to
     // a place in the replay). Due to ReplayContext and maintaining
     // compatibility with rrweb player, we need to update the time
@@ -380,7 +381,7 @@ export class VideoReplayer {
     };
   }
 
-  protected getSegment(index?: number | undefined): VideoEvent | undefined {
+  protected getSegment(index: number | undefined): VideoEvent | undefined {
     if (index === undefined) {
       return undefined;
     }
@@ -453,7 +454,11 @@ export class VideoReplayer {
       this.setBuffering(true);
     }
 
-    const playPromise = video.play();
+    const playPromise = video.play().catch(() => {
+      // `play()` throws lots of noisy errors that are unimportant e.g.
+      // AbortError: The play() request was interrupted by a call to pause().
+    });
+
     await playPromise;
 
     // Buffering is over after play promise is resolved

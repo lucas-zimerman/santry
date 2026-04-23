@@ -123,22 +123,6 @@ class OrganizationTest(TestCase, HybridCloudTestMixin):
         o.value = True
         assert has_changed(o, "value") is True
 
-        OrganizationOption.objects.create(
-            organization=org, key="sentry:account-rate-limit", value=0
-        )
-        p = OrganizationOption.objects.get(organization=org, key="sentry:account-rate-limit")
-        update_tracked_data(p)
-        p.value = 50000
-        assert has_changed(p, "value") is True
-
-        OrganizationOption.objects.create(
-            organization=org, key="sentry:project-rate-limit", value=85
-        )
-        r = OrganizationOption.objects.get(organization=org, key="sentry:project-rate-limit")
-        update_tracked_data(r)
-        r.value = 85
-        assert has_changed(r, "value") is False
-
         OrganizationOption.objects.create(organization=org, key="sentry:sensitive_fields", value=[])
         s = OrganizationOption.objects.get(organization=org, key="sentry:sensitive_fields")
         update_tracked_data(s)
@@ -518,7 +502,7 @@ class OrganizationDeletionTest(TestCase):
             assert UserOption.objects.filter(organization_id=org_id).exists()
 
         # Run cascades in the region, and then in control
-        with self.tasks(), assume_test_silo_mode(SiloMode.REGION):
+        with self.tasks(), assume_test_silo_mode(SiloMode.CELL):
             schedule_hybrid_cloud_foreign_key_jobs()
         with self.tasks(), assume_test_silo_mode(SiloMode.CONTROL):
             schedule_hybrid_cloud_foreign_key_jobs_control()

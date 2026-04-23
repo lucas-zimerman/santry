@@ -3,7 +3,7 @@ import type {Location} from 'history';
 import omit from 'lodash/omit';
 
 import type {Crumb} from 'sentry/components/breadcrumbs';
-import _Breadcrumbs from 'sentry/components/breadcrumbs';
+import {Breadcrumbs} from 'sentry/components/breadcrumbs';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
@@ -12,12 +12,12 @@ import {
   generateProfileFlamechartRouteWithQuery,
   generateProfilingRouteWithQuery,
 } from 'sentry/utils/profiling/routes';
-import useProjects from 'sentry/utils/useProjects';
+import {useProjects} from 'sentry/utils/useProjects';
 import {profilesRouteWithQuery} from 'sentry/views/performance/transactionSummary/transactionProfiles/utils';
 
 export interface ProfilingBreadcrumbsProps {
   organization: Organization;
-  trails: Trail[];
+  trails: readonly Trail[];
 }
 
 function ProfilingBreadcrumbs({organization, trails}: ProfilingBreadcrumbsProps) {
@@ -26,7 +26,7 @@ function ProfilingBreadcrumbs({organization, trails}: ProfilingBreadcrumbsProps)
     () => trails.map(trail => trailToCrumb(trail, {organization, projects})),
     [organization, trails, projects]
   );
-  return <_Breadcrumbs crumbs={crumbs} />;
+  return <Breadcrumbs crumbs={crumbs} />;
 }
 
 function trailToCrumb(

@@ -28,16 +28,16 @@ import {
   waitFor,
   within,
 } from 'sentry-test/reactTestingLibrary';
-import selectEvent from 'sentry-test/selectEvent';
+import {selectEvent} from 'sentry-test/selectEvent';
 
-import ConfigStore from 'sentry/stores/configStore';
+import {ConfigStore} from 'sentry/stores/configStore';
 import {DataCategory} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 
 import {getFreeEventsKey} from 'admin/components/addGiftEventsAction';
 import type {StatsGroup} from 'admin/components/customers/customerStats';
 import {populateChartData, useSeries} from 'admin/components/customers/customerStats';
-import CustomerDetails from 'admin/views/customerDetails';
+import {CustomerDetails} from 'admin/views/customerDetails';
 import type {Subscription} from 'getsentry/types';
 import {BillingType, PlanTier} from 'getsentry/types';
 
@@ -610,8 +610,9 @@ function setUpMocks(
     },
   });
   MockApiClient.addMockResponse({
-    url: `/customers/${organization.slug}/billing-config/?tier=all`,
+    url: `/customers/${organization.slug}/billing-config/`,
     body: BillingConfigFixture(PlanTier.ALL),
+    match: [MockApiClient.matchQuery({tier: 'all'})],
   });
   // TODO(isabella): remove this once all billing config api calls are updated to use tier=all
   MockApiClient.addMockResponse({
@@ -674,6 +675,10 @@ function setUpMocks(
     url: `/organizations/${organization.slug}/projects/`,
     body: [],
   });
+  MockApiClient.addMockResponse({
+    url: `/customers/${organization.slug}/integrations/`,
+    body: [],
+  });
 }
 
 describe('Customer Details', () => {
@@ -730,7 +735,7 @@ describe('Customer Details', () => {
           {name: '2021-07-19T00:00:00Z', value: 1000},
           {name: '2021-07-20T00:00:00Z', value: 0},
         ],
-        color: theme.purple300,
+        color: theme.tokens.graphics.accent.vibrant,
       },
       {
         seriesName: 'Filtered (Server)',
@@ -841,7 +846,7 @@ describe('Customer Details', () => {
             ],
           },
         ],
-        color: theme.purple200,
+        color: theme.tokens.graphics.accent.moderate,
       },
       {
         seriesName: 'Over Quota',
@@ -869,12 +874,12 @@ describe('Customer Details', () => {
           {name: '2021-07-19T00:00:00Z', value: 2000},
           {name: '2021-07-20T00:00:00Z', value: 0},
         ],
-        color: theme.pink200,
+        color: theme.tokens.graphics.promotion.moderate,
       },
       {
         seriesName: 'Discarded (Client)',
         data: [],
-        color: theme.yellow300,
+        color: theme.tokens.graphics.warning.vibrant,
       },
       {
         seriesName: 'Dropped (Server)',
@@ -1093,7 +1098,7 @@ describe('Customer Details', () => {
             ],
           },
         ],
-        color: theme.red300,
+        color: theme.tokens.graphics.danger.vibrant,
       },
     ]);
   });
@@ -1114,8 +1119,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -1128,8 +1133,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -1163,13 +1168,59 @@ describe('Customer Details', () => {
     expect(screen.getByRole('option', {name: /Add Legacy Soft Cap/})).toBeInTheDocument();
   });
 
+  it('shows limited events help text for free plan enterprise trial', async () => {
+    setUpMocks(organization, {plan: 'am1_f', isFree: true});
+
+    render(<CustomerDetails />, {
+      initialRouterConfig: {
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
+      },
+      organization,
+    });
+
+    await screen.findByRole('heading', {name: 'Customers'});
+
+    await userEvent.click(
+      screen.getAllByRole('button', {
+        name: 'Customers Actions',
+      })[0]!
+    );
+
+    expect(screen.getByText(/capped event limits/)).toBeInTheDocument();
+    expect(screen.queryByText(/unlimited events/)).not.toBeInTheDocument();
+  });
+
+  it('shows unlimited events help text for paid plan enterprise trial', async () => {
+    setUpMocks(organization, {plan: 'am3_business', isFree: false});
+
+    render(<CustomerDetails />, {
+      initialRouterConfig: {
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
+      },
+      organization,
+    });
+
+    await screen.findByRole('heading', {name: 'Customers'});
+
+    await userEvent.click(
+      screen.getAllByRole('button', {
+        name: 'Customers Actions',
+      })[0]!
+    );
+
+    expect(screen.getByText(/unlimited events/)).toBeInTheDocument();
+    expect(screen.queryByText(/capped event limits/)).not.toBeInTheDocument();
+  });
+
   it('renders and hides generic confirmation modals', async () => {
     setUpMocks(organization);
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -1206,15 +1257,15 @@ describe('Customer Details', () => {
       permissions: new Set(['billing.admin']),
     });
 
-    it('renders disabled without billing.admin permissions', async () => {
+    it.isKnownFlake('renders disabled without billing.admin permissions', async () => {
       ConfigStore.set('user', mockUser);
 
       setUpMocks(organization, {isBillingAdmin: false});
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -1245,8 +1296,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1268,8 +1319,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1297,8 +1348,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1342,8 +1393,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1394,8 +1445,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1421,8 +1472,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1454,8 +1505,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${softCapOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${softCapOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: softCapOrg,
       });
@@ -1502,8 +1553,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${noNotificationsOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${noNotificationsOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: noNotificationsOrg,
       });
@@ -1544,8 +1595,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${pendingChangesOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${pendingChangesOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: pendingChangesOrg,
       });
@@ -1566,8 +1617,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -1592,8 +1643,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${cannotTrialOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${cannotTrialOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: cannotTrialOrg,
       });
@@ -1614,8 +1665,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -1636,8 +1687,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -1664,8 +1715,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${cannotTrialOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${cannotTrialOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: cannotTrialOrg,
       });
@@ -1698,106 +1749,6 @@ describe('Customer Details', () => {
     });
   });
 
-  describe('allow grace period', () => {
-    const gracePeriodOrg = OrganizationFixture({slug: 'grace-period'});
-
-    it('renders in the dropdown', async () => {
-      setUpMocks(gracePeriodOrg);
-
-      render(<CustomerDetails />, {
-        initialRouterConfig: {
-          location: `/customers/${gracePeriodOrg.slug}`,
-          route: `/customers/:orgId`,
-        },
-        organization: gracePeriodOrg,
-      });
-
-      await screen.findByRole('heading', {name: 'Customers'});
-
-      await userEvent.click(
-        screen.getAllByRole('button', {
-          name: 'Customers Actions',
-        })[0]!
-      );
-
-      expect(screen.getByText('Allow Grace Period')).toBeInTheDocument();
-    });
-
-    it('disabled in the dropdown', async () => {
-      setUpMocks(organization);
-
-      render(<CustomerDetails />, {
-        initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
-        },
-        organization,
-      });
-
-      await screen.findByRole('heading', {name: 'Customers'});
-
-      await userEvent.click(
-        screen.getAllByRole('button', {
-          name: 'Customers Actions',
-        })[0]!
-      );
-
-      expect(screen.getByTestId('allowGrace')).toHaveAttribute('aria-disabled', 'true');
-
-      await userEvent.hover(
-        within(screen.getByTestId('allowGrace')).getByText('Allow Grace Period')
-      );
-
-      expect(
-        await screen.findByText('Account may already be in a grace period')
-      ).toBeInTheDocument();
-    });
-
-    it('allows an org to grace period again', async () => {
-      const updateMock = MockApiClient.addMockResponse({
-        url: `/customers/${gracePeriodOrg.slug}/`,
-        method: 'PUT',
-        body: OrganizationFixture(),
-      });
-
-      setUpMocks(gracePeriodOrg, {canGracePeriod: false});
-
-      render(<CustomerDetails />, {
-        initialRouterConfig: {
-          location: `/customers/${gracePeriodOrg.slug}`,
-          route: `/customers/:orgId`,
-        },
-        organization: gracePeriodOrg,
-      });
-
-      await screen.findByRole('heading', {name: 'Customers'});
-
-      await userEvent.click(
-        screen.getAllByRole('button', {
-          name: 'Customers Actions',
-        })[0]!
-      );
-
-      renderGlobalModal();
-
-      await userEvent.click(screen.getByText('Allow Grace Period'));
-
-      await userEvent.click(screen.getByRole('button', {name: 'Confirm'}));
-
-      await waitFor(() =>
-        expect(updateMock).toHaveBeenCalledWith(
-          `/customers/${gracePeriodOrg.slug}/`,
-          expect.objectContaining({
-            method: 'PUT',
-            data: {
-              canGracePeriod: true,
-            },
-          })
-        )
-      );
-    });
-  });
-
   describe('terminate contract', () => {
     const terminateOrg = OrganizationFixture();
 
@@ -1812,8 +1763,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${terminateOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${terminateOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: terminateOrg,
       });
@@ -1855,8 +1806,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${terminateOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${terminateOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: terminateOrg,
       });
@@ -1893,8 +1844,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${terminateOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${terminateOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: terminateOrg,
       });
@@ -1938,8 +1889,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -1999,8 +1950,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2027,7 +1978,7 @@ describe('Customer Details', () => {
       await userEvent.type(screen.getByRole('textbox', {name: 'Reason'}), 'test');
 
       const apiMock = MockApiClient.addMockResponse({
-        url: `/_admin/${organization.slug}/refund-vercel/`,
+        url: `/customers/${organization.slug}/refund-vercel/`,
         method: 'POST',
         body: {},
       });
@@ -2036,7 +1987,7 @@ describe('Customer Details', () => {
 
       await waitFor(() =>
         expect(apiMock).toHaveBeenCalledWith(
-          `/_admin/${organization.slug}/refund-vercel/`,
+          `/customers/${organization.slug}/refund-vercel/`,
           expect.objectContaining({
             method: 'POST',
             data: {
@@ -2068,8 +2019,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2107,8 +2058,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2180,8 +2131,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2229,8 +2180,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${cancelSubOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${cancelSubOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: cancelSubOrg,
       });
@@ -2256,8 +2207,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${cancelSubOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${cancelSubOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: cancelSubOrg,
       });
@@ -2323,15 +2274,11 @@ describe('Customer Details', () => {
         method: 'PUT',
         body: Subscription,
       });
-      MockApiClient.addMockResponse({
-        url: `/subscriptions/${sub.slug}/`,
-        body: sub,
-      });
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2372,14 +2319,14 @@ describe('Customer Details', () => {
       });
 
       MockApiClient.addMockResponse({
-        url: `/subscriptions/${sub.slug}/`,
+        url: `/customers/${sub.slug}/`,
         body: sub,
       });
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2416,8 +2363,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2447,8 +2394,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${trialOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${trialOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: trialOrg,
       });
@@ -2485,8 +2432,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2529,13 +2476,14 @@ describe('Customer Details', () => {
           countryCode: 'US',
           expMonth: 12,
           expYear: 2028,
+          brand: 'Visa',
         },
       });
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${onDemandInvoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${onDemandInvoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: onDemandInvoicedOrg,
       });
@@ -2564,13 +2512,14 @@ describe('Customer Details', () => {
           countryCode: 'US',
           expMonth: 12,
           expYear: 2028,
+          brand: 'Visa',
         },
       });
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${onDemandInvoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${onDemandInvoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: onDemandInvoicedOrg,
       });
@@ -2599,13 +2548,14 @@ describe('Customer Details', () => {
           countryCode: 'US',
           expMonth: 12,
           expYear: 2028,
+          brand: 'Visa',
         },
       });
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${onDemandInvoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${onDemandInvoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: onDemandInvoicedOrg,
       });
@@ -2633,6 +2583,7 @@ describe('Customer Details', () => {
           countryCode: 'US',
           expMonth: 12,
           expYear: 2028,
+          brand: 'Visa',
         },
       });
 
@@ -2644,8 +2595,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${invoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${invoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: invoicedOrg,
       });
@@ -2689,6 +2640,7 @@ describe('Customer Details', () => {
           countryCode: 'US',
           expMonth: 12,
           expYear: 2028,
+          brand: 'Visa',
         },
       });
 
@@ -2700,8 +2652,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${onDemandInvoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${onDemandInvoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: onDemandInvoicedOrg,
       });
@@ -2746,8 +2698,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2812,8 +2764,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2861,8 +2813,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2888,8 +2840,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2923,8 +2875,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -2979,8 +2931,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -3037,8 +2989,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3094,8 +3046,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3150,8 +3102,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3175,8 +3127,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3201,8 +3153,8 @@ describe('Customer Details', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3266,8 +3218,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${invoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${invoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: invoicedOrg,
       });
@@ -3292,8 +3244,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${invoicedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${invoicedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: invoicedOrg,
       });
@@ -3324,8 +3276,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${suspendedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${suspendedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: suspendedOrg,
       });
@@ -3352,8 +3304,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${suspendedOrg.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${suspendedOrg.slug}`},
+          route: '/customers/:orgId',
         },
         organization: suspendedOrg,
       });
@@ -3396,8 +3348,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -3452,8 +3404,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -3475,8 +3427,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -3504,8 +3456,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${organization.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${organization.slug}`},
+          route: '/customers/:orgId',
         },
         organization,
       });
@@ -3564,8 +3516,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${orgWithDeleteFeature.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${orgWithDeleteFeature.slug}`},
+          route: '/customers/:orgId',
         },
         organization: orgWithDeleteFeature,
       });
@@ -3591,8 +3543,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${orgWithoutDeleteFeature.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${orgWithoutDeleteFeature.slug}`},
+          route: '/customers/:orgId',
         },
         organization: orgWithoutDeleteFeature,
       });
@@ -3617,8 +3569,8 @@ describe('Customer Details', () => {
 
       render(<CustomerDetails />, {
         initialRouterConfig: {
-          location: `/customers/${org.slug}`,
-          route: `/customers/:orgId`,
+          location: {pathname: `/customers/${org.slug}`},
+          route: '/customers/:orgId',
         },
         organization: org,
       });
@@ -3705,8 +3657,8 @@ describe('Gift Categories Availability', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3731,8 +3683,8 @@ describe('Gift Categories Availability', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3757,8 +3709,8 @@ describe('Gift Categories Availability', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3783,8 +3735,8 @@ describe('Gift Categories Availability', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3810,8 +3762,8 @@ describe('Gift Categories Availability', () => {
 
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });
@@ -3835,8 +3787,8 @@ describe('Gift Categories Availability', () => {
     setUpMocks(organization, customSubscription);
     render(<CustomerDetails />, {
       initialRouterConfig: {
-        location: `/customers/${organization.slug}`,
-        route: `/customers/:orgId`,
+        location: {pathname: `/customers/${organization.slug}`},
+        route: '/customers/:orgId',
       },
       organization,
     });

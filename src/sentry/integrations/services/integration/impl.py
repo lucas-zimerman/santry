@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import Iterable
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 import sentry_sdk
@@ -16,6 +17,7 @@ from sentry.api.paginator import OffsetPaginator
 from sentry.constants import ObjectStatus, SentryAppInstallationStatus
 from sentry.hybridcloud.rpc.pagination import RpcPaginationArgs, RpcPaginationResult
 from sentry.incidents.models.incident import INCIDENT_STATUS, IncidentStatus
+from sentry.integrations.errors import OrganizationIntegrationNotFound
 from sentry.integrations.messaging.metrics import (
     MessagingInteractionEvent,
     MessagingInteractionType,
@@ -24,7 +26,7 @@ from sentry.integrations.mixins import NotifyBasicMixin
 from sentry.integrations.models.integration import Integration
 from sentry.integrations.models.integration_external_project import IntegrationExternalProject
 from sentry.integrations.models.organization_integration import OrganizationIntegration
-from sentry.integrations.msteams import MsTeamsClient
+from sentry.integrations.msteams.client import MsTeamsClient
 from sentry.integrations.msteams.metrics import record_lifecycle_termination_level
 from sentry.integrations.msteams.spec import MsTeamsMessagingSpec
 from sentry.integrations.services.integration import (
@@ -43,7 +45,6 @@ from sentry.integrations.services.integration.serial import (
     serialize_integration_external_project,
     serialize_organization_integration,
 )
-from sentry.rules.actions.notify_event_service import find_alert_rule_action_ui_component
 from sentry.sentry_apps.api.serializers.app_platform_event import AppPlatformEvent
 from sentry.sentry_apps.metrics import (
     SentryAppEventType,
@@ -52,7 +53,11 @@ from sentry.sentry_apps.metrics import (
 )
 from sentry.sentry_apps.models.sentry_app import SentryApp
 from sentry.sentry_apps.models.sentry_app_installation import SentryAppInstallation
-from sentry.sentry_apps.utils.webhooks import MetricAlertActionType, SentryAppResourceType
+from sentry.sentry_apps.utils.webhooks import (
+    MetricAlertActionType,
+    SentryAppResourceType,
+    find_alert_rule_action_ui_component,
+)
 from sentry.shared_integrations.exceptions import ApiError
 from sentry.utils import json
 from sentry.utils.sentry_apps import send_and_save_webhook_request
@@ -209,6 +214,21 @@ class DatabaseBackedIntegrationService(IntegrationService):
             ois = ois[:limit]
 
         return [serialize_organization_integration(oi) for oi in ois]
+
+    def get_organization_ids_with_providers(
+        self,
+        *,
+        providers: list[str],
+        status: int | None = None,
+    ) -> list[int]:
+        kwargs: dict[str, Any] = {"integration__provider__in": providers}
+        if status is not None:
+            kwargs["status"] = status
+        return list(
+            OrganizationIntegration.objects.filter(**kwargs)
+            .values_list("organization_id", flat=True)
+            .distinct()
+        )
 
     def organization_context(
         self,
@@ -584,3 +604,31 @@ class DatabaseBackedIntegrationService(IntegrationService):
             identity=identity,
             user=user,
         )
+
+    def refresh_github_access_token(
+        self, *, integration_id: int, organization_id: int
+    ) -> RpcIntegration | None:
+        try:
+            integration = Integration.objects.get(
+                id=integration_id,
+                provider__in=["github", "github_enterprise"],
+                status=ObjectStatus.ACTIVE,
+            )
+        except Integration.DoesNotExist:
+            return None
+
+        installation = integration.get_installation(organization_id=organization_id)
+        # get_installation doesn't actually check if the integration is
+        # associated with the organization, so this validates that it does,
+        # and caches the org_integration preemptively.
+        try:
+            installation.org_integration
+        except OrganizationIntegrationNotFound:
+            return None
+
+        installation.get_client().get_access_token(
+            token_minimum_validity_time=timedelta(minutes=10)
+        )
+        integration.refresh_from_db()
+
+        return serialize_integration(integration)

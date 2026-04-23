@@ -1,19 +1,22 @@
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import {Tag} from 'sentry/components/core/badge/tag';
-import {ExternalLink, Link} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {Tag} from '@sentry/scraps/badge';
+import {ExternalLink, Link} from '@sentry/scraps/link';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {DateTime} from 'sentry/components/dateTime';
-import Duration from 'sentry/components/duration';
-import Placeholder from 'sentry/components/placeholder';
+import {Duration} from 'sentry/components/duration';
+import {Placeholder} from 'sentry/components/placeholder';
 import type {GridColumnOrder} from 'sentry/components/tables/gridEditable';
-import GridEditable from 'sentry/components/tables/gridEditable';
+import {COL_WIDTH_UNDEFINED, GridEditable} from 'sentry/components/tables/gridEditable';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
+import type {Organization} from 'sentry/types/organization';
 import {getShortEventId} from 'sentry/utils/events';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import type {UptimeCheck} from 'sentry/views/alerts/rules/uptime/types';
+import {CheckStatus} from 'sentry/views/alerts/rules/uptime/types';
 import {useSpans} from 'sentry/views/insights/common/queries/useDiscover';
 import {
   reasonToText,
@@ -26,11 +29,27 @@ type Props = {
   uptimeChecks: UptimeCheck[];
 };
 
+type ColumnKey =
+  | 'traceItemId'
+  | 'timestamp'
+  | 'checkStatus'
+  | 'httpStatusCode'
+  | 'durationMs'
+  | 'regionName'
+  | 'traceId';
+
 /**
  * This value is used when a trace was not recorded since the field is required.
  * It will never link to trace, so omit the row to avoid confusion.
  */
 const EMPTY_TRACE = '00000000000000000000000000000000';
+
+const emptyCell = '\u2014';
+
+/**
+ * The number of system uptime spans that are always recorded for each uptime check.
+ */
+const SYSTEM_UPTIME_SPAN_COUNT = 7;
 
 export function UptimeChecksGrid({traceSampling, uptimeChecks}: Props) {
   const traceIds = uptimeChecks?.map(check => check.traceId) ?? [];
@@ -41,6 +60,9 @@ export function UptimeChecksGrid({traceSampling, uptimeChecks}: Props) {
       enabled: traceIds.length > 0,
       search: new MutableSearch('').addDisjunctionFilterValues('trace', traceIds),
       fields: ['trace', 'count()'],
+      // Ignore the cursor parameter, since we use that on this page to
+      // paginate the checks table.
+      noPagination: true,
     },
     'api.uptime-checks-grid'
   );
@@ -58,20 +80,21 @@ export function UptimeChecksGrid({traceSampling, uptimeChecks}: Props) {
     <GridEditable
       emptyMessage={t('No matching uptime checks found')}
       data={uptimeChecks}
+      fit="max-content"
       columnOrder={[
-        {key: 'timestamp', width: 150, name: t('Timestamp')},
-        {key: 'checkStatus', width: 250, name: t('Status')},
-        {key: 'httpStatusCode', width: 100, name: t('HTTP Code')},
-        {key: 'durationMs', width: 110, name: t('Duration')},
-        {key: 'regionName', width: 200, name: t('Region')},
-        {key: 'traceId', width: 150, name: t('Trace')},
+        {key: 'traceItemId', width: 95, name: t('ID')},
+        {key: 'timestamp', width: COL_WIDTH_UNDEFINED, name: t('Timestamp')},
+        {key: 'checkStatus', width: COL_WIDTH_UNDEFINED, name: t('Status')},
+        {key: 'httpStatusCode', width: COL_WIDTH_UNDEFINED, name: t('HTTP Code')},
+        {key: 'durationMs', width: COL_WIDTH_UNDEFINED, name: t('Duration')},
+        {key: 'regionName', width: COL_WIDTH_UNDEFINED, name: t('Region')},
+        {key: 'traceId', width: COL_WIDTH_UNDEFINED, name: t('Trace')},
       ]}
       columnSortBy={[]}
       grid={{
-        renderHeadCell: (col: GridColumnOrder) => <Cell>{col.name}</Cell>,
         renderBodyCell: (column, dataRow) => (
           <CheckInBodyCell
-            column={column as GridColumnOrder<keyof UptimeCheck>}
+            column={column as GridColumnOrder<ColumnKey>}
             traceSampling={traceSampling}
             check={dataRow}
             spanCount={traceSpanCounts?.[dataRow.traceId]}
@@ -89,11 +112,12 @@ function CheckInBodyCell({
   traceSampling,
 }: {
   check: UptimeCheck;
-  column: GridColumnOrder<keyof UptimeCheck>;
+  column: GridColumnOrder<ColumnKey>;
   spanCount: number | undefined;
   traceSampling: boolean;
 }) {
   const theme = useTheme();
+  const organization = useOrganization();
 
   const {
     timestamp,
@@ -108,6 +132,8 @@ function CheckInBodyCell({
   if (check[column.key] === undefined) {
     return <Cell />;
   }
+
+  const isMiss = checkStatus === CheckStatus.MISSED_WINDOW;
 
   switch (column.key) {
     case 'timestamp': {
@@ -124,48 +150,80 @@ function CheckInBodyCell({
       );
     }
     case 'durationMs':
+      if (isMiss) {
+        return <Cell>{emptyCell}</Cell>;
+      }
       return (
         <Cell>
           <Duration seconds={durationMs / 1000} abbreviation exact />
         </Cell>
       );
     case 'httpStatusCode': {
+      if (isMiss) {
+        return <Cell>{emptyCell}</Cell>;
+      }
       if (httpStatusCode === null) {
-        return <Cell style={{color: theme.subText}}>{t('None')}</Cell>;
+        return <Cell style={{color: theme.tokens.content.secondary}}>{t('None')}</Cell>;
       }
       return <Cell>{httpStatusCode}</Cell>;
     }
     case 'checkStatus': {
-      const color = tickStyle(theme)[checkStatus].labelColor ?? theme.textColor;
+      const color =
+        tickStyle(theme)[checkStatus].labelColor ?? theme.tokens.content.primary;
+      const checkStatusReasonLabel = checkStatusReason
+        ? reasonToText[checkStatusReason](check)
+        : null;
       return (
-        <Cell style={{color}}>
+        <StatusCell color={color}>
           {statusToText[checkStatus]}{' '}
-          {checkStatusReason &&
-            tct('([reason])', {
-              reason: reasonToText[checkStatusReason](check),
+          {checkStatusReasonLabel && t('(%s)', checkStatusReasonLabel)}
+        </StatusCell>
+      );
+    }
+    case 'traceItemId': {
+      if (isMiss || traceId === EMPTY_TRACE) {
+        return <Cell>{emptyCell}</Cell>;
+      }
+
+      return (
+        <Cell>
+          <Link
+            to={getUptimeTraceLink({
+              organization,
+              timestamp,
+              traceId,
+              targetId: check.traceItemId,
             })}
+          >
+            {getShortEventId(check.traceItemId)}
+          </Link>
         </Cell>
       );
     }
     case 'traceId': {
-      if (traceId === EMPTY_TRACE) {
-        return <Cell />;
+      if (isMiss || traceId === EMPTY_TRACE) {
+        return <Cell>{emptyCell}</Cell>;
       }
 
       const learnMore = (
         <ExternalLink href="https://docs.sentry.io/product/alerts/uptime-monitoring/uptime-tracing/" />
       );
 
+      // Check if there are only system spans (no real user spans)
+      const hasOnlySystemSpans = spanCount !== undefined && spanCount === 0;
+      const totalSpanCount =
+        spanCount === undefined ? undefined : spanCount + SYSTEM_UPTIME_SPAN_COUNT;
+
       const badge =
-        spanCount === undefined ? (
-          <Placeholder height="20px" width="70px" />
-        ) : spanCount === 0 ? (
+        totalSpanCount === undefined ? (
+          <Placeholder height="20px" width="60px" />
+        ) : hasOnlySystemSpans ? (
           <Tooltip
             isHoverable
             title={
               traceSampling
                 ? tct(
-                    'No spans found in this trace. Configure your SDKs to see correlated spans across services. [learnMore:Learn more].',
+                    'Only Uptime Spans are present in this trace. Configure your SDKs to see correlated spans across services. [learnMore:Learn more].',
                     {learnMore}
                   )
                 : tct(
@@ -174,22 +232,20 @@ function CheckInBodyCell({
                   )
             }
           >
-            <Tag type="default">{t('0 spans')}</Tag>
+            <Tag variant="muted">{t('%s spans', totalSpanCount)}</Tag>
           </Tooltip>
         ) : (
-          <Tag type="info">{t('%s spans', spanCount)}</Tag>
+          <Tag variant="info">{t('%s spans', totalSpanCount)}</Tag>
         );
 
       return (
         <TraceCell>
           <Link
-            to={{
-              pathname: `/performance/trace/${traceId}/`,
-              query: {
-                includeUptime: '1',
-                timestamp: new Date(timestamp).getTime() / 1000,
-              },
-            }}
+            to={getUptimeTraceLink({
+              organization,
+              timestamp,
+              traceId,
+            })}
           >
             {getShortEventId(traceId)}
           </Link>
@@ -197,26 +253,50 @@ function CheckInBodyCell({
         </TraceCell>
       );
     }
+    case 'regionName':
+      return <Cell>{isMiss ? emptyCell : check.regionName}</Cell>;
     default:
       return <Cell>{check[column.key]}</Cell>;
   }
+}
+
+function getUptimeTraceLink({
+  organization,
+  timestamp,
+  traceId,
+  targetId,
+}: {
+  organization: Organization;
+  timestamp: string;
+  traceId: string;
+  targetId?: string;
+}) {
+  return {
+    pathname: `/organizations/${organization.slug}/performance/trace/${traceId}/`,
+    query: {
+      timestamp: new Date(timestamp).getTime() / 1000,
+      ...(targetId ? {node: `uptime-check-${targetId}`} : {}),
+    },
+  };
 }
 
 const Cell = styled('div')`
   display: flex;
   align-items: center;
   text-align: left;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
 `;
 
 const TimeCell = styled(Cell)`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   text-decoration: underline;
   text-decoration-style: dotted;
 `;
 
 const TraceCell = styled(Cell)`
-  display: grid;
-  grid-template-columns: 65px max-content;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.xs};
+`;
+
+const StatusCell = styled(Cell)<{color: string}>`
+  color: ${p => p.color};
 `;

@@ -1,27 +1,46 @@
+from __future__ import annotations
+
+from typing import Any
 from unittest import mock
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 import responses
-from responses.matchers import header_matcher, json_params_matcher
+from django.urls import reverse
+from responses.matchers import header_matcher
 
-from sentry import audit_log, options
-from sentry.api.client import ApiError
+from sentry import options
 from sentry.integrations.discord.client import (
     APPLICATION_COMMANDS_URL,
     DISCORD_BASE_URL,
     GUILD_URL,
     DiscordClient,
 )
-from sentry.integrations.discord.integration import COMMANDS, DiscordIntegrationProvider
+from sentry.integrations.discord.integration import (
+    COMMANDS,
+    DiscordIntegration,
+    DiscordIntegrationProvider,
+)
 from sentry.integrations.models.integration import Integration
-from sentry.models.auditlogentry import AuditLogEntry
-from sentry.shared_integrations.exceptions import IntegrationError
-from sentry.testutils.cases import IntegrationTestCase
+from sentry.integrations.models.organization_integration import OrganizationIntegration
+from sentry.integrations.pipeline import IntegrationPipeline
+from sentry.notifications.platform.discord.provider import DiscordRenderable
+from sentry.notifications.platform.target import IntegrationNotificationTarget
+from sentry.notifications.platform.types import (
+    NotificationProviderKey,
+    NotificationTargetResourceType,
+)
+from sentry.shared_integrations.exceptions import (
+    ApiError,
+    IntegrationConfigurationError,
+    IntegrationError,
+)
+from sentry.testutils.cases import APITestCase, IntegrationTestCase, TestCase
 from sentry.testutils.silo import control_silo_test
+from sentry.utils import json
 
 
-class DiscordSetupTestCase(IntegrationTestCase):
+class DiscordIntegrationTest(IntegrationTestCase):
     provider = DiscordIntegrationProvider
 
     def setUp(self) -> None:
@@ -35,229 +54,6 @@ class DiscordSetupTestCase(IntegrationTestCase):
         options.set("discord.bot-token", self.bot_token)
         options.set("discord.client-secret", self.client_secret)
         self.token_url = f"{DISCORD_BASE_URL}/oauth2/token"
-
-    @mock.patch("sentry.integrations.discord.client.DiscordClient.set_application_command")
-    def assert_setup_flow(
-        self,
-        mock_set_application_command,
-        guild_id="1234567890",
-        server_name="Cool server",
-        auth_code="auth_code",
-        command_response_empty=True,
-    ):
-        responses.reset()
-
-        resp = self.client.get(self.init_path)
-        assert resp.status_code == 302
-        redirect = urlparse(resp["Location"])
-        assert redirect.scheme == "https"
-        assert redirect.netloc == "discord.com"
-        assert redirect.path == "/api/oauth2/authorize"
-        params = parse_qs(redirect.query)
-        assert params["client_id"] == [self.application_id]
-        assert params["permissions"] == [str(self.provider.bot_permissions)]
-        assert params["redirect_uri"] == ["http://testserver/extensions/discord/setup/"]
-        assert params["response_type"] == ["code"]
-        scopes = self.provider.oauth_scopes
-        assert params["scope"] == [" ".join(scopes)]
-
-        responses.add(
-            responses.GET,
-            url=f"{DiscordClient.base_url}{GUILD_URL.format(guild_id=guild_id)}",
-            match=[header_matcher({"Authorization": f"Bot {self.bot_token}"})],
-            json={
-                "id": guild_id,
-                "name": server_name,
-            },
-        )
-
-        responses.add(
-            responses.GET,
-            url=f"{DiscordClient.base_url}{APPLICATION_COMMANDS_URL.format(application_id=self.application_id)}",
-            match=[header_matcher({"Authorization": f"Bot {self.bot_token}"})],
-            json=[] if command_response_empty else COMMANDS,
-        )
-
-        responses.add(
-            responses.GET,
-            url=f"{DiscordClient.base_url}/users/@me/guilds/{guild_id}/member",
-            json={},
-        )
-
-        if command_response_empty:
-            for command in COMMANDS:
-                responses.add(
-                    responses.POST,
-                    url=f"{DiscordClient.base_url}{APPLICATION_COMMANDS_URL.format(application_id=self.application_id)}",
-                    match=[
-                        header_matcher({"Authorization": f"Bot {self.bot_token}"}),
-                        json_params_matcher({"data": command}),
-                    ],
-                )
-
-        responses.add(
-            responses.POST,
-            url=self.token_url,
-            json={
-                "access_token": "access_token",
-            },
-        )
-        responses.add(
-            responses.GET, url=f"{DiscordClient.base_url}/users/@me", json={"id": "user_1234"}
-        )
-
-        resp = self.client.get(
-            "{}?{}".format(
-                self.setup_path,
-                urlencode({"guild_id": guild_id, "code": auth_code}),
-            )
-        )
-
-        call_list = responses.calls
-        assert call_list[0].request.headers["Authorization"] == f"Bot {self.bot_token}"
-        assert f"code={auth_code}" in call_list[1].request.body
-        assert call_list[2].request.headers["Authorization"] == "Bearer access_token"
-
-        assert resp.status_code == 200
-        self.assertDialogSuccess(resp)
-
-        if command_response_empty:
-            assert mock_set_application_command.call_count == 3
-        else:
-            assert mock_set_application_command.call_count == 0
-
-    def assert_setup_flow_from_discord(
-        self,
-        guild_id="1234567890",
-        server_name="Cool server",
-        auth_code="auth_code",
-    ):
-        responses.reset()
-
-        resp = self.client.get(self.configure_path)
-        assert resp.status_code == 302
-        redirect = urlparse(resp["Location"])
-        assert redirect.scheme == "https"
-        assert redirect.netloc == "discord.com"
-        assert redirect.path == "/api/oauth2/authorize"
-        params = parse_qs(redirect.query)
-        assert params["client_id"] == [self.application_id]
-        assert params["permissions"] == [str(self.provider.bot_permissions)]
-        assert params["redirect_uri"] == ["http://testserver/extensions/discord/configure/"]
-        assert params["response_type"] == ["code"]
-        scopes = self.provider.oauth_scopes
-        assert params["scope"] == [" ".join(scopes)]
-
-        responses.add(
-            responses.GET,
-            url=f"{DiscordClient.base_url}{GUILD_URL.format(guild_id=guild_id)}",
-            match=[header_matcher({"Authorization": f"Bot {self.bot_token}"})],
-            json={
-                "id": guild_id,
-                "name": server_name,
-            },
-        )
-
-        responses.add(
-            responses.GET,
-            url=f"{DiscordClient.base_url}{APPLICATION_COMMANDS_URL.format(application_id=self.application_id)}",
-            match=[header_matcher({"Authorization": f"Bot {self.bot_token}"})],
-            json=COMMANDS,
-        )
-
-        responses.add(
-            responses.POST,
-            url=self.token_url,
-            json={
-                "access_token": "access_token",
-            },
-        )
-
-        responses.add(
-            responses.GET,
-            url=f"{DiscordClient.base_url}/users/@me/guilds/{guild_id}/member",
-            json={},
-        )
-
-        responses.add(
-            responses.GET, url=f"{DiscordClient.base_url}/users/@me", json={"id": "user_1234"}
-        )
-
-        resp = self.client.get(
-            "{}?{}".format(
-                self.setup_path,
-                urlencode({"guild_id": guild_id, "code": auth_code}),
-            )
-        )
-
-        call_list = responses.calls
-        assert call_list[0].request.headers["Authorization"] == f"Bot {self.bot_token}"
-        assert f"code={auth_code}" in call_list[1].request.body
-        assert call_list[2].request.headers["Authorization"] == "Bearer access_token"
-
-        assert resp.status_code == 200
-        self.assertDialogSuccess(resp)
-
-
-@control_silo_test
-class DiscordSetupIntegrationTest(DiscordSetupTestCase):
-    @responses.activate
-    def test_bot_flow(self) -> None:
-        with self.tasks():
-            self.assert_setup_flow()
-
-        integration = Integration.objects.get(provider=self.provider.key)
-        assert integration.external_id == "1234567890"
-        assert integration.name == "Cool server"
-
-        audit_entry = AuditLogEntry.objects.get(event=audit_log.get_event_id("INTEGRATION_ADD"))
-        audit_log_event = audit_log.get(audit_entry.event)
-        assert (
-            audit_log_event.render(audit_entry)
-            == "installed Cool server for the discord integration"
-        )
-
-    @responses.activate
-    def test_bot_flow_from_discord(self) -> None:
-        with self.tasks():
-            self.assert_setup_flow_from_discord()
-
-        integration = Integration.objects.get(provider=self.provider.key)
-        assert integration.external_id == "1234567890"
-        assert integration.name == "Cool server"
-
-        audit_entry = AuditLogEntry.objects.get(event=audit_log.get_event_id("INTEGRATION_ADD"))
-        audit_log_event = audit_log.get(audit_entry.event)
-        assert (
-            audit_log_event.render(audit_entry)
-            == "installed Cool server for the discord integration"
-        )
-
-    @responses.activate
-    def test_multiple_integrations(self) -> None:
-        with self.tasks():
-            self.assert_setup_flow()
-        with self.tasks():
-            self.assert_setup_flow(
-                guild_id="0987654321",
-                server_name="Uncool server",
-                command_response_empty=False,
-            )
-
-        integrations = Integration.objects.filter(provider=self.provider.key).order_by(
-            "external_id"
-        )
-
-        assert integrations.count() == 2
-        assert integrations[0].external_id == "0987654321"
-        assert integrations[0].name == "Uncool server"
-        assert integrations[1].external_id == "1234567890"
-        assert integrations[1].name == "Cool server"
-
-
-class DiscordIntegrationTest(DiscordSetupTestCase):
-    def setUp(self) -> None:
-        super().setUp()
         self.user_id = "user1234"
         self.guild_id = "12345"
         self.guild_name = "guild_name"
@@ -503,3 +299,163 @@ class DiscordIntegrationTest(DiscordSetupTestCase):
                     "code": "some_auth_code",
                 }
             )
+
+
+@control_silo_test
+class DiscordIntegrationSendNotificationTest(TestCase):
+    def setUp(self) -> None:
+        self.integration = self.create_provider_integration(
+            provider="discord", name="Discord", external_id="123456789"
+        )
+        self.installation = DiscordIntegration(self.integration, self.organization.id)
+        self.target = IntegrationNotificationTarget(
+            provider_key=NotificationProviderKey.DISCORD,
+            resource_type=NotificationTargetResourceType.CHANNEL,
+            resource_id="987654321",
+            integration_id=self.integration.id,
+            organization_id=self.organization.id,
+        )
+
+    @mock.patch("sentry.integrations.discord.client.DiscordClient.send_message")
+    def test_send_notification_success(self, mock_send: mock.MagicMock) -> None:
+        payload: DiscordRenderable = {"content": "Test Discord message"}
+
+        self.installation.send_notification(target=self.target, payload=payload)
+
+        mock_send.assert_called_once_with(channel_id="987654321", message=payload)
+
+    @mock.patch("sentry.integrations.discord.client.DiscordClient.send_message")
+    def test_send_notification_api_error(self, mock_send: mock.MagicMock) -> None:
+        error_payload = json.dumps({"code": 50001, "message": "Missing access"})
+        mock_send.side_effect = ApiError(text=error_payload)
+        payload: DiscordRenderable = {"content": "Test Discord message"}
+
+        with pytest.raises(IntegrationConfigurationError) as e:
+            self.installation.send_notification(target=self.target, payload=payload)
+
+        assert str(e.value) == error_payload
+
+
+@control_silo_test
+class DiscordApiPipelineTest(APITestCase):
+    endpoint = "sentry-api-0-organization-pipeline"
+    method = "post"
+
+    guild_id = "1234567890"
+    guild_name = "Cool server"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.login_as(self.user)
+        self.application_id = "application-id"
+        self.public_key = "public-key"
+        self.bot_token = "bot-token"
+        self.client_secret = "client-secret"
+        options.set("discord.application-id", self.application_id)
+        options.set("discord.public-key", self.public_key)
+        options.set("discord.bot-token", self.bot_token)
+        options.set("discord.client-secret", self.client_secret)
+
+    def tearDown(self) -> None:
+        responses.reset()
+        super().tearDown()
+
+    def _get_pipeline_url(self) -> str:
+        return reverse(
+            self.endpoint,
+            args=[self.organization.slug, IntegrationPipeline.pipeline_name],
+        )
+
+    def _initialize_pipeline(self) -> Any:
+        return self.client.post(
+            self._get_pipeline_url(),
+            data={"action": "initialize", "provider": "discord"},
+            format="json",
+        )
+
+    def _advance_step(self, data: dict[str, Any]) -> Any:
+        return self.client.post(self._get_pipeline_url(), data=data, format="json")
+
+    def _get_pipeline_signature(self, resp: Any) -> str:
+        return resp.data["data"]["oauthUrl"].split("state=")[1].split("&")[0]
+
+    @responses.activate
+    def test_initialize_pipeline(self) -> None:
+        resp = self._initialize_pipeline()
+        assert resp.status_code == 200
+        assert resp.data["step"] == "oauth_login"
+        assert resp.data["stepIndex"] == 0
+        assert resp.data["totalSteps"] == 1
+        assert resp.data["provider"] == "discord"
+        oauth_url = resp.data["data"]["oauthUrl"]
+        assert "discord.com/api/oauth2/authorize" in oauth_url
+        assert "permissions=" in oauth_url
+
+        parsed = urlparse(oauth_url)
+        params = parse_qs(parsed.query)
+        assert params["client_id"] == [self.application_id]
+        assert params["permissions"] == [str(DiscordIntegrationProvider.bot_permissions)]
+        requested_scopes = set(params["scope"][0].split(" "))
+        assert requested_scopes == DiscordIntegrationProvider.oauth_scopes
+
+    @responses.activate
+    def test_oauth_step_missing_guild_id(self) -> None:
+        resp = self._initialize_pipeline()
+        pipeline_signature = self._get_pipeline_signature(resp)
+        resp = self._advance_step({"code": "auth-code", "state": pipeline_signature})
+        assert resp.status_code == 400
+
+    @responses.activate
+    @mock.patch("sentry.integrations.discord.client.DiscordClient.set_application_command")
+    def test_full_pipeline_flow(self, mock_set_application_command: mock.MagicMock) -> None:
+        responses.add(
+            responses.GET,
+            url=f"{DiscordClient.base_url}{GUILD_URL.format(guild_id=self.guild_id)}",
+            match=[header_matcher({"Authorization": f"Bot {self.bot_token}"})],
+            json={"id": self.guild_id, "name": self.guild_name},
+        )
+        responses.add(
+            responses.GET,
+            url=f"{DiscordClient.base_url}{APPLICATION_COMMANDS_URL.format(application_id=self.application_id)}",
+            match=[header_matcher({"Authorization": f"Bot {self.bot_token}"})],
+            json=COMMANDS,
+        )
+        responses.add(
+            responses.POST,
+            url=f"{DISCORD_BASE_URL}/oauth2/token",
+            json={"access_token": "access_token"},
+        )
+        responses.add(
+            responses.GET,
+            url=f"{DiscordClient.base_url}/users/@me",
+            json={"id": "user_1234"},
+        )
+        responses.add(
+            responses.GET,
+            url=f"{DiscordClient.base_url}/users/@me/guilds/{self.guild_id}/member",
+            json={},
+        )
+
+        resp = self._initialize_pipeline()
+        assert resp.data["step"] == "oauth_login"
+        pipeline_signature = self._get_pipeline_signature(resp)
+
+        resp = self._advance_step(
+            {
+                "code": "discord-auth-code",
+                "state": pipeline_signature,
+                "guildId": self.guild_id,
+            }
+        )
+        assert resp.status_code == 200
+        assert resp.data["status"] == "complete"
+        assert "data" in resp.data
+
+        integration = Integration.objects.get(provider="discord")
+        assert integration.external_id == self.guild_id
+        assert integration.name == self.guild_name
+
+        assert OrganizationIntegration.objects.filter(
+            organization_id=self.organization.id,
+            integration=integration,
+        ).exists()

@@ -52,6 +52,7 @@ class FilterTypes:
     ERROR_MESSAGES = "error_messages"
     RELEASES = "releases"
     LOG_MESSAGES = "log_messages"
+    TRACE_METRIC_NAMES = "trace_metric_names"
 
 
 def get_filter_key(flt):
@@ -136,10 +137,8 @@ def get_filter_state(filter_id, project):
 
     if filter_state is None:
         raise ValueError(
-            "Could not find filter state for filter {}."
-            " You need to register default filter state in projectoptions.defaults.".format(
-                filter_id
-            )
+            f"Could not find filter state for filter {filter_id}."
+            " You need to register default filter state in projectoptions.defaults."
         )
 
     if flt == _legacy_browsers_filter:
@@ -232,11 +231,11 @@ class _LegacyBrowserFilterSerializer(_FilterSerializer):
 Specifies which legacy browser filters should be active. Anything excluded from the list will be
 disabled. The options are:
 - `ie` - Internet Explorer Version 11 and lower
-- `edge` - Edge Version 18 and lower
-- `safari` - Safari Version 11 and lower
-- `firefox` - Firefox Version 66 and lower
-- `chrome` - Chrome Version 62 and lower
-- `opera` - Opera Version 50 and lower
+- `edge` - Edge Version 110 and lower
+- `safari` - Safari Version 15 and lower
+- `firefox` - Firefox Version 110 and lower
+- `chrome` - Chrome Version 110 and lower
+- `opera` - Opera Version 99 and lower
 - `android` - Android Version 3 and lower
 - `opera_mini` - Opera Mini Version 34 and lower
 
@@ -346,8 +345,13 @@ def _chunk_load_error_filter() -> RuleCondition:
     https://domain.com/_next/static/chunks/29107295-0151559bd23117ba.js)
     """
     values = [
+        # Webpack
         ("ChunkLoadError", "Loading chunk *"),
         ("*Uncaught *", "ChunkLoadError: Loading chunk *"),
+        # Turbopack
+        ("ChunkLoadError", "Failed to load chunk *"),
+        ("*Uncaught *", "ChunkLoadError: Failed to load chunk *"),
+        # Promise rejections
         ("Error", "Uncaught (in promise): ChunkLoadError*"),
     ]
 
@@ -362,14 +366,16 @@ def _hydration_error_filter() -> RuleCondition:
     418 - Hydration failed because the initial UI does not match what was rendered on the server.
     419 - The server could not finish this Suspense boundary, likely due to an error during server rendering.
         Switched to client rendering.
+    421 - This Suspense boundary received an update before it finished hydrating. This caused the boundary to switch to client rendering.
+        The usual way to fix this is to wrap the original update in startTransition.
     422 - There was an error while hydrating this Suspense boundary. Switched to client rendering.
     423 - There was an error while hydrating. Because the error happened outside of a Suspense boundary, the entire
         root will switch to client rendering.
     425 - Text content does not match server-rendered HTML.
     """
     values = [
-        (None, "*https://reactjs.org/docs/error-decoder.html?invariant={418,419,422,423,425}*"),
-        (None, "*https://react.dev/errors/{418,419,422,423,425}*"),
+        (None, "*https://reactjs.org/docs/error-decoder.html?invariant={418,419,421,422,423,425}*"),
+        (None, "*https://react.dev/errors/{418,419,421,422,423,425}*"),
     ]
 
     return _error_message_condition(values)
@@ -433,5 +439,20 @@ def get_log_messages_generic_filter(log_messages: list[str]) -> GenericFilter | 
             "op": "glob",
             "name": "log.body",
             "value": log_messages,
+        },
+    }
+
+
+def get_trace_metric_names_generic_filter(trace_metric_names: list[str]) -> GenericFilter | None:
+    if not trace_metric_names:
+        return None
+
+    return {
+        "id": "trace-metric-name",
+        "isEnabled": True,
+        "condition": {
+            "op": "glob",
+            "name": "trace_metric.name",
+            "value": trace_metric_names,
         },
     }

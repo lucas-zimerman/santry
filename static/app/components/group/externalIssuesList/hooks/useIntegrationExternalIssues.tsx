@@ -1,6 +1,6 @@
 import {addErrorMessage, addSuccessMessage} from 'sentry/actionCreators/indicator';
-import {doOpenExternalIssueModal} from 'sentry/components/group/externalIssuesList/externalIssueActions';
-import useFetchIntegrations from 'sentry/components/group/externalIssuesList/useFetchIntegrations';
+import {openExternalIssueModal} from 'sentry/components/externalIssues/externalIssueForm';
+import {useFetchIntegrations} from 'sentry/components/group/externalIssuesList/useFetchIntegrations';
 import {t} from 'sentry/locale';
 import type {Group} from 'sentry/types/group';
 import type {GroupIntegration} from 'sentry/types/integrations';
@@ -8,8 +8,8 @@ import {
   getIntegrationDisplayName,
   getIntegrationIcon,
 } from 'sentry/utils/integrationUtil';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 import type {ExternalIssueAction, GroupIntegrationIssueResult} from './types';
 
@@ -60,7 +60,7 @@ export function useIntegrationExternalIssues({
         nameSubText: config.domainName ?? undefined,
         disabled: config.status === 'disabled',
         onClick: () => {
-          doOpenExternalIssueModal({
+          openExternalIssueModal({
             group,
             integration: config,
             onChange: refetchIntegrations,
@@ -73,7 +73,7 @@ export function useIntegrationExternalIssues({
       // Roll up all configurations into a single integration item
       results.integrations.push({
         displayName: getIntegrationDisplayName(providerKey),
-        key: providerKey,
+        key: `integration-${providerKey}`,
         displayIcon,
         actions,
       });
@@ -84,7 +84,7 @@ export function useIntegrationExternalIssues({
       ...configurations
         .filter(config => config.externalIssues.length > 0)
         .map<GroupIntegrationIssueResult['linkedIssues'][number]>(config => ({
-          key: config.externalIssues[0]!.id,
+          key: `integration-linked-${config.externalIssues[0]!.id}`,
           displayName: config.externalIssues[0]!.key,
           displayIcon,
           url: config.externalIssues[0]!.url,

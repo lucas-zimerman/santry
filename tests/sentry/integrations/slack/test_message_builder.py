@@ -4,27 +4,12 @@ from datetime import datetime
 from typing import Any
 from unittest.mock import MagicMock, Mock, patch
 
-import orjson
-from django.urls import reverse
-from urllib3.response import HTTPResponse
-
 from sentry.grouping.grouptype import ErrorGroupType
-from sentry.incidents.logic import CRITICAL_TRIGGER_LABEL
-from sentry.incidents.models.alert_rule import (
-    AlertRuleDetectionType,
-    AlertRuleSeasonality,
-    AlertRuleSensitivity,
-)
-from sentry.incidents.models.incident import IncidentStatus
-from sentry.incidents.typings.metric_detector import AlertContext, MetricIssueContext
 from sentry.integrations.messaging.message_builder import (
     build_attachment_text,
     build_attachment_title,
 )
-from sentry.integrations.messaging.types import LEVEL_TO_COLOR
-from sentry.integrations.slack.message_builder.incidents import SlackIncidentsMessageBuilder
 from sentry.integrations.slack.message_builder.issues import (
-    MAX_SUMMARY_HEADLINE_LENGTH,
     SlackIssuesMessageBuilder,
     build_actions,
     format_release_tag,
@@ -32,7 +17,6 @@ from sentry.integrations.slack.message_builder.issues import (
     get_option_groups,
     get_tags,
 )
-from sentry.integrations.slack.message_builder.metric_alerts import SlackMetricAlertMessageBuilder
 from sentry.integrations.slack.message_builder.routing import encode_action_id
 from sentry.integrations.slack.message_builder.types import SlackAction
 from sentry.integrations.time_utils import time_since
@@ -53,7 +37,6 @@ from sentry.models.rule import Rule as IssueAlertRule
 from sentry.models.team import Team
 from sentry.monitors.grouptype import MonitorIncidentType
 from sentry.notifications.utils.actions import MessageAction
-from sentry.seer.anomaly_detection.types import StoreDataResponse
 from sentry.seer.autofix.constants import SeerAutomationSource
 from sentry.services.eventstore.models import Event
 from sentry.silo.base import SiloMode
@@ -67,7 +50,6 @@ from sentry.testutils.skips import requires_snuba
 from sentry.types.actor import Actor
 from sentry.types.group import GroupSubStatus
 from sentry.users.models.user import User
-from sentry.utils.http import absolute_uri
 from tests.sentry.issues.test_utils import OccurrenceTestMixin
 
 pytestmark = [requires_snuba]
@@ -83,7 +65,6 @@ def build_test_message_blocks(
     suggested_assignees: str | None = None,
     initial_assignee: Team | User | None = None,
     notes: str | None = None,
-    suspect_commit_text: str | None = None,
     rule: IssueAlertRule | None = None,
     legacy_rule_id: int | None = None,
 ) -> dict[str, Any]:
@@ -106,6 +87,8 @@ def build_test_message_blocks(
         else:
             title_link += f"&alert_rule_id={rule.id}&alert_type=issue"
 
+    title_text = f":red_circle: <{title_link}|*{formatted_title}*>"
+
     if rule:
         if legacy_rule_id:
             block_id = f'{{"issue":{group.id},"rule":{legacy_rule_id}}}'
@@ -116,22 +99,8 @@ def build_test_message_blocks(
 
     blocks: list[dict[str, Any]] = [
         {
-            "type": "rich_text",
-            "elements": [
-                {
-                    "type": "rich_text_section",
-                    "elements": [
-                        {"type": "emoji", "name": "red_circle"},
-                        {"type": "text", "text": " "},
-                        {
-                            "type": "link",
-                            "url": title_link,
-                            "text": formatted_title,
-                            "style": {"bold": True},
-                        },
-                    ],
-                }
-            ],
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": title_text},
             "block_id": block_id,
         },
     ]
@@ -170,13 +139,16 @@ def build_test_message_blocks(
         }
         blocks.append(tags_section)
 
-    # add event and user count, state, first seen
+    # add event and user count, state, first seen, and suggested assignees (compact style)
+    context_text = f"State: *New*   First Seen: *{time_since(group.first_seen)}*"
+    if suggested_assignees:
+        context_text += f"   Suggested: {suggested_assignees}"
     counts_section = {
         "type": "context",
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": f"State: *New*   First Seen: *{time_since(group.first_seen)}*",
+                "text": context_text,
             }
         ],
     }
@@ -234,21 +206,6 @@ def build_test_message_blocks(
             }
     blocks.append(actions)
 
-    if suggested_assignees:
-        suggested_assignees_text = f"Suggested Assignees: {suggested_assignees}"
-        suggested_assignees_section = {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": suggested_assignees_text}],
-        }
-        blocks.append(suggested_assignees_section)
-
-    if suspect_commit_text and event:
-        suspect_commit_section = {
-            "type": "context",
-            "elements": [{"type": "mrkdwn", "text": suspect_commit_text}],
-        }
-        blocks.append(suspect_commit_section)
-
     if notes:
         notes_text = f"notes: {notes}"
         notes_section = {
@@ -259,9 +216,9 @@ def build_test_message_blocks(
 
     if rule:
         if legacy_rule_id:
-            context_text = f"Project: <http://testserver/organizations/{project.organization.slug}/issues/?project={project.id}|{project.slug}>    Alert: <http://testserver/organizations/{project.organization.slug}/alerts/rules/bar/{legacy_rule_id}/details/|{rule.label}>    Short ID: {group.qualified_short_id}"
+            context_text = f"Project: <http://testserver/organizations/{project.organization.slug}/issues/?project={project.id}|{project.slug}>    Alert: <http://testserver/organizations/{project.organization.slug}/issues/alerts/rules/bar/{legacy_rule_id}/details/|{rule.label}>    Short ID: {group.qualified_short_id}"
         else:
-            context_text = f"Project: <http://testserver/organizations/{project.organization.slug}/issues/?project={project.id}|{project.slug}>    Alert: <http://testserver/organizations/{project.organization.slug}/alerts/rules/bar/{rule.id}/details/|{rule.label}>    Short ID: {group.qualified_short_id}"
+            context_text = f"Project: <http://testserver/organizations/{project.organization.slug}/issues/?project={project.id}|{project.slug}>    Alert: <http://testserver/organizations/{project.organization.slug}/issues/alerts/rules/bar/{rule.id}/details/|{rule.label}>    Short ID: {group.qualified_short_id}"
     else:
         context_text = f"Project: <http://testserver/organizations/{project.organization.slug}/issues/?project={project.id}|{project.slug}>    Alert: BAR-{group.short_id}    Short ID: {group.qualified_short_id}"
     context = {
@@ -269,8 +226,6 @@ def build_test_message_blocks(
         "elements": [{"type": "mrkdwn", "text": context_text}],
     }
     blocks.append(context)
-
-    blocks.append({"type": "divider"})
 
     popup_text = (
         f"[{project.slug}] {title}: {text}" if text is not None else f"[{project.slug}] {title}"
@@ -368,9 +323,9 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
 
         assert SlackIssuesMessageBuilder(group).build() == test_message
 
-    @with_feature("organizations:workflow-engine-trigger-actions")
     def test_build_group_block_noa(self) -> None:
-        rule = self.create_project_rule(project=self.project, action_data=[{"legacy_rule_id": 123}])
+        rule = self.create_project_rule(project=self.project)
+
         release = self.create_release(project=self.project)
         event = self.store_event(
             data={
@@ -396,7 +351,7 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             users={self.user},
             group=group,
             rule=rule,
-            legacy_rule_id=123,
+            legacy_rule_id=rule.data["actions"][0]["legacy_rule_id"],
         )
         # add extra tag to message
         assert SlackIssuesMessageBuilder(
@@ -561,7 +516,7 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             key="asdfwreqr",
             message="placeholder commit message",
         )
-        pull_request = PullRequest.objects.create(
+        PullRequest.objects.create(
             organization_id=self.organization.id,
             repository_id=self.repo.id,
             key="9",
@@ -593,8 +548,6 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             context={"commitId": self.commit.id},
         )
 
-        suspect_commit_text = f"Suspect Commit: <{self.repo.url}/commit/{self.commit.key}|{self.commit.key[:6]}> by {commit_author.email} {time_since(pull_request.date_added)} \n'{pull_request.title} (#{pull_request.key})' <{pull_request.get_external_url()}|View Pull Request>"
-
         assert SlackIssuesMessageBuilder(
             group,
             event.for_group(group),
@@ -603,7 +556,6 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             users={self.user},
             group=group,
             event=event,
-            suspect_commit_text=suspect_commit_text,
             suggested_assignees=commit_author.email,
         )
 
@@ -658,8 +610,6 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             context={"commitId": self.commit.id},
         )
 
-        suspect_commit_text = f"Suspect Commit: {self.commit.key[:6]} by {commit_author.email}"
-
         assert SlackIssuesMessageBuilder(
             group,
             event.for_group(group),
@@ -668,7 +618,6 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             users={self.user},
             group=group,
             event=event,
-            suspect_commit_text=suspect_commit_text,
             suggested_assignees=commit_author.email,
         )
 
@@ -741,16 +690,14 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
 
         # auto assign group
         ProjectOwnership.handle_auto_assignment(self.project.id, event)
-        suspect_commit_text = f"Suspect Commit: {commit.key[:6]} by {user2.email}"  # no commit link because there is no PR
 
         expected_blocks = build_test_message_blocks(
             teams={self.team},
             users={self.user},
             group=group,
             event=event,
-            suggested_assignees=f"#{self.team.slug}, {user2.email}",  # auto-assignee is not included in suggested
+            suggested_assignees=f"#{self.team.slug}, {user2.email}",
             initial_assignee=self.user,
-            suspect_commit_text=suspect_commit_text,
         )
 
         assert (
@@ -762,7 +709,6 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
         with assume_test_silo_mode(SiloMode.CONTROL):
             user2.update(name="Scooby Doo")
         commit.author.update(name=user2.name)
-        suspect_commit_text = f"Suspect Commit: {commit.key[:6]} by {user2.name}"
         expected_blocks = build_test_message_blocks(
             teams={self.team},
             users={self.user},
@@ -770,7 +716,6 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
             event=event,
             suggested_assignees=f"#{self.team.slug}, {user2.name}",
             initial_assignee=self.user,
-            suspect_commit_text=suspect_commit_text,
         )
         assert (
             SlackIssuesMessageBuilder(group, event.for_group(group), tags={"foo"}).build()
@@ -874,11 +819,11 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
 
     def test_build_performance_issue(self) -> None:
         event = self.create_performance_issue()
+        assert event.group is not None
         with self.feature("organizations:performance-issues"):
             blocks = SlackIssuesMessageBuilder(event.group, event).build()
         assert isinstance(blocks, dict)
-        title_text = blocks["blocks"][0]["elements"][0]["elements"][-1]["text"]
-        assert "N+1 Query" in title_text
+        assert "N+1 Query" in blocks["blocks"][0]["text"]["text"]
         assert (
             "db - SELECT `books_author`.`id`, `books_author`.`name` FROM `books_author` WHERE `books_author`.`id` = %s LIMIT 21"
             in blocks["blocks"][2]["text"]["text"]
@@ -930,53 +875,9 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
         assert isinstance(ret, dict)
         assert "<https://example.com/|*Click Here*>" in ret["blocks"][1]["text"]["text"]
 
-    def test_no_description_in_notification(self) -> None:
-        alert_rule = self.create_alert_rule(description="yeehaw")
-        incident = self.create_incident(alert_rule=alert_rule, status=2)
-        title = f"Critical: {alert_rule.name}"
-        timestamp = "<!date^{:.0f}^Started: {} at {} | Sentry Incident>".format(
-            incident.date_started.timestamp(), "{date_pretty}", "{time}"
-        )
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?alert={incident.identifier}&referrer=metric_alert_slack&detection_type={alert_rule.detection_type}"
-        )
-        assert SlackIncidentsMessageBuilder(
-            alert_context=AlertContext.from_alert_rule_incident(alert_rule),
-            metric_issue_context=MetricIssueContext.from_legacy_models(
-                incident, IncidentStatus.CRITICAL, 0
-            ),
-            organization=self.organization,
-            date_started=incident.date_started,
-        ).build() == {
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"0 events in the last 10 minutes\n{timestamp}",
-                    },
-                },
-            ],
-            "color": LEVEL_TO_COLOR["fatal"],
-            "text": f"<{link}|*{title}*>",
-        }
-
     @override_options({"alerts.issue_summary_timeout": 5})
     @with_feature({"organizations:gen-ai-features"})
-    @patch(
-        "sentry.integrations.utils.issue_summary_for_alerts.get_seer_org_acknowledgement",
-        return_value=True,
-    )
-    def test_build_group_block_with_ai_summary(self, mock_get_seer_org_acknowledgement):
+    def test_build_group_block_with_ai_summary(self) -> None:
         event = self.store_event(
             data={
                 "event_id": "a" * 32,
@@ -1025,176 +926,40 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
 
             mock_get_summary.assert_called_once_with(group, source=SeerAutomationSource.ALERT)
 
-            # Verify that the original title is \\ present
-            title_text = blocks["blocks"][0]["elements"][0]["elements"][-1]["text"]
-            assert "IntegrationError" in title_text
-            assert "Identity not found" in title_text
+            # Verify that the title uses build_attachment_title (error type only)
+            assert "IntegrationError" in blocks["blocks"][0]["text"]["text"]
 
-            # Verify that the AI content is used in the context block
-            content_block = blocks["blocks"][1]["elements"][0]["text"]
-            assert "This is a possible cause" in content_block
+            # Verify that the AI summary appears as "Initial Guess" in a context block
+            found_initial_guess = False
+            for block in blocks["blocks"]:
+                if block.get("type") == "context":
+                    for element in block.get("elements", []):
+                        if "Initial Guess" in element.get("text", ""):
+                            found_initial_guess = True
+                            assert "This is a possible cause" in element["text"]
+                            break
+            assert found_initial_guess
 
-    @override_options({"alerts.issue_summary_timeout": 5})
-    @with_feature({"organizations:gen-ai-features"})
-    @patch(
-        "sentry.integrations.utils.issue_summary_for_alerts.get_seer_org_acknowledgement",
-        return_value=True,
-    )
-    def test_build_group_block_with_ai_summary_text_truncation(
-        self, mock_get_seer_org_acknowledgement
-    ):
-        # Test case for multi-line exception text
-        multiline_text = "First line of text\nSecond line of text\nThird line of text"
-        event1 = self.store_event(
-            data={
-                "event_id": "a" * 32,
-                "message": "IntegrationError",
-                "fingerprint": ["group-1"],
-                "exception": {
-                    "values": [
-                        {
-                            "type": "IntegrationError",
-                            "value": multiline_text,
-                        }
-                    ]
-                },
-                "level": "error",
-                "timestamp": before_now(minutes=1).isoformat(),
-            },
-            project_id=self.project.id,
-        )
-        assert event1.group
-        group1 = event1.group
-        group1.type = ErrorGroupType.type_id
-        group1.save()
-
-        self.project.update_option("sentry:seer_scanner_automation", True)
-        self.organization.update_option("sentry:enable_seer_enhanced_alerts", True)
-
-        # Test case for long exception text (over 50 characters)
-        long_text = (
-            "This is a very long text that exceeds the 50 character limit and should be truncated"
-        )
-        event2 = self.store_event(
-            data={
-                "event_id": "b" * 32,
-                "message": "IntegrationError",
-                "fingerprint": ["group-2"],
-                "exception": {
-                    "values": [
-                        {
-                            "type": "IntegrationError",
-                            "value": long_text,
-                        }
-                    ]
-                },
-                "level": "error",
-                "timestamp": before_now(minutes=1).isoformat(),
-            },
-            project_id=self.project.id,
-        )
-        assert event2.group
-        group2 = event2.group
-        group2.type = ErrorGroupType.type_id
-        group2.save()
-
-        self.project.flags.has_releases = True
-        self.project.save(update_fields=["flags"])
-
-        mock_summary = {
-            "headline": "Custom AI Title",
-            "whatsWrong": "Some issue description",
-            "trace": "This is trace information",
-            "possibleCause": "This is a possible cause",
-        }
-
-        patch_path = "sentry.integrations.utils.issue_summary_for_alerts.get_issue_summary"
-        serializer_path = "sentry.api.serializers.models.event.EventSerializer.serialize"
-        serializer_mock = Mock(return_value={})
-
-        # Test multi-line text truncation
-        with (
-            patch(patch_path) as mock_get_summary,
-            patch(serializer_path, serializer_mock),
-        ):
-            mock_get_summary.return_value = (mock_summary, 200)
-            blocks = SlackIssuesMessageBuilder(group1, event1.for_group(group1)).build()
-            title_text = blocks["blocks"][0]["elements"][0]["elements"][-1]["text"]
-
-            assert "First line of text..." in title_text
-            assert "Second line" not in title_text
-
-        # Test long text truncation
-        with (
-            patch(patch_path) as mock_get_summary,
-            patch(serializer_path, serializer_mock),
-        ):
-            mock_get_summary.return_value = (mock_summary, 200)
-            blocks = SlackIssuesMessageBuilder(group2, event2.for_group(group2)).build()
-            title_text = blocks["blocks"][0]["elements"][0]["elements"][-1]["text"]
-
-            expected_truncated = long_text[:MAX_SUMMARY_HEADLINE_LENGTH] + "..."
-            assert expected_truncated in title_text
-
-        # Test cases for other line breaks
-        line_break_test_cases = [
-            ("crlf", "CRLF Line1\r\nCRLF Line2", "CRLF Line1..."),
-            ("ls", "LS Line1\u2028LS Line2", "LS Line1..."),
-            ("ps", "PS Line1\u2029PS Line2", "PS Line1..."),
-            ("strip_before_ellipsis", "Space Line1  \r\nSpace Line2", "Space Line1..."),
-        ]
-
-        for name, text_with_break, expected_headline_part in line_break_test_cases:
-            event_lb = self.store_event(
-                data={
-                    "event_id": "c" * 32,
-                    "message": "IntegrationError",
-                    "fingerprint": [f"group-lb-{name}"],
-                    "exception": {
-                        "values": [
-                            {
-                                "type": "IntegrationError",
-                                "value": text_with_break,
-                            }
-                        ]
-                    },
-                    "level": "error",
-                    "timestamp": before_now(minutes=1).isoformat(),
-                },
-                project_id=self.project.id,
-            )
-            assert event_lb.group
-            group_lb = event_lb.group
-            group_lb.type = ErrorGroupType.type_id
-            group_lb.save()
-
-            with (
-                patch(patch_path) as mock_get_summary,
-                patch(serializer_path, serializer_mock),
-            ):
-                mock_get_summary.return_value = (mock_summary, 200)
-                blocks = SlackIssuesMessageBuilder(group_lb, event_lb.for_group(group_lb)).build()
-                title_block = blocks["blocks"][0]["elements"][0]["elements"][-1]["text"]
-                assert f": {expected_headline_part}" in title_block, f"Failed for {name}"
-
-    @override_options({"alerts.issue_summary_timeout": 5})
-    @patch(
-        "sentry.integrations.utils.issue_summary_for_alerts.get_seer_org_acknowledgement",
-        return_value=False,
-    )
-    @patch(
-        "sentry.integrations.utils.issue_summary_for_alerts.get_issue_summary",
-        return_value=(None, 403),
-    )
-    @with_feature({"organizations:gen-ai-features"})
-    def test_build_group_block_with_ai_summary_without_org_acknowledgement(
-        self, mock_get_issue_summary, mock_get_seer_org_acknowledgement
-    ):
+    def test_compact_alerts_basic_layout(self) -> None:
+        """
+        Test that the message uses a compact layout:
+        - No divider at the end
+        - Context block includes stats
+        """
         event = self.store_event(
             data={
                 "event_id": "a" * 32,
                 "message": "IntegrationError",
                 "fingerprint": ["group-1"],
+                "exception": {
+                    "values": [
+                        {
+                            "type": "IntegrationError",
+                            "value": "Identity not found.",
+                        }
+                    ]
+                },
+                "level": "error",
             },
             project_id=self.project.id,
         )
@@ -1202,13 +967,190 @@ class BuildGroupAttachmentTest(TestCase, PerformanceIssueTestCase, OccurrenceTes
         group = event.group
         group.type = ErrorGroupType.type_id
         group.save()
-        assert group.issue_category == GroupCategory.ERROR
 
-        mock_get_issue_summary.assert_not_called()
+        self.project.flags.has_releases = True
+        self.project.save(update_fields=["flags"])
 
         blocks = SlackIssuesMessageBuilder(group).build()
-        title_text = blocks["blocks"][0]["elements"][0]["elements"][-1]["text"]
-        assert "IntegrationError" in title_text
+
+        assert "IntegrationError" in blocks["blocks"][0]["text"]["text"]
+        assert blocks["blocks"][-1]["type"] != "divider"
+
+    @override_options({"alerts.issue_summary_timeout": 5})
+    @with_feature({"organizations:gen-ai-features"})
+    def test_compact_alerts_with_ai_summary(self) -> None:
+        """
+        Test that with AI summary available:
+        - Title uses build_attachment_title() (not AI headline)
+        - Issue summary appears after action buttons as context with "Initial Guess:" prefix
+        """
+        event = self.store_event(
+            data={
+                "event_id": "a" * 32,
+                "message": "IntegrationError",
+                "fingerprint": ["group-1"],
+                "exception": {
+                    "values": [
+                        {
+                            "type": "IntegrationError",
+                            "value": "Identity not found.",
+                        }
+                    ]
+                },
+                "level": "error",
+            },
+            project_id=self.project.id,
+        )
+        assert event.group
+        group = event.group
+        group.type = ErrorGroupType.type_id
+        group.save()
+
+        self.project.flags.has_releases = True
+        self.project.save(update_fields=["flags"])
+        self.project.update_option("sentry:seer_scanner_automation", True)
+        self.organization.update_option("sentry:enable_seer_enhanced_alerts", True)
+
+        mock_summary = {
+            "headline": "Custom AI Title",
+            "whatsWrong": "This is what's wrong with the issue",
+            "trace": "This is trace information",
+            "possibleCause": "This is a possible cause",
+        }
+        patch_path = "sentry.integrations.utils.issue_summary_for_alerts.get_issue_summary"
+        serializer_path = "sentry.api.serializers.models.event.EventSerializer.serialize"
+        serializer_mock = Mock(return_value={})
+
+        with (
+            patch(patch_path) as mock_get_summary,
+            patch(serializer_path, serializer_mock),
+        ):
+            mock_get_summary.return_value = (mock_summary, 200)
+
+            blocks = SlackIssuesMessageBuilder(group).build()
+
+            title_block = blocks["blocks"][0]["text"]["text"]
+            assert "IntegrationError" in title_block
+            assert "Custom AI Title" not in title_block
+
+            found_initial_guess = False
+            for block in blocks["blocks"]:
+                if block.get("type") == "context":
+                    elements = block.get("elements", [])
+                    for element in elements:
+                        if "Initial Guess" in element.get("text", ""):
+                            found_initial_guess = True
+                            assert "This is a possible cause" in element["text"]
+                            break
+
+            assert found_initial_guess, "Initial Guess context block not found"
+            assert blocks["blocks"][-1]["type"] != "divider"
+
+    def test_compact_alerts_context_includes_suggested_assignees(self) -> None:
+        """
+        Test that with compact alerts, suggested assignees are included in the context block
+        rather than in a separate block.
+        """
+        event = self.store_event(
+            data={
+                "event_id": "a" * 32,
+                "message": "Hello world",
+                "fingerprint": ["group-1"],
+                "level": "error",
+                "stacktrace": {"frames": [{"filename": "foo.py"}]},
+            },
+            project_id=self.project.id,
+        )
+        assert event.group
+        group = event.group
+
+        # Set up ownership to create suggested assignees
+        rule = Rule(Matcher("path", "*"), [Owner("team", self.team.slug)])
+        ProjectOwnership.objects.create(project_id=self.project.id, schema=dump_schema([rule]))
+
+        blocks = SlackIssuesMessageBuilder(group, event).build()
+
+        found_suggested_in_context = False
+        found_old_suggested_assignees = False
+        for block in blocks["blocks"]:
+            if block.get("type") == "context":
+                elements = block.get("elements", [])
+                for element in elements:
+                    text = element.get("text", "")
+                    if "Suggested:" in text:
+                        found_suggested_in_context = True
+                    if "Suggested Assignees:" in text:
+                        found_old_suggested_assignees = True
+
+        assert found_suggested_in_context, "Suggested assignees should be in context block"
+        assert not found_old_suggested_assignees, (
+            "Old 'Suggested Assignees:' format should not appear"
+        )
+
+    def _has_autofix_button(self, blocks: dict[str, Any]) -> bool:
+        for block in blocks.get("blocks", []):
+            if block.get("type") == "actions":
+                for element in block.get("elements", []):
+                    action_id = element.get("action_id", "")
+                    if SlackAction.SEER_AUTOFIX_START.value in action_id:
+                        return True
+        return False
+
+    @patch("sentry.quotas.backend.check_seer_quota", return_value=True)
+    @with_feature(
+        {
+            "organizations:gen-ai-features": True,
+            "organizations:seer-slack-workflows": True,
+        }
+    )
+    def test_autofix_button_shown_when_all_conditions_met(self, mock_quota: MagicMock) -> None:
+        self.organization.update_option("sentry:enable_seer_enhanced_alerts", True)
+        group = self.create_group(project=self.project)
+        blocks = SlackIssuesMessageBuilder(group).build()
+        assert self._has_autofix_button(blocks)
+
+    @patch("sentry.quotas.backend.check_seer_quota", return_value=True)
+    @with_feature(
+        {
+            "organizations:gen-ai-features": True,
+            "organizations:seer-slack-workflows": False,
+        }
+    )
+    def test_autofix_button_hidden_without_slack_workflows_flag(
+        self, mock_quota: MagicMock
+    ) -> None:
+        self.organization.update_option("sentry:enable_seer_enhanced_alerts", True)
+        group = self.create_group(project=self.project)
+        blocks = SlackIssuesMessageBuilder(group).build()
+        assert not self._has_autofix_button(blocks)
+
+    @patch("sentry.quotas.backend.check_seer_quota", return_value=True)
+    @with_feature(
+        {
+            "organizations:gen-ai-features": True,
+            "organizations:seer-slack-workflows": True,
+        }
+    )
+    def test_autofix_button_hidden_without_enhanced_alerts_option(
+        self, mock_quota: MagicMock
+    ) -> None:
+        self.organization.update_option("sentry:enable_seer_enhanced_alerts", False)
+        group = self.create_group(project=self.project)
+        blocks = SlackIssuesMessageBuilder(group).build()
+        assert not self._has_autofix_button(blocks)
+
+    @patch("sentry.quotas.backend.check_seer_quota", return_value=True)
+    @with_feature(
+        {
+            "organizations:gen-ai-features": True,
+            "organizations:seer-slack-workflows": True,
+        }
+    )
+    def test_autofix_button_hidden_on_unfurl(self, mock_quota: MagicMock) -> None:
+        self.organization.update_option("sentry:enable_seer_enhanced_alerts", True)
+        group = self.create_group(project=self.project)
+        blocks = SlackIssuesMessageBuilder(group, is_unfurl=True).build()
+        assert not self._has_autofix_button(blocks)
 
 
 class BuildGroupAttachmentReplaysTest(TestCase):
@@ -1229,403 +1171,13 @@ class BuildGroupAttachmentReplaysTest(TestCase):
         )
         assert event.group is not None
 
-        with self.feature(
-            ["organizations:session-replay", "organizations:session-replay-slack-new-issue"]
-        ):
+        with self.feature(["organizations:session-replay"]):
             blocks = SlackIssuesMessageBuilder(event.group, event.for_group(event.group)).build()
         assert isinstance(blocks, dict)
         assert (
             f"<http://testserver/organizations/baz/issues/{event.group.id}/replays/?referrer=slack|View Replays>"
             in blocks["blocks"][3]["elements"][0]["text"]
         )
-
-
-class BuildIncidentAttachmentTest(TestCase):
-    def test_simple(self) -> None:
-        alert_rule = self.create_alert_rule()
-        incident = self.create_incident(alert_rule=alert_rule, status=2)
-        title = f"Resolved: {alert_rule.name}"
-        timestamp = "<!date^{:.0f}^Started: {} at {} | Sentry Incident>".format(
-            incident.date_started.timestamp(), "{date_pretty}", "{time}"
-        )
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?alert={incident.identifier}&referrer=metric_alert_slack&detection_type={alert_rule.detection_type}"
-        )
-        assert SlackIncidentsMessageBuilder(
-            alert_context=AlertContext.from_alert_rule_incident(alert_rule),
-            metric_issue_context=MetricIssueContext.from_legacy_models(
-                incident, IncidentStatus.CLOSED, 0
-            ),
-            organization=self.organization,
-            date_started=incident.date_started,
-        ).build() == {
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"0 events in the last 10 minutes\n{timestamp}",
-                    },
-                }
-            ],
-            "color": LEVEL_TO_COLOR["_incident_resolved"],
-            "text": f"<{link}|*{title}*>",
-        }
-
-    def test_metric_value(self) -> None:
-        alert_rule = self.create_alert_rule()
-        incident = self.create_incident(alert_rule=alert_rule, status=2)
-
-        # This test will use the action/method and not the incident to build status
-        title = f"Critical: {alert_rule.name}"
-        metric_value = 5000
-        timestamp = "<!date^{:.0f}^Started: {} at {} | Sentry Incident>".format(
-            incident.date_started.timestamp(), "{date_pretty}", "{time}"
-        )
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?alert={incident.identifier}&referrer=metric_alert_slack&detection_type={alert_rule.detection_type}"
-        )
-        # This should fail because it pulls status from `action` instead of `incident`
-        assert SlackIncidentsMessageBuilder(
-            alert_context=AlertContext.from_alert_rule_incident(alert_rule),
-            metric_issue_context=MetricIssueContext.from_legacy_models(
-                incident, IncidentStatus.CRITICAL, metric_value
-            ),
-            organization=self.organization,
-            date_started=incident.date_started,
-        ).build() == {
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"5000 events in the last 10 minutes\n{timestamp}",
-                    },
-                }
-            ],
-            "color": LEVEL_TO_COLOR["fatal"],
-            "text": f"<{link}|*{title}*>",
-        }
-
-    def test_chart(self) -> None:
-        alert_rule = self.create_alert_rule()
-        incident = self.create_incident(alert_rule=alert_rule, status=2)
-        title = f"Resolved: {alert_rule.name}"
-        timestamp = "<!date^{:.0f}^Started: {} at {} | Sentry Incident>".format(
-            incident.date_started.timestamp(), "{date_pretty}", "{time}"
-        )
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?alert={incident.identifier}&referrer=metric_alert_slack&detection_type={alert_rule.detection_type}"
-        )
-        assert SlackIncidentsMessageBuilder(
-            alert_context=AlertContext.from_alert_rule_incident(alert_rule),
-            metric_issue_context=MetricIssueContext.from_legacy_models(
-                incident, IncidentStatus.CLOSED, 0
-            ),
-            organization=self.organization,
-            date_started=incident.date_started,
-            chart_url="chart-url",
-        ).build() == {
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"0 events in the last 10 minutes\n{timestamp}",
-                    },
-                },
-                {"alt_text": "Metric Alert Chart", "image_url": "chart-url", "type": "image"},
-            ],
-            "color": LEVEL_TO_COLOR["_incident_resolved"],
-            "text": f"<{link}|*{title}*>",
-        }
-
-    @with_feature("organizations:anomaly-detection-alerts")
-    @patch(
-        "sentry.seer.anomaly_detection.store_data.seer_anomaly_detection_connection_pool.urlopen"
-    )
-    def test_metric_alert_with_anomaly_detection(self, mock_seer_request: MagicMock) -> None:
-        seer_return_value: StoreDataResponse = {"success": True}
-        mock_seer_request.return_value = HTTPResponse(orjson.dumps(seer_return_value), status=200)
-        alert_rule = self.create_alert_rule(
-            detection_type=AlertRuleDetectionType.DYNAMIC,
-            time_window=30,
-            sensitivity=AlertRuleSensitivity.LOW,
-            seasonality=AlertRuleSeasonality.AUTO,
-        )
-        incident = self.create_incident(alert_rule=alert_rule, status=IncidentStatus.CRITICAL.value)
-        title = f"Critical: {alert_rule.name}"
-        timestamp = "<!date^{:.0f}^Started: {} at {} | Sentry Incident>".format(
-            incident.date_started.timestamp(), "{date_pretty}", "{time}"
-        )
-        detection_type = alert_rule.detection_type
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?alert={incident.identifier}&referrer=metric_alert_slack&detection_type={detection_type}"
-        )
-        assert SlackIncidentsMessageBuilder(
-            alert_context=AlertContext.from_alert_rule_incident(alert_rule),
-            metric_issue_context=MetricIssueContext.from_legacy_models(
-                incident, IncidentStatus.CRITICAL, 0
-            ),
-            organization=self.organization,
-            date_started=incident.date_started,
-        ).build() == {
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"0 events in the last 30 minutes\nThreshold: {detection_type.title()}\n{timestamp}",
-                    },
-                },
-            ],
-            "color": LEVEL_TO_COLOR["fatal"],
-            "text": f"<{link}|*{title}*>",
-        }
-
-
-class BuildMetricAlertAttachmentTest(TestCase):
-    def test_metric_alert_without_incidents(self) -> None:
-        alert_rule = self.create_alert_rule()
-        title = f"Resolved: {alert_rule.name}"
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?detection_type={alert_rule.detection_type}"
-        )
-        assert SlackMetricAlertMessageBuilder(alert_rule).build() == {
-            "color": LEVEL_TO_COLOR["_incident_resolved"],
-            "blocks": [
-                {
-                    "text": {
-                        "text": f"<{link}|*{title}*>  \n",
-                        "type": "mrkdwn",
-                    },
-                    "type": "section",
-                },
-            ],
-        }
-
-    def test_metric_alert_with_selected_incident(self) -> None:
-        alert_rule = self.create_alert_rule()
-        incident = self.create_incident(alert_rule=alert_rule, status=IncidentStatus.CLOSED.value)
-        trigger = self.create_alert_rule_trigger(alert_rule, CRITICAL_TRIGGER_LABEL, 100)
-        self.create_alert_rule_trigger_action(
-            alert_rule_trigger=trigger, triggered_for_incident=incident
-        )
-        title = f"Resolved: {alert_rule.name}"
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?detection_type={alert_rule.detection_type}&alert={incident.identifier}"
-        )
-        assert SlackMetricAlertMessageBuilder(alert_rule, incident).build() == {
-            "color": LEVEL_TO_COLOR["_incident_resolved"],
-            "blocks": [
-                {
-                    "text": {
-                        "text": f"<{link}|*{title}*>  \n",
-                        "type": "mrkdwn",
-                    },
-                    "type": "section",
-                },
-            ],
-        }
-
-    def test_metric_alert_with_active_incident(self) -> None:
-        alert_rule = self.create_alert_rule()
-        incident = self.create_incident(alert_rule=alert_rule, status=IncidentStatus.CRITICAL.value)
-        trigger = self.create_alert_rule_trigger(alert_rule, CRITICAL_TRIGGER_LABEL, 100)
-        self.create_alert_rule_trigger_action(
-            alert_rule_trigger=trigger, triggered_for_incident=incident
-        )
-        title = f"Critical: {alert_rule.name}"
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?detection_type={alert_rule.detection_type}"
-        )
-        assert SlackMetricAlertMessageBuilder(alert_rule).build() == {
-            "color": LEVEL_TO_COLOR["fatal"],
-            "blocks": [
-                {
-                    "text": {
-                        "text": f"<{link}|*{title}*>  \n0 events in the last 10 minutes",
-                        "type": "mrkdwn",
-                    },
-                    "type": "section",
-                },
-            ],
-        }
-
-    def test_metric_value(self) -> None:
-        alert_rule = self.create_alert_rule()
-        incident = self.create_incident(alert_rule=alert_rule, status=IncidentStatus.CLOSED.value)
-
-        # This test will use the action/method and not the incident to build status
-        title = f"Critical: {alert_rule.name}"
-        metric_value = 5000
-        trigger = self.create_alert_rule_trigger(alert_rule, CRITICAL_TRIGGER_LABEL, 100)
-        self.create_alert_rule_trigger_action(
-            alert_rule_trigger=trigger, triggered_for_incident=incident
-        )
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?detection_type={alert_rule.detection_type}&alert={incident.identifier}"
-        )
-        assert SlackMetricAlertMessageBuilder(
-            alert_rule, incident, IncidentStatus.CRITICAL, metric_value=metric_value
-        ).build() == {
-            "color": LEVEL_TO_COLOR["fatal"],
-            "blocks": [
-                {
-                    "text": {
-                        "text": f"<{link}|*{title}*>  \n"
-                        f"{metric_value} events in the last 10 minutes",
-                        "type": "mrkdwn",
-                    },
-                    "type": "section",
-                },
-            ],
-        }
-
-    def test_metric_alert_chart(self) -> None:
-        alert_rule = self.create_alert_rule()
-        title = f"Resolved: {alert_rule.name}"
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?detection_type={alert_rule.detection_type}"
-        )
-        assert SlackMetricAlertMessageBuilder(alert_rule, chart_url="chart_url").build() == {
-            "color": LEVEL_TO_COLOR["_incident_resolved"],
-            "blocks": [
-                {
-                    "text": {
-                        "text": f"<{link}|*{title}*>  \n",
-                        "type": "mrkdwn",
-                    },
-                    "type": "section",
-                },
-                {"alt_text": "Metric Alert Chart", "image_url": "chart_url", "type": "image"},
-            ],
-        }
-
-    @with_feature("organizations:anomaly-detection-alerts")
-    @patch(
-        "sentry.seer.anomaly_detection.store_data.seer_anomaly_detection_connection_pool.urlopen"
-    )
-    def test_metric_alert_with_anomaly_detection(self, mock_seer_request: MagicMock) -> None:
-        seer_return_value: StoreDataResponse = {"success": True}
-        mock_seer_request.return_value = HTTPResponse(orjson.dumps(seer_return_value), status=200)
-        alert_rule = self.create_alert_rule(
-            detection_type=AlertRuleDetectionType.DYNAMIC,
-            time_window=30,
-            sensitivity=AlertRuleSensitivity.LOW,
-            seasonality=AlertRuleSeasonality.AUTO,
-        )
-        incident = self.create_incident(alert_rule=alert_rule, status=IncidentStatus.CRITICAL.value)
-        trigger = self.create_alert_rule_trigger(alert_rule=alert_rule, alert_threshold=0)
-        self.create_alert_rule_trigger_action(
-            alert_rule_trigger=trigger, triggered_for_incident=incident
-        )
-        title = f"Critical: {alert_rule.name}"
-        link = (
-            absolute_uri(
-                reverse(
-                    "sentry-metric-alert-details",
-                    kwargs={
-                        "organization_slug": self.organization.slug,
-                        "alert_rule_id": alert_rule.id,
-                    },
-                )
-            )
-            + f"?detection_type={alert_rule.detection_type}"
-        )
-        assert SlackMetricAlertMessageBuilder(alert_rule).build() == {
-            "color": LEVEL_TO_COLOR["fatal"],
-            "blocks": [
-                {
-                    "text": {
-                        "text": f"<{link}|*{title}*>  \n0 events in the last 30 minutes\nThreshold: {alert_rule.detection_type.title()}",
-                        "type": "mrkdwn",
-                    },
-                    "type": "section",
-                },
-            ],
-        }
 
 
 class ActionsTest(TestCase):

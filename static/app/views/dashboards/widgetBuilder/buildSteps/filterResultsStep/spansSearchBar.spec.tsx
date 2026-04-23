@@ -3,15 +3,16 @@ import {WidgetQueryFixture} from 'sentry-fixture/widgetQuery';
 
 import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 
+import {WildcardOperators} from 'sentry/components/searchSyntax/parser';
 import type {TagValue} from 'sentry/types/group';
-import SpansSearchBar from 'sentry/views/dashboards/widgetBuilder/buildSteps/filterResultsStep/spansSearchBar';
-import {TraceItemAttributeProvider} from 'sentry/views/explore/contexts/traceItemAttributeContext';
-import {TraceItemDataset} from 'sentry/views/explore/types';
+import {SpansSearchBar} from 'sentry/views/dashboards/widgetBuilder/buildSteps/filterResultsStep/spansSearchBar';
 
 // The endpoint seems to just return these fields, but the original TagValue type
 // has extra fields related to user information that we don't seem to need.
-interface MockedTagValue
-  extends Pick<TagValue, 'key' | 'value' | 'name' | 'count' | 'firstSeen' | 'lastSeen'> {}
+interface MockedTagValue extends Pick<
+  TagValue,
+  'key' | 'value' | 'name' | 'count' | 'firstSeen' | 'lastSeen'
+> {}
 
 function renderWithProvider({
   widgetQuery,
@@ -19,9 +20,8 @@ function renderWithProvider({
   onClose,
 }: ComponentProps<typeof SpansSearchBar>) {
   return render(
-    <TraceItemAttributeProvider traceItemType={TraceItemDataset.SPANS} enabled>
-      <SpansSearchBar widgetQuery={widgetQuery} onSearch={onSearch} onClose={onClose} />
-    </TraceItemAttributeProvider>
+    <SpansSearchBar widgetQuery={widgetQuery} onSearch={onSearch} onClose={onClose} />,
+    {}
   );
 }
 
@@ -30,10 +30,10 @@ function mockSpanTags({
   mockedTags,
 }: {
   mockedTags: Array<{key: string; name: string}>;
-  type: 'string' | 'number';
+  type: 'string' | 'number' | 'boolean';
 }) {
   MockApiClient.addMockResponse({
-    url: `/organizations/org-slug/trace-items/attributes/`,
+    url: '/organizations/org-slug/trace-items/attributes/',
     body: mockedTags,
     match: [
       function (_url: string, options: Record<string, any>) {
@@ -68,16 +68,16 @@ describe('SpansSearchBar', () => {
     MockApiClient.clearMockResponses();
 
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/recent-searches/`,
+      url: '/organizations/org-slug/recent-searches/',
       body: [],
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/recent-searches/`,
+      url: '/organizations/org-slug/recent-searches/',
       body: [],
       method: 'POST',
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/spans/fields/`,
+      url: '/organizations/org-slug/spans/fields/',
       body: [],
     });
 
@@ -86,6 +86,18 @@ describe('SpansSearchBar', () => {
 
     mockSpanTags({type: 'number', mockedTags: []});
     mockSpanTagValues({type: 'number', tagKey: 'span.op', mockedValues: []});
+
+    mockSpanTags({type: 'boolean', mockedTags: []});
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/trace-items/attributes/',
+      body: [],
+    });
+
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/trace-items/attributes/validate/',
+      method: 'POST',
+      body: {attributes: {}},
+    });
   });
 
   it('renders the initial query conditions', async () => {
@@ -114,7 +126,7 @@ describe('SpansSearchBar', () => {
     await screen.findByLabelText('span.op:function');
   });
 
-  it('calls onSearch with the correct query', async () => {
+  it.isKnownFlake('calls onSearch with the correct query', async () => {
     const onSearch = jest.fn();
 
     renderWithProvider({
@@ -126,14 +138,16 @@ describe('SpansSearchBar', () => {
     const searchInput = await screen.findByRole('combobox', {
       name: 'Add a search term',
     });
-    await userEvent.type(searchInput, 'span.op:function');
-
-    // It takes two enters. One to enter the search term, and one to submit the search.
-    await userEvent.keyboard('{enter}');
-    await userEvent.keyboard('{enter}');
+    await userEvent.click(searchInput);
+    await userEvent.type(searchInput, 'span.op:', {delay: null});
+    await userEvent.keyboard('function', {delay: null});
+    await userEvent.keyboard('{enter}', {delay: null});
 
     await waitFor(() => {
-      expect(onSearch).toHaveBeenCalledWith('span.op:function', expect.anything());
+      expect(onSearch).toHaveBeenCalledWith(
+        `span.op:${WildcardOperators.CONTAINS}function`,
+        expect.anything()
+      );
     });
   });
 
@@ -149,7 +163,12 @@ describe('SpansSearchBar', () => {
     const searchInput = await screen.findByRole('combobox', {
       name: 'Add a search term',
     });
-    await userEvent.type(searchInput, 'span.op:function{enter}');
+    await userEvent.click(searchInput);
+    await userEvent.type(searchInput, 'span.op:', {delay: null});
+    await userEvent.keyboard('{enter}', {delay: null});
+    await screen.findByRole('row', {name: /span\.op/});
+    await userEvent.keyboard('function', {delay: null});
+    await userEvent.keyboard('{enter}', {delay: null});
 
     await waitFor(() => {
       expect(onClose).toHaveBeenCalled();

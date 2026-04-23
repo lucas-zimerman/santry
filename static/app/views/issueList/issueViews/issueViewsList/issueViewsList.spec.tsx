@@ -11,11 +11,10 @@ import {
 } from 'sentry-test/reactTestingLibrary';
 import {textWithMarkupMatcher} from 'sentry-test/utils';
 
-import ConfigStore from 'sentry/stores/configStore';
 import IssueViewsList from 'sentry/views/issueList/issueViews/issueViewsList/issueViewsList';
 
 const organization = OrganizationFixture({
-  features: ['enforce-stacked-navigation', 'issue-views'],
+  features: ['issue-views'],
 });
 
 describe('IssueViewsList', () => {
@@ -62,18 +61,6 @@ describe('IssueViewsList', () => {
         }),
       ],
     });
-
-    MockApiClient.addMockResponse({
-      url: '/organizations/org-slug/prompts-activity/',
-    });
-
-    ConfigStore.set('user', {
-      ...ConfigStore.get('user'),
-      options: {
-        ...ConfigStore.get('user').options,
-        prefersStackedNavigation: true,
-      },
-    });
   });
 
   it('displays views from myself and others', async () => {
@@ -82,7 +69,7 @@ describe('IssueViewsList', () => {
     expect(await screen.findByText('Foo')).toBeInTheDocument();
     expect(screen.getByText('Foo')).toHaveAttribute(
       'href',
-      `/organizations/org-slug/issues/views/1/`
+      '/organizations/org-slug/issues/views/1/'
     );
     expect(screen.getByText(textWithMarkupMatcher('foo is bar'))).toBeInTheDocument();
     expect(screen.getByText('env1')).toBeInTheDocument();
@@ -91,7 +78,7 @@ describe('IssueViewsList', () => {
     expect(await screen.findByText('Bar')).toBeInTheDocument();
     expect(screen.getByText('Bar')).toHaveAttribute(
       'href',
-      `/organizations/org-slug/issues/views/2/`
+      '/organizations/org-slug/issues/views/2/'
     );
     expect(screen.getByText(textWithMarkupMatcher('bar is baz'))).toBeInTheDocument();
     expect(screen.getByText('My Projects')).toBeInTheDocument();
@@ -121,7 +108,7 @@ describe('IssueViewsList', () => {
       ],
     });
 
-    render(<IssueViewsList />, {organization, deprecatedRouterMocks: false});
+    render(<IssueViewsList />, {organization});
 
     // By default, sorts by popularity (desc) then visited (desc) then created (desc)
     await waitFor(() => {

@@ -7,11 +7,15 @@ from rest_framework.response import Response
 
 from sentry import tagstore
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
+from sentry.api.helpers.deprecation import deprecated
 from sentry.api.helpers.environments import get_environments
 from sentry.api.helpers.mobile import get_readable_device_name
 from sentry.api.serializers import serialize
+from sentry.api.utils import get_date_range_from_params
+from sentry.constants import CELL_API_DEPRECATION_DATE
 from sentry.issues.endpoints.bases.group import GroupEndpoint
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.search.utils import DEVICE_CLASS
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
@@ -19,23 +23,25 @@ if TYPE_CHECKING:
     from sentry.models.group import Group
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class GroupTagsEndpoint(GroupEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.UNKNOWN,
     }
 
     enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=10, window=1, concurrent_limit=10),
-            RateLimitCategory.USER: RateLimit(limit=10, window=1, concurrent_limit=10),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1, concurrent_limit=5),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=10, window=1, concurrent_limit=10),
+                RateLimitCategory.USER: RateLimit(limit=10, window=1, concurrent_limit=10),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1, concurrent_limit=5),
+            }
         }
-    }
+    )
 
+    @deprecated(CELL_API_DEPRECATION_DATE, url_names=["sentry-api-0-group-tags"])
     def get(self, request: Request, group: Group) -> Response:
-
         if request.GET.get("useFlagsBackend") == "1":
             backend = tagstore.flag_backend
         else:
@@ -59,12 +65,15 @@ class GroupTagsEndpoint(GroupEndpoint):
 
         environment_ids = [e.id for e in get_environments(request, group.project.organization)]
 
+        start, end = get_date_range_from_params(request.GET, optional=True)
         tag_keys = backend.get_group_tag_keys_and_top_values(
             group,
             environment_ids,
             keys=keys,
             value_limit=value_limit,
             tenant_ids={"organization_id": group.project.organization_id},
+            start=start,
+            end=end,
         )
 
         data = serialize(tag_keys, request.user)

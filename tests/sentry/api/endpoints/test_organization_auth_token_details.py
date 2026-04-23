@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 from django.urls import reverse
 from rest_framework import status
 
+from sentry.models.apitoken import ApiToken
 from sentry.models.orgauthtoken import OrgAuthToken
 from sentry.testutils.cases import APITestCase, PermissionTestCase
+from sentry.testutils.helpers.impersonation import simulate_impersonation
 from sentry.testutils.silo import control_silo_test
 
 
@@ -71,7 +73,7 @@ class OrganizationAuthTokenDetailTest(APITestCase):
         )
 
         response = self.get_error_response(self.organization.slug, token.id)
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_other_org_token(self) -> None:
         other_org = self.create_organization()
@@ -102,6 +104,25 @@ class OrganizationAuthTokenDetailTest(APITestCase):
         self.login_as(self.user)
         response = self.get_error_response(self.organization.slug, token.id)
         assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_deny_token_access(self) -> None:
+        org_token = OrgAuthToken.objects.create(
+            organization_id=self.organization.id,
+            name="token 1",
+            token_hashed="ABCDEF",
+            token_last_characters="xyz1",
+            scope_list=["org:ci"],
+            date_last_used=None,
+        )
+
+        personal_token = ApiToken.objects.create(user=self.user, scope_list=["org:read"])
+
+        response = self.get_error_response(
+            self.organization.slug,
+            org_token.id,
+            extra_headers={"HTTP_AUTHORIZATION": f"Bearer {personal_token.token}"},
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_not_exists(self) -> None:
         self.login_as(self.user)
@@ -225,7 +246,7 @@ class OrganizationAuthTokenEditTest(APITestCase):
         )
         payload: dict[str, str] = {}
         response = self.get_error_response(self.organization.slug, token.id, **payload)
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_other_org_token(self) -> None:
         other_org = self.create_organization()
@@ -320,7 +341,7 @@ class OrganizationAuthTokenDeleteTest(APITestCase):
             date_last_used=None,
         )
         response = self.get_error_response(self.organization.slug, token.id)
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_other_org_token(self) -> None:
         other_org = self.create_organization()
@@ -425,3 +446,52 @@ class OrganizationAuthTokenDetailsPermissionTest(PermissionTestCase):
 
     def test_member_cannot_delete(self) -> None:
         self.assert_member_cannot_access(self.path, method="DELETE")
+
+
+@control_silo_test
+class OrganizationAuthTokenDetailsImpersonationTest(APITestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.impersonator = self.create_user(is_superuser=True)
+        self.token = OrgAuthToken.objects.create(
+            organization_id=self.organization.id,
+            name="token 1",
+            token_hashed="ABCDEF",
+            token_last_characters="xyz1",
+            scope_list=["org:ci"],
+            date_last_used=None,
+        )
+
+    def test_impersonated_put_blocked(self) -> None:
+        url = reverse(
+            "sentry-api-0-org-auth-token-details",
+            args=[self.organization.slug, self.token.id],
+        )
+        self.login_as(self.user)
+        with simulate_impersonation(self.impersonator):
+            response = self.client.put(url, data={"name": "renamed"})
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        self.token.refresh_from_db()
+        assert self.token.name == "token 1"
+
+    def test_impersonated_delete_blocked(self) -> None:
+        url = reverse(
+            "sentry-api-0-org-auth-token-details",
+            args=[self.organization.slug, self.token.id],
+        )
+        self.login_as(self.user)
+        with simulate_impersonation(self.impersonator):
+            response = self.client.delete(url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        self.token.refresh_from_db()
+        assert self.token.date_deactivated is None
+
+    def test_impersonated_get_allowed(self) -> None:
+        url = reverse(
+            "sentry-api-0-org-auth-token-details",
+            args=[self.organization.slug, self.token.id],
+        )
+        self.login_as(self.user)
+        with simulate_impersonation(self.impersonator):
+            response = self.client.get(url)
+        assert response.status_code == status.HTTP_200_OK

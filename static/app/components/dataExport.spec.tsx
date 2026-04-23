@@ -3,7 +3,7 @@ import {OrganizationFixture} from 'sentry-fixture/organization';
 import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 
 import {addErrorMessage} from 'sentry/actionCreators/indicator';
-import DataExport, {ExportQueryType} from 'sentry/components/dataExport';
+import {DataExport, ExportQueryType} from 'sentry/components/dataExport';
 import type {Organization} from 'sentry/types/organization';
 
 jest.mock('sentry/actionCreators/indicator');
@@ -38,6 +38,13 @@ describe('DataExport', () => {
       ...mockContext(mockAuthorizedOrg),
     });
     expect(screen.getByText(/Export All to CSV/)).toBeInTheDocument();
+  });
+
+  it('should render the button for an unauthorized organization using flag override', () => {
+    render(<DataExport payload={mockPayload} overrideFeatureFlags />, {
+      ...mockContext(mockUnauthorizedOrg),
+    });
+    expect(screen.getByRole('button')).toBeInTheDocument();
   });
 
   it('should render custom children if provided', () => {

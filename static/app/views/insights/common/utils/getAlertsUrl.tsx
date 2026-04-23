@@ -4,7 +4,8 @@ import type {PageFilters} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import {makeAlertsPathname} from 'sentry/views/alerts/pathnames';
-import {Dataset} from 'sentry/views/alerts/rules/metric/types';
+import {Dataset, EventTypes} from 'sentry/views/alerts/rules/metric/types';
+import {getMetricMonitorUrl} from 'sentry/views/insights/common/utils/getMetricMonitorUrl';
 
 export function getAlertsUrl({
   project,
@@ -15,14 +16,14 @@ export function getAlertsUrl({
   name,
   interval,
   dataset = Dataset.GENERIC_METRICS,
-  eventTypes = 'transaction',
+  eventTypes,
   referrer,
 }: {
   aggregate: string;
   organization: Organization;
   pageFilters: PageFilters;
   dataset?: Dataset;
-  eventTypes?: string;
+  eventTypes?: EventTypes[];
   interval?: string;
   name?: string;
   project?: Project;
@@ -44,10 +45,25 @@ export function getAlertsUrl({
     interval: supportedInterval,
     referrer,
   };
+  // If workflow engine UI is enabled, deep-link to the new monitor flow instead
+  if (organization.features?.includes('workflow-engine-ui')) {
+    const loc = getMetricMonitorUrl({
+      project,
+      environment,
+      aggregate,
+      dataset,
+      organization,
+      name,
+      query,
+      referrer,
+      eventTypes,
+    });
+    return `${loc.pathname}?${qs.stringify(loc.query)}`;
+  }
 
   return (
     makeAlertsPathname({
-      path: `/new/metric/`,
+      path: '/new/metric/',
       organization,
     }) + `?${qs.stringify(queryParams)}`
   );

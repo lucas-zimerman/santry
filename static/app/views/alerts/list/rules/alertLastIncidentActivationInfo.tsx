@@ -1,6 +1,6 @@
-import TimeSince from 'sentry/components/timeSince';
+import {TimeSince} from 'sentry/components/timeSince';
 import {t, tct} from 'sentry/locale';
-import getDuration from 'sentry/utils/duration/getDuration';
+import {getDuration} from 'sentry/utils/duration/getDuration';
 import {hasActiveIncident} from 'sentry/views/alerts/list/rules/utils';
 import {
   CombinedAlertType,
@@ -22,17 +22,21 @@ interface Props {
 function LastUptimeIncident({rule}: {rule: UptimeAlert}) {
   // TODO(davidenwang): Once we have a lastTriggered field returned from
   // backend, display that info here
-  return tct('Actively monitoring every [interval]', {
-    interval: getDuration(rule.intervalSeconds),
-  });
+  return rule.status === 'active'
+    ? tct('Actively monitoring every [interval]', {
+        interval: getDuration(rule.intervalSeconds),
+      })
+    : t('Uptime monitor disabled');
 }
 
 function LastCronMonitorIncident({rule}: {rule: CronRule}) {
   // TODO(evanpurkhiser): Would probably be better if we had a way to get the
   // most recent incident.
-  return tct('Expected [interval]', {
-    interval: scheduleAsText(rule.config),
-  });
+  return rule.status === 'active'
+    ? tct('Expected [interval]', {
+        interval: scheduleAsText(rule.config),
+      })
+    : t('Cron monitor disabled');
 }
 
 /**
@@ -74,8 +78,7 @@ function LastMetricAlertIncident({rule}: {rule: MetricAlert}) {
   );
 }
 
-export default function AlertLastIncidentActivationInfo({rule}: Props) {
-  // eslint-disable-next-line default-case
+export function AlertLastIncidentActivationInfo({rule}: Props) {
   switch (rule.type) {
     case CombinedAlertType.UPTIME:
       return <LastUptimeIncident rule={rule} />;

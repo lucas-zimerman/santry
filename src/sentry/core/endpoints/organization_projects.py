@@ -8,7 +8,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.organization import OrganizationAndStaffPermission, OrganizationEndpoint
 from sentry.api.helpers.environments import get_environment_id
 from sentry.api.paginator import OffsetPaginator
@@ -28,7 +28,9 @@ from sentry.models.team import Team
 from sentry.search.utils import tokenize_query
 from sentry.snuba import discover, metrics_enhanced_performance, metrics_performance
 
-ERR_INVALID_STATS_PERIOD = "Invalid stats_period. Valid choices are '', '24h', '14d', and '30d'"
+ERR_INVALID_STATS_PERIOD = (
+    "Invalid stats_period. Valid choices are '', '1h', '24h', '7d', '14d', '30d', and '90d'"
+)
 
 DATASETS = {
     "": discover,  # in case they pass an empty query string fall back on default
@@ -45,7 +47,7 @@ def get_dataset(dataset_label: str) -> Any:
 
 
 @extend_schema(tags=["Organizations"])
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationProjectsEndpoint(OrganizationEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PUBLIC,
@@ -72,7 +74,7 @@ class OrganizationProjectsEndpoint(OrganizationEndpoint):
         """
         stats_period = request.GET.get("statsPeriod")
         collapse = request.GET.getlist("collapse", [])
-        if stats_period not in (None, "", "1h", "24h", "7d", "14d", "30d"):
+        if stats_period not in (None, "", "1h", "24h", "7d", "14d", "30d", "90d"):
             return Response(
                 {"error": {"params": {"stats_period": {"message": ERR_INVALID_STATS_PERIOD}}}},
                 status=400,
@@ -95,7 +97,7 @@ class OrganizationProjectsEndpoint(OrganizationEndpoint):
                 queryset = Project.objects.filter(teams__in=team_list)
             else:
                 return Response(
-                    {"detail": "Current access does not point to " "organization."}, status=400
+                    {"detail": "Current access does not point to organization."}, status=400
                 )
         else:
             queryset = Project.objects.filter(organization=organization)
@@ -199,7 +201,7 @@ class OrganizationProjectsEndpoint(OrganizationEndpoint):
             )
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationProjectsCountEndpoint(OrganizationEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PRIVATE,

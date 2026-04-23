@@ -6,11 +6,12 @@ from collections.abc import Iterable, Sequence
 from typing import TYPE_CHECKING
 
 import sentry_sdk
+from django.core.cache import cache
 
+from sentry import options
 from sentry.exceptions import HashDiscarded
 from sentry.grouping.api import (
     NULL_GROUPING_CONFIG,
-    BackgroundGroupingConfigLoader,
     GroupingConfig,
     SecondaryGroupingConfigLoader,
     apply_server_side_fingerprinting,
@@ -18,19 +19,25 @@ from sentry.grouping.api import (
     get_grouping_config_dict_for_project,
     load_grouping_config,
 )
+from sentry.grouping.ingest.caching import (
+    get_grouphash_existence_cache_key,
+    get_grouphash_object_cache_key,
+)
 from sentry.grouping.ingest.config import is_in_transition
 from sentry.grouping.ingest.grouphash_metadata import (
     create_or_update_grouphash_metadata_if_needed,
     record_grouphash_metadata_metrics,
-    should_handle_grouphash_metadata,
 )
 from sentry.grouping.variants import BaseVariant
 from sentry.models.grouphash import GroupHash
 from sentry.models.project import Project
-from sentry.options.rollout import in_random_rollout
 from sentry.utils import metrics
 from sentry.utils.metrics import MutableTags
 from sentry.utils.tag_normalization import normalized_sdk_tag_from_event
+
+# How long we cache both the existence of secondary grouphashes and grouphashes themselves. We use a
+# minute because experimentation showed that anything more than that didn't improve hit rates.
+GROUPHASH_CACHE_EXPIRY_SECONDS = 60
 
 if TYPE_CHECKING:
     from sentry.event_manager import Job
@@ -55,54 +62,20 @@ def _calculate_event_grouping(
     with metrics.timer("save_event._calculate_event_grouping", tags=metric_tags):
         loaded_grouping_config = load_grouping_config(grouping_config)
 
-        with metrics.timer("event_manager.normalize_stacktraces_for_grouping", tags=metric_tags):
-            with sentry_sdk.start_span(op="event_manager.normalize_stacktraces_for_grouping"):
-                event.normalize_stacktraces_for_grouping(loaded_grouping_config)
-
         with metrics.timer("event_manager.apply_server_fingerprinting", tags=metric_tags):
-            # The active grouping config was put into the event in the
-            # normalize step before.  We now also make sure that the
-            # fingerprint was set to `'{{ default }}' just in case someone
-            # removed it from the payload.  The call to `get_hashes_and_variants` will then
-            # look at `grouping_config` to pick the right parameters.
             event.data["fingerprint"] = event.data.data.get("fingerprint") or ["{{ default }}"]
             apply_server_side_fingerprinting(
                 event.data.data, get_fingerprinting_config_for_project(project)
             )
 
+        with metrics.timer("event_manager.normalize_stacktraces_for_grouping", tags=metric_tags):
+            with sentry_sdk.start_span(op="event_manager.normalize_stacktraces_for_grouping"):
+                event.normalize_stacktraces_for_grouping(loaded_grouping_config)
+
         with metrics.timer("event_manager.event.get_hashes", tags=metric_tags):
             hashes, variants = event.get_hashes_and_variants(loaded_grouping_config)
 
         return (hashes, variants)
-
-
-def maybe_run_background_grouping(project: Project, job: Job) -> None:
-    """
-    Optionally run a fraction of events with an experimental grouping config.
-
-    This does not affect actual grouping, but can be helpful to measure the new config's performance
-    impact.
-    """
-    try:
-        if in_random_rollout("store.background-grouping-sample-rate"):
-            config = BackgroundGroupingConfigLoader().get_config_dict(project)
-            if config["id"]:
-                copied_event = copy.deepcopy(job["event"])
-                _calculate_background_grouping(project, copied_event, config)
-    except Exception as err:
-        sentry_sdk.capture_exception(err)
-
-
-def _calculate_background_grouping(
-    project: Project, event: Event, config: GroupingConfig
-) -> list[str]:
-    metric_tags: MutableTags = {
-        "grouping_config": config["id"],
-        "platform": event.platform or "unknown",
-        "sdk": normalized_sdk_tag_from_event(event.data),
-    }
-    with metrics.timer("event_manager.background_grouping", tags=metric_tags):
-        return _calculate_event_grouping(project, event, config)[0]
 
 
 def maybe_run_secondary_grouping(
@@ -192,13 +165,15 @@ def find_grouphash_with_group(
     Search in the list of given `GroupHash` records for one which has a group assigned to it, and
     return the first one found. (Assumes grouphashes have already been sorted in priority order.)
     """
-    for group_hash in grouphashes:
-        if group_hash.group_id is not None:
-            return group_hash
+    winning_grouphash = None
 
-        # TODO: Tombstones may get ignored entirely if there is another hash *before*
-        # that happens to have a group_id. This bug may not have been noticed
-        # for a long time because most events only ever have 1-2 hashes.
+    # Find the first grouphash which has a group assigned. Note that we still look at all of the
+    # grouphashes, even once we've found a winner, to make sure none of the hashes have been
+    # delete-and-discarded.
+    for group_hash in grouphashes:
+        if group_hash.group_id is not None and not winning_grouphash:
+            winning_grouphash = group_hash
+
         if group_hash.group_tombstone_id is not None:
             raise HashDiscarded(
                 "Matches group tombstone %s" % group_hash.group_tombstone_id,
@@ -206,7 +181,76 @@ def find_grouphash_with_group(
                 tombstone_id=group_hash.group_tombstone_id,
             )
 
-    return None
+    return winning_grouphash
+
+
+def _grouphash_exists_for_hash_value(hash_value: str, project: Project, use_caching: bool) -> bool:
+    """
+    Check whether a given hash value has a corresponding `GroupHash` record in the database.
+
+    If `use_caching` is True, cache the boolean result.
+    """
+    with metrics.timer(
+        "grouping.get_or_create_grouphashes.check_secondary_hash_existence"
+    ) as metrics_tags:
+        cache_key = get_grouphash_existence_cache_key(hash_value, project.id)
+
+        if use_caching:
+            grouphash_exists = cache.get(cache_key)
+            got_cache_hit = grouphash_exists is not None
+            metrics_tags["cache_result"] = "hit" if got_cache_hit else "miss"
+
+            if got_cache_hit:
+                metrics_tags["grouphash_exists"] = grouphash_exists
+                return grouphash_exists
+
+        # Get an answer from the database if we didn't find what we needed in the cache (or if
+        # caching is turned off)
+        grouphash_exists = GroupHash.objects.filter(project=project, hash=hash_value).exists()
+
+        if use_caching:
+            metrics_tags["grouphash_exists"] = grouphash_exists
+            metrics_tags["cache_set"] = True
+
+            cache.set(cache_key, grouphash_exists, GROUPHASH_CACHE_EXPIRY_SECONDS)
+
+        return grouphash_exists
+
+
+def _get_or_create_single_grouphash(
+    hash_value: str, project: Project, use_caching: bool
+) -> tuple[GroupHash, bool]:
+    """
+    Create or retrieve a `GroupHash` record for the given hash.
+
+    If `use_caching` is true, and the resulting grouphash has an assigned group, cache the
+    `GroupHash` object. (Grouphashes without a group aren't cached because their data is about to
+    change when a group is assigned.)
+    """
+    with metrics.timer(
+        "grouping.get_or_create_grouphashes.get_or_create_grouphash"
+    ) as metrics_tags:
+        cache_key = get_grouphash_object_cache_key(hash_value, project.id)
+
+        if use_caching:
+            grouphash = cache.get(cache_key)
+            got_cache_hit = grouphash is not None
+            metrics_tags["cache_result"] = "hit" if got_cache_hit else "miss"
+
+            if got_cache_hit:
+                return (grouphash, False)
+
+        grouphash, created = GroupHash.objects.get_or_create(project=project, hash=hash_value)
+
+        # We only want to cache grouphashes which already have a group assigned, because we know any
+        # without a group will only stay current in the cache for a few milliseconds (until they get
+        # their own group), so there's no point in bothering to cache them.
+        if use_caching and grouphash.group_id is not None:
+            metrics_tags["cache_set"] = True
+
+            cache.set(cache_key, grouphash, GROUPHASH_CACHE_EXPIRY_SECONDS)
+
+        return (grouphash, created)
 
 
 def get_or_create_grouphashes(
@@ -217,23 +261,23 @@ def get_or_create_grouphashes(
     grouping_config_id: str,
 ) -> list[GroupHash]:
     is_secondary = grouping_config_id == project.get_option("sentry:secondary_grouping_config")
+    use_caching = options.get("grouping.use_ingest_grouphash_caching")
     grouphashes: list[GroupHash] = []
 
     if is_secondary:
         # The only utility of secondary hashes is to link new primary hashes to an existing group
         # via an existing grouphash. Secondary hashes which are new are therefore of no value, so
         # filter them out before creating grouphash records.
-        existing_hashes = set(
-            GroupHash.objects.filter(project=project, hash__in=hashes).values_list(
-                "hash", flat=True
-            )
-        )
-        hashes = filter(lambda hash_value: hash_value in existing_hashes, hashes)
+        hashes = [
+            hash_value
+            for hash_value in hashes
+            if _grouphash_exists_for_hash_value(hash_value, project, use_caching)
+        ]
 
     for hash_value in hashes:
-        grouphash, created = GroupHash.objects.get_or_create(project=project, hash=hash_value)
+        grouphash, created = _get_or_create_single_grouphash(hash_value, project, use_caching)
 
-        if should_handle_grouphash_metadata(project, created):
+        if options.get("grouping.grouphash_metadata.ingestion_writes_enabled"):
             try:
                 # We don't expect this to throw any errors, but collecting this metadata
                 # shouldn't ever derail ingestion, so better to be safe
@@ -248,23 +292,8 @@ def get_or_create_grouphashes(
                 logger.warning(
                     "grouphash_metadata.exception", extra={"event_id": event_id, "error": repr(exc)}
                 )
-
         if grouphash.metadata:
             record_grouphash_metadata_metrics(grouphash.metadata, event.platform)
-        else:
-            # Now that the sample rate for grouphash metadata creation is 100%, we should never land
-            # here, and yet we still do. Log some data for debugging purposes.
-            logger.warning(
-                "grouphash_metadata.hash_without_metadata",
-                extra={
-                    "event_id": event.event_id,
-                    "project_id": project.id,
-                    "hash": hash_value,
-                    "is_new": created,
-                    "has_group": bool(grouphash.group_id),
-                },
-            )
-            metrics.incr("grouping.grouphashmetadata.backfill_needed", sample_rate=1.0)
 
         grouphashes.append(grouphash)
 

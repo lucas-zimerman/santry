@@ -1,18 +1,19 @@
 import {Component, createContext} from 'react';
 import styled from '@emotion/styled';
 
+import {Alert} from '@sentry/scraps/alert';
+import {Stack} from '@sentry/scraps/layout';
+
 import {fetchOrgMembers} from 'sentry/actionCreators/members';
+import {redirectToProject} from 'sentry/actionCreators/redirectToProject';
 import type {Client} from 'sentry/api';
-import {Alert} from 'sentry/components/core/alert';
-import * as Layout from 'sentry/components/layouts/thirds';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import MissingProjectMembership from 'sentry/components/projects/missingProjectMembership';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {MissingProjectMembership} from 'sentry/components/projects/missingProjectMembership';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
-import MemberListStore from 'sentry/stores/memberListStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
-import {space} from 'sentry/styles/space';
+import {MemberListStore} from 'sentry/stores/memberListStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import type {User} from 'sentry/types/user';
@@ -20,9 +21,9 @@ import {
   addProjectFeaturesHandler,
   buildSentryFeaturesHandler,
 } from 'sentry/utils/featureFlags';
-import withApi from 'sentry/utils/withApi';
-import withOrganization from 'sentry/utils/withOrganization';
-import withProjects from 'sentry/utils/withProjects';
+import {withApi} from 'sentry/utils/withApi';
+import {withOrganization} from 'sentry/utils/withOrganization';
+import {withProjects} from 'sentry/utils/withProjects';
 
 enum ErrorTypes {
   MISSING_MEMBERSHIP = 'MISSING_MEMBERSHIP',
@@ -167,8 +168,12 @@ class ProjectContextProvider extends Component<Props, State> {
     }));
 
     if (activeProject && hasAccess) {
+      // TODO: Convert this class component to a functional one and use
+      // `useDetailedProject` so this request shares the same cache and the
+      // `collapse=organization` query option is applied automatically.
       const projectRequest = this.props.api.requestPromise(
-        `/projects/${organization.slug}/${projectSlug}/`
+        `/projects/${organization.slug}/${projectSlug}/`,
+        {query: {collapse: 'organization'}}
       );
 
       try {
@@ -213,9 +218,26 @@ class ProjectContextProvider extends Component<Props, State> {
     // *does not exist* or the project has not yet been added to the store.
     // Either way, make a request to check for existence of the project.
     try {
-      await this.props.api.requestPromise(
+      const project = await this.props.api.requestPromise(
         `/projects/${organization.slug}/${projectSlug}/`
       );
+
+      // Check if the returned project slug matches the requested slug.
+      // If it doesn't match, the project was likely renamed and the API
+      // followed a redirect to the new slug. In this case, redirect the
+      // user to the correct URL with the new project slug.
+      if (project?.slug && project.slug !== projectSlug) {
+        redirectToProject(project.slug);
+        return;
+      }
+
+      // Project exists but wasn't in store - this shouldn't normally happen
+      // but handle gracefully by showing not found error
+      this.setState({
+        loading: false,
+        error: true,
+        errorType: ErrorTypes.PROJECT_NOT_FOUND,
+      });
     } catch (error) {
       this.setState({
         loading: false,
@@ -249,13 +271,13 @@ class ProjectContextProvider extends Component<Props, State> {
       case ErrorTypes.PROJECT_NOT_FOUND:
         // TODO(chrissy): use scale for margin values
         return (
-          <Layout.Page withPadding>
+          <Stack flex={1} padding="2xl 3xl">
             <Alert.Container>
-              <Alert type="warning" showIcon={false}>
+              <Alert variant="warning" showIcon={false}>
                 {t('The project you were looking for was not found.')}
               </Alert>
             </Alert.Container>
-          </Layout.Page>
+          </Stack>
         );
       case ErrorTypes.MISSING_MEMBERSHIP:
         // TODO(dcramer): add various controls to improve this flow and break it
@@ -285,5 +307,5 @@ export default withApi(withOrganization(withProjects(ProjectContextProvider)));
 
 const ErrorWrapper = styled('div')`
   width: 100%;
-  margin: ${space(2)} ${space(4)};
+  margin: ${p => p.theme.space.xl} ${p => p.theme.space['3xl']};
 `;

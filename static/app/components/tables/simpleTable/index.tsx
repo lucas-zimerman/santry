@@ -1,10 +1,12 @@
-import type {ComponentProps, CSSProperties, HTMLAttributes, RefObject} from 'react';
+import type {ComponentProps, HTMLAttributes, RefObject} from 'react';
 import {css} from '@emotion/react';
+import type {Theme} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import InteractionStateLayer from 'sentry/components/core/interactionStateLayer';
-import {Flex} from 'sentry/components/core/layout/flex';
-import Panel from 'sentry/components/panels/panel';
+import InteractionStateLayer from '@sentry/scraps/interactionStateLayer';
+import {Flex} from '@sentry/scraps/layout';
+
+import {Panel} from 'sentry/components/panels/panel';
 import {IconArrow} from 'sentry/icons';
 import {defined} from 'sentry/utils';
 
@@ -13,6 +15,7 @@ interface TableProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 interface RowProps extends HTMLAttributes<HTMLDivElement> {
+  ref?: RefObject<HTMLDivElement | null>;
   variant?: 'default' | 'faded';
 }
 
@@ -57,7 +60,7 @@ function HeaderCell({
     >
       {divider && <HeaderDivider />}
       {canSort && <InteractionStateLayer />}
-      <HeadingText>{children}</HeadingText>
+      <Flex align="center">{children}</Flex>
       {isSorted && (
         <SortIndicator
           aria-hidden
@@ -70,9 +73,9 @@ function HeaderCell({
   );
 }
 
-function Row({children, variant = 'default', ...props}: RowProps) {
+function Row({children, variant = 'default', ref, ...props}: RowProps) {
   return (
-    <StyledRow variant={variant} role="row" {...props}>
+    <StyledRow variant={variant} role="row" ref={ref} {...props}>
       {children}
     </StyledRow>
   );
@@ -80,37 +83,29 @@ function Row({children, variant = 'default', ...props}: RowProps) {
 
 function RowCell({
   children,
-  className,
-  justify,
   ...props
 }: ComponentProps<typeof Flex> & {
   children: React.ReactNode;
-  className?: string;
-  justify?: CSSProperties['justifyContent'];
 }) {
   return (
-    <StyledRowCell
-      {...props}
-      className={className}
-      role="cell"
-      align="center"
-      justify={justify}
-    >
+    <Flex role="cell" align="center" overflow="hidden" padding="lg xl" {...props}>
       {children}
-    </StyledRowCell>
+    </Flex>
   );
 }
 
 const StyledPanel = styled(Panel)`
   display: grid;
   margin: 0;
+  width: 100%;
+  overflow: hidden;
 `;
 
 const StyledPanelHeader = styled('div')`
-  background: ${p => p.theme.backgroundSecondary};
-  border-bottom: 1px solid ${p => p.theme.border};
-  border-radius: calc(${p => p.theme.borderRadius} + 1px)
-    calc(${p => p.theme.borderRadius} + 1px) 0 0;
+  background: ${p => p.theme.tokens.background.secondary};
+  border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
+  border-radius: calc(${p => p.theme.radius.md} + 1px)
+    calc(${p => p.theme.radius.md} + 1px) 0 0;
   justify-content: left;
   padding: 0;
   min-height: 40px;
@@ -119,11 +114,6 @@ const StyledPanelHeader = styled('div')`
   display: grid;
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
-`;
-
-const StyledRowCell = styled(Flex)`
-  overflow: hidden;
-  padding: ${p => p.theme.space.lg} ${p => p.theme.space.xl};
 `;
 
 const StyledRow = styled('div', {
@@ -136,29 +126,24 @@ const StyledRow = styled('div', {
   align-items: center;
 
   &:not(:last-child) {
-    border-bottom: 1px solid ${p => p.theme.innerBorder};
+    border-bottom: 1px solid ${p => p.theme.tokens.border.secondary};
   }
 
   ${p =>
     p.variant === 'faded' &&
     css`
-      ${StyledRowCell}, {
+      [role='cell'] {
         opacity: 0.8;
       }
     `}
 `;
 
-const HeadingText = styled('div')`
-  display: flex;
-  align-items: center;
-`;
-
 const HeaderDivider = styled('div')`
   position: absolute;
   left: 0;
-  background-color: ${p => p.theme.gray200};
+  background-color: ${p => p.theme.colors.gray200};
   width: 1px;
-  border-radius: ${p => p.theme.borderRadius};
+  border-radius: ${p => p.theme.radius.md};
   height: 14px;
 `;
 
@@ -168,10 +153,10 @@ const ColumnHeaderCell = styled('div')<{isSorted?: boolean}>`
   border: none;
   padding: 0 ${p => p.theme.space.xl};
   text-transform: inherit;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   text-align: left;
-  font-size: ${p => p.theme.fontSize.md};
-  color: ${p => p.theme.subText};
+  font-size: ${p => p.theme.font.size.md};
+  color: ${p => p.theme.tokens.content.secondary};
 
   position: relative;
   display: flex;
@@ -189,8 +174,23 @@ const ColumnHeaderCell = styled('div')<{isSorted?: boolean}>`
   ${p =>
     p.isSorted &&
     css`
-      color: ${p.theme.textColor};
+      color: ${p.theme.tokens.content.primary};
     `}
+`;
+
+const rowLinkStyle = (p: {theme: Theme}) => css`
+  /** Adjust margin/padding to account for StyledRowCell padding */
+  margin: -${p.theme.space.lg} -${p.theme.space.xl};
+  padding: ${p.theme.space.lg} ${p.theme.space.xl};
+
+  /** Ensure cursor is set in case this is applied to a div */
+  cursor: pointer;
+
+  &:before {
+    content: '';
+    position: absolute;
+    inset: 0;
+  }
 `;
 
 const SortIndicator = styled(IconArrow, {
@@ -212,12 +212,13 @@ const StyledEmptyMessage = styled('div')`
   display: flex;
   justify-content: center;
   align-items: center;
-  color: ${p => p.theme.subText};
-  font-size: ${p => p.theme.fontSize.md};
+  color: ${p => p.theme.tokens.content.secondary};
+  font-size: ${p => p.theme.font.size.md};
 `;
 
 SimpleTable.Header = Header;
 SimpleTable.HeaderCell = HeaderCell;
 SimpleTable.Row = Row;
 SimpleTable.RowCell = RowCell;
+SimpleTable.rowLinkStyle = rowLinkStyle;
 SimpleTable.Empty = StyledEmptyMessage;

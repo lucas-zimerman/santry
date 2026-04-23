@@ -1,7 +1,12 @@
 import {useMemo} from 'react';
 import styled from '@emotion/styled';
 
-import {SearchQueryBuilderProvider} from 'sentry/components/searchQueryBuilder/context';
+import {Text} from '@sentry/scraps/text';
+
+import {
+  SearchQueryBuilderProvider,
+  useSearchQueryBuilder,
+} from 'sentry/components/searchQueryBuilder/context';
 import {AggregateKeyVisual} from 'sentry/components/searchQueryBuilder/tokens/filter/aggregateKey';
 import {FilterValueText} from 'sentry/components/searchQueryBuilder/tokens/filter/filter';
 import {getOperatorInfo} from 'sentry/components/searchQueryBuilder/tokens/filter/filterOperator';
@@ -16,10 +21,8 @@ import {
   type TokenResult,
 } from 'sentry/components/searchSyntax/parser';
 import {getKeyLabel} from 'sentry/components/searchSyntax/utils';
-import {space} from 'sentry/styles/space';
 import type {TagCollection} from 'sentry/types/group';
-import {getFieldDefinition} from 'sentry/utils/fields';
-import useOrganization from 'sentry/utils/useOrganization';
+import {getFieldDefinition as defaultGetFieldDefinition} from 'sentry/utils/fields';
 
 export type FormattedQueryProps = {
   query: string;
@@ -27,6 +30,7 @@ export type FormattedQueryProps = {
   fieldDefinitionGetter?: FieldDefinitionGetter;
   filterKeyAliases?: TagCollection;
   filterKeys?: TagCollection;
+  getFilterTokenWarning?: (key: string) => React.ReactNode;
 };
 
 type TokenProps = {
@@ -50,12 +54,14 @@ function FilterKey({token}: {token: TokenResult<Token.FILTER>}) {
 }
 
 function Filter({token}: {token: TokenResult<Token.FILTER>}) {
-  const hasWildcardOperators = useOrganization().features.includes(
-    'search-query-builder-wildcard-operators'
-  );
+  const {getFieldDefinition} = useSearchQueryBuilder();
   const label = useMemo(
-    () => getOperatorInfo(token, hasWildcardOperators).label,
-    [hasWildcardOperators, token]
+    () =>
+      getOperatorInfo({
+        filterToken: token,
+        fieldDefinition: getFieldDefinition(token.key.text),
+      }).label,
+    [token, getFieldDefinition]
   );
 
   return (
@@ -64,6 +70,15 @@ function Filter({token}: {token: TokenResult<Token.FILTER>}) {
       <FilterValue>
         <FilterValueText token={token} />
       </FilterValue>
+    </FilterWrapper>
+  );
+}
+
+function Boolean({token}: {token: TokenResult<Token.LOGIC_BOOLEAN>}) {
+  const label = token.text.toUpperCase();
+  return (
+    <FilterWrapper aria-label={label}>
+      <Text variant="muted">{label}</Text>
     </FilterWrapper>
   );
 }
@@ -80,12 +95,12 @@ function QueryToken({token}: TokenProps) {
     case Token.L_PAREN:
     case Token.R_PAREN:
       return (
-        <Boolean>
+        <Paren>
           <SearchQueryBuilderParenIcon token={token} />
-        </Boolean>
+        </Paren>
       );
     case Token.LOGIC_BOOLEAN:
-      return <Boolean>{token.text}</Boolean>;
+      return <Boolean token={token} />;
     default:
       return null;
   }
@@ -101,7 +116,7 @@ function QueryToken({token}: TokenProps) {
 export function FormattedQuery({
   className,
   query,
-  fieldDefinitionGetter = getFieldDefinition,
+  fieldDefinitionGetter = defaultGetFieldDefinition,
   filterKeys = EMPTY_FILTER_KEYS,
   filterKeyAliases = EMPTY_FILTER_KEYS,
 }: FormattedQueryProps) {
@@ -137,9 +152,10 @@ export function FormattedQuery({
 export function ProvidedFormattedQuery({
   className,
   query,
-  fieldDefinitionGetter = getFieldDefinition,
+  fieldDefinitionGetter = defaultGetFieldDefinition,
   filterKeys = EMPTY_FILTER_KEYS,
   filterKeyAliases = EMPTY_FILTER_KEYS,
+  getFilterTokenWarning,
 }: FormattedQueryProps) {
   return (
     <SearchQueryBuilderProvider
@@ -148,6 +164,7 @@ export function ProvidedFormattedQuery({
       getTagValues={() => Promise.resolve([])}
       initialQuery={query}
       searchSource="formatted_query"
+      getFilterTokenWarning={getFilterTokenWarning}
     >
       <FormattedQuery
         className={className}
@@ -164,32 +181,35 @@ const QueryWrapper = styled('div')`
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  row-gap: ${space(0.5)};
-  column-gap: ${space(1)};
+  row-gap: ${p => p.theme.space.xs};
+  column-gap: ${p => p.theme.space.md};
 `;
 
-const FilterWrapper = styled('div')`
+export const FilterWrapper = styled('div')`
   display: flex;
   align-items: center;
-  gap: ${space(0.5)};
-  background: ${p => p.theme.background};
-  padding: ${space(0.25)} ${space(0.5)};
-  border: 1px solid ${p => p.theme.innerBorder};
-  border-radius: ${p => p.theme.borderRadius};
+  gap: ${p => p.theme.space.xs};
+  background: ${p => p.theme.tokens.background.primary};
+  padding: ${p => p.theme.space['2xs']} ${p => p.theme.space.xs};
+  border: 1px solid ${p => p.theme.tokens.border.secondary};
+  border-radius: ${p => p.theme.radius.md};
   height: 24px;
   white-space: nowrap;
   overflow: hidden;
 `;
 
 const FilterValue = styled('div')`
-  width: 100%;
   max-width: 300px;
-  color: ${p => p.theme.purple400};
-  ${p => p.theme.overflowEllipsis};
+  color: ${p => p.theme.tokens.content.accent};
+  display: block;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 `;
 
-const Boolean = styled('div')`
+const Paren = styled('div')`
   display: flex;
   align-items: center;
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 `;

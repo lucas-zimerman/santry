@@ -1,9 +1,10 @@
-import {useCallback, useMemo} from 'react';
+import {useMemo} from 'react';
 import styled from '@emotion/styled';
 
-import type {SelectKey, SelectOption} from 'sentry/components/core/compactSelect';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import type {SelectKey, SelectOption} from '@sentry/scraps/compactSelect';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {t} from 'sentry/locale';
 import type {Sort} from 'sentry/utils/discover/fields';
 import {
@@ -12,54 +13,61 @@ import {
   ToolbarRow,
   ToolbarSection,
 } from 'sentry/views/explore/components/toolbar/styles';
-import {
-  useExploreFields,
-  useExploreSortBys,
-  useSetExploreSortBys,
-} from 'sentry/views/explore/contexts/pageParamsContext';
 import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
 import {useSortByFields} from 'sentry/views/explore/hooks/useSortByFields';
 import {Tab, useTab} from 'sentry/views/explore/hooks/useTab';
 import {
+  useQueryParamsAggregateSortBys,
+  useQueryParamsFields,
   useQueryParamsGroupBys,
   useQueryParamsMode,
+  useQueryParamsSortBys,
   useQueryParamsVisualizes,
+  useSetQueryParamsAggregateSortBys,
+  useSetQueryParamsSortBys,
 } from 'sentry/views/explore/queryParams/context';
+import {TraceItemDataset} from 'sentry/views/explore/types';
 
 export function ToolbarSortBy() {
   const mode = useQueryParamsMode();
-  const fields = useExploreFields();
+  const fields = useQueryParamsFields();
   const groupBys = useQueryParamsGroupBys();
   const visualizes = useQueryParamsVisualizes();
 
-  const sorts = useExploreSortBys();
-  const setSorts = useSetExploreSortBys();
+  const sampleSortBys = useQueryParamsSortBys();
+  const setSampleSortBys = useSetQueryParamsSortBys();
+  const aggregateSortBys = useQueryParamsAggregateSortBys();
+  const setAggregateSortBys = useSetQueryParamsAggregateSortBys();
+  const [sorts, setSorts] =
+    mode === Mode.SAMPLES
+      ? [sampleSortBys, setSampleSortBys]
+      : [aggregateSortBys, setAggregateSortBys];
 
   const [tab] = useTab();
 
   // traces table is only sorted by timestamp so disable the sort by
   const disabled = mode === Mode.SAMPLES && tab === Tab.TRACE;
 
+  const spansConfig = {traceItemType: TraceItemDataset.SPANS, enabled: true};
+
   const fieldOptions = useSortByFields({
+    config: spansConfig,
     fields,
     yAxes: visualizes.map(v => v.yAxis),
     groupBys,
     mode,
   });
 
-  const setSortField = useCallback(
-    (i: number, {value}: SelectOption<SelectKey>) => {
-      if (sorts[i] && typeof value === 'string') {
-        setSorts([
-          {
-            field: value,
-            kind: sorts[i].kind,
-          },
-        ]);
-      }
-    },
-    [setSorts, sorts]
-  );
+  const setSortField = (i: number, {value}: SelectOption<SelectKey>) => {
+    if (sorts[i] && typeof value === 'string') {
+      setSorts([
+        {
+          field: value,
+          kind: sorts[i].kind,
+        },
+      ]);
+    }
+  };
 
   const kindOptions: Array<SelectOption<Sort['kind']>> = useMemo(() => {
     return [
@@ -76,19 +84,16 @@ export function ToolbarSortBy() {
     ];
   }, []);
 
-  const setSortKind = useCallback(
-    (i: number, {value}: SelectOption<SelectKey>) => {
-      if (sorts[i]) {
-        setSorts([
-          {
-            field: sorts[i].field,
-            kind: value as Sort['kind'],
-          },
-        ]);
-      }
-    },
-    [setSorts, sorts]
-  );
+  const setSortKind = (i: number, {value}: SelectOption<SelectKey>) => {
+    if (sorts[i]) {
+      setSorts([
+        {
+          field: sorts[i].field,
+          kind: value as Sort['kind'],
+        },
+      ]);
+    }
+  };
 
   let toolbarRow = (
     <ToolbarRow>
@@ -137,7 +142,7 @@ const FullWidthTooltip = styled(Tooltip)`
   width: 100%;
 `;
 
-const ColumnCompactSelect = styled(CompactSelect)`
+export const ColumnCompactSelect = styled(CompactSelect)`
   flex: 1 1;
   min-width: 0;
 
@@ -146,7 +151,7 @@ const ColumnCompactSelect = styled(CompactSelect)`
   }
 `;
 
-const DirectionCompactSelect = styled(CompactSelect)`
+export const DirectionCompactSelect = styled(CompactSelect)`
   width: 90px;
 
   > button {

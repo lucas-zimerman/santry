@@ -74,6 +74,7 @@ class EventsMeta(TypedDict):
     # only returned when debug=True
     debug_info: NotRequired[dict[str, Any]]
     full_scan: NotRequired[bool]
+    bytes_scanned: NotRequired[int | None]
 
 
 class EventsResponse(TypedDict):
@@ -81,7 +82,9 @@ class EventsResponse(TypedDict):
     meta: EventsMeta
 
 
-SAMPLING_MODES = Literal["BEST_EFFORT", "PREFLIGHT", "NORMAL", "HIGHEST_ACCURACY"]
+SAMPLING_MODES = Literal[
+    "BEST_EFFORT", "PREFLIGHT", "NORMAL", "HIGHEST_ACCURACY", "HIGHEST_ACCURACY_FLEX_TIME"
+]
 
 
 @dataclass
@@ -99,7 +102,8 @@ class SnubaParams:
     teams: Iterable[Team] = field(default_factory=list)
     organization: Organization | None = None
     sampling_mode: SAMPLING_MODES | None = None
-    debug: bool = False
+    debug: str | bool = False
+    case_insensitive: bool = False
 
     def __post_init__(self) -> None:
         if self.start:
@@ -246,7 +250,6 @@ class QueryBuilderConfig:
     parser_config_overrides: Mapping[str, Any] = field(default_factory=dict)
     has_metrics: bool = False
     transform_alias_to_input_format: bool = False
-    use_metrics_layer: bool = False
     # This skips converting tags back to their non-prefixed versions when processing the results
     # Currently this is only used for avoiding conflicting values when doing the first query
     # of a top events request
@@ -255,7 +258,6 @@ class QueryBuilderConfig:
     on_demand_metrics_type: Any | None = None
     skip_field_validation_for_entity_subscription_deletion: bool = False
     allow_metric_aggregates: bool | None = False
-    insights_metrics_override_metric_layer: bool = False
     # Allow the errors query builder to use the entity prefix for fields
     use_entity_prefix_for_fields: bool = False
 
@@ -270,7 +272,7 @@ class Span:
         parts = s.rsplit(":", 1)
         if len(parts) != 2:
             raise ValueError(
-                "span must consist of of a span op and a valid 16 character hex delimited by a colon (:)"
+                "span must consist of a span op and a valid 16 character hex delimited by a colon (:)"
             )
         if not is_span_id(parts[1]):
             raise ValueError(INVALID_SPAN_ID.format("spanGroup"))

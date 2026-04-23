@@ -2,16 +2,14 @@ import type {Location} from 'history';
 import {EventFixture} from 'sentry-fixture/event';
 import {LocationFixture} from 'sentry-fixture/locationFixture';
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
 import {initializeOrg} from 'sentry-test/initializeOrg';
 
 import {openAddToDashboardModal} from 'sentry/actionCreators/modal';
 import {COL_WIDTH_UNDEFINED} from 'sentry/components/tables/gridEditable';
-import type {InjectedRouter} from 'sentry/types/legacyReactRouter';
 import type {Organization} from 'sentry/types/organization';
 import type {EventViewOptions} from 'sentry/utils/discover/eventView';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {DisplayModes} from 'sentry/utils/discover/types';
 import {
   DashboardWidgetSource,
@@ -26,7 +24,6 @@ import {
   generateFieldOptions,
   getExpandedResults,
   handleAddQueryToDashboard,
-  pushEventViewToLocation,
 } from 'sentry/views/discover/utils';
 
 jest.mock('sentry/actionCreators/modal');
@@ -241,92 +238,6 @@ describe('decodeColumnOrder', () => {
       isSortable: true,
       type: 'duration',
     });
-  });
-});
-
-describe('pushEventViewToLocation', () => {
-  const state: EventViewOptions = {
-    ...baseView,
-    id: '1234',
-    name: 'best query',
-    fields: [{field: 'count()', width: 420}, {field: 'project.id'}],
-    sorts: [{field: 'count', kind: 'desc'}],
-    query: 'event.type:error',
-    project: [42],
-    start: '2019-10-01T00:00:00',
-    end: '2019-10-02T00:00:00',
-    statsPeriod: '14d',
-    environment: ['staging'],
-  };
-
-  const location = LocationFixture({
-    query: {
-      bestCountry: 'canada',
-    },
-  });
-
-  it('correct query string object pushed to history', () => {
-    const navigate = jest.fn();
-    const eventView = new EventView({...baseView, ...state});
-
-    pushEventViewToLocation({
-      navigate,
-      location,
-      nextEventView: eventView,
-    });
-
-    expect(navigate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: expect.objectContaining({
-          id: '1234',
-          name: 'best query',
-          field: ['count()', 'project.id'],
-          widths: '420',
-          sort: '-count',
-          query: 'event.type:error',
-          project: '42',
-          start: '2019-10-01T00:00:00',
-          end: '2019-10-02T00:00:00',
-          statsPeriod: '14d',
-          environment: 'staging',
-          yAxis: 'count()',
-        }),
-      })
-    );
-  });
-
-  it('extra query params', () => {
-    const navigate = jest.fn();
-    const eventView = new EventView({...baseView, ...state});
-
-    pushEventViewToLocation({
-      navigate,
-      location,
-      nextEventView: eventView,
-      extraQuery: {
-        cursor: 'some cursor',
-      },
-    });
-
-    expect(navigate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: expect.objectContaining({
-          id: '1234',
-          name: 'best query',
-          field: ['count()', 'project.id'],
-          widths: '420',
-          sort: '-count',
-          query: 'event.type:error',
-          project: '42',
-          start: '2019-10-01T00:00:00',
-          end: '2019-10-02T00:00:00',
-          statsPeriod: '14d',
-          environment: 'staging',
-          cursor: 'some cursor',
-          yAxis: 'count()',
-        }),
-      })
-    );
   });
 });
 
@@ -961,6 +872,7 @@ describe('constructAddQueryToDashboardLink', () => {
         displayType: DisplayType.AREA,
         yAxis: ['count()', 'count_unique(user)'],
         source: DashboardWidgetSource.DISCOVERV2,
+        axisRange: 'auto',
       });
     });
     it('should construct a link with the correct params - topN', () => {
@@ -993,6 +905,7 @@ describe('constructAddQueryToDashboardLink', () => {
         yAxis: ['count()'],
         limit: 5,
         source: DashboardWidgetSource.DISCOVERV2,
+        axisRange: 'auto',
       });
     });
     it('should construct a link with the correct params - daily top N', () => {
@@ -1025,6 +938,43 @@ describe('constructAddQueryToDashboardLink', () => {
         yAxis: ['count()'],
         limit: 5,
         source: DashboardWidgetSource.DISCOVERV2,
+        axisRange: 'auto',
+      });
+    });
+    it('should preserve group by columns and display type for logs widgets', () => {
+      const eventView = new EventView({
+        ...baseView,
+        display: DisplayType.AREA,
+        name: 'logs query',
+        fields: [
+          {field: 'sentry.severity_text'},
+          {field: 'sentry.service'},
+          {field: 'count()'},
+        ],
+      });
+      const {query} = constructAddQueryToDashboardLink({
+        eventView,
+        organization,
+        location,
+        source: DashboardWidgetSource.LOGS,
+        yAxis: ['count()'],
+        widgetType: WidgetType.LOGS,
+      });
+      expect(query).toEqual({
+        start: undefined,
+        end: undefined,
+        description: '',
+        query: [''],
+        sort: [''],
+        legendAlias: [''],
+        field: ['sentry.severity_text', 'sentry.service'],
+        title: 'logs query',
+        dataset: WidgetType.LOGS,
+        displayType: DisplayType.AREA,
+        yAxis: ['count()'],
+        limit: undefined,
+        source: DashboardWidgetSource.LOGS,
+        axisRange: 'auto',
       });
     });
   });
@@ -1033,12 +983,10 @@ describe('constructAddQueryToDashboardLink', () => {
 describe('handleAddQueryToDashboard', () => {
   let organization: Organization;
   let location: Location;
-  let router: InjectedRouter;
   let mockedOpenAddToDashboardModal: jest.Mock;
   beforeEach(() => {
     organization = OrganizationFixture();
     location = LocationFixture();
-    router = RouterFixture();
     mockedOpenAddToDashboardModal = jest.mocked(openAddToDashboardModal);
   });
 
@@ -1052,30 +1000,31 @@ describe('handleAddQueryToDashboard', () => {
       eventView,
       organization,
       location,
-      router,
       widgetType: WidgetType.TRANSACTIONS,
       yAxis: ['count()'],
       source: DashboardWidgetSource.DISCOVERV2,
     });
     expect(mockedOpenAddToDashboardModal).toHaveBeenCalledWith(
       expect.objectContaining({
-        widget: {
-          title: 'best query',
-          displayType: DisplayType.AREA,
-          queries: [
-            {
-              name: '',
-              fields: [],
-              aggregates: ['count()'],
-              columns: [],
-              orderby: '',
-              conditions: '',
-            },
-          ],
-          interval: undefined,
-          limit: undefined,
-          widgetType: WidgetType.TRANSACTIONS,
-        },
+        widgets: [
+          {
+            title: 'best query',
+            displayType: DisplayType.AREA,
+            queries: [
+              {
+                name: '',
+                fields: [],
+                aggregates: ['count()'],
+                columns: [],
+                orderby: '',
+                conditions: '',
+              },
+            ],
+            interval: undefined,
+            limit: undefined,
+            widgetType: WidgetType.TRANSACTIONS,
+          },
+        ],
       })
     );
   });
@@ -1091,30 +1040,31 @@ describe('handleAddQueryToDashboard', () => {
       eventView,
       organization,
       location,
-      router,
       source: DashboardWidgetSource.DISCOVERV2,
       widgetType: WidgetType.TRANSACTIONS,
       yAxis: ['count()'],
     });
     expect(mockedOpenAddToDashboardModal).toHaveBeenCalledWith(
       expect.objectContaining({
-        widget: {
-          title: 'best query',
-          displayType: DisplayType.AREA,
-          queries: [
-            {
-              name: '',
-              aggregates: ['count()'],
-              columns: ['transaction'],
-              fields: ['transaction'],
-              orderby: '',
-              conditions: '',
-            },
-          ],
-          interval: undefined,
-          limit: 5,
-          widgetType: WidgetType.TRANSACTIONS,
-        },
+        widgets: [
+          {
+            title: 'best query',
+            displayType: DisplayType.AREA,
+            queries: [
+              {
+                name: '',
+                aggregates: ['count()'],
+                columns: ['transaction'],
+                fields: ['transaction'],
+                orderby: '',
+                conditions: '',
+              },
+            ],
+            interval: undefined,
+            limit: 5,
+            widgetType: WidgetType.TRANSACTIONS,
+          },
+        ],
       })
     );
   });
@@ -1129,30 +1079,31 @@ describe('handleAddQueryToDashboard', () => {
       eventView,
       organization,
       location,
-      router,
       source: DashboardWidgetSource.DISCOVERV2,
       widgetType: WidgetType.TRANSACTIONS,
       yAxis: ['count()', 'count_unique(user)'],
     });
     expect(mockedOpenAddToDashboardModal).toHaveBeenCalledWith(
       expect.objectContaining({
-        widget: {
-          title: 'best query',
-          displayType: DisplayType.AREA,
-          queries: [
-            {
-              name: '',
-              aggregates: ['count()', 'count_unique(user)'],
-              columns: [],
-              fields: [],
-              orderby: '',
-              conditions: '',
-            },
-          ],
-          interval: undefined,
-          limit: undefined,
-          widgetType: WidgetType.TRANSACTIONS,
-        },
+        widgets: [
+          {
+            title: 'best query',
+            displayType: DisplayType.AREA,
+            queries: [
+              {
+                name: '',
+                aggregates: ['count()', 'count_unique(user)'],
+                columns: [],
+                fields: [],
+                orderby: '',
+                conditions: '',
+              },
+            ],
+            interval: undefined,
+            limit: undefined,
+            widgetType: WidgetType.TRANSACTIONS,
+          },
+        ],
       })
     );
   });
@@ -1174,30 +1125,31 @@ describe('handleAddQueryToDashboard', () => {
         eventView,
         organization,
         location,
-        router,
         source: DashboardWidgetSource.DISCOVERV2,
         widgetType: WidgetType.TRANSACTIONS,
         yAxis: ['count()'],
       });
       expect(mockedOpenAddToDashboardModal).toHaveBeenCalledWith(
         expect.objectContaining({
-          widget: {
-            title: 'best query',
-            displayType: DisplayType.AREA,
-            queries: [
-              {
-                name: '',
-                aggregates: ['count()'],
-                columns: [],
-                fields: [],
-                orderby: '',
-                conditions: '',
-              },
-            ],
-            interval: undefined,
-            limit: undefined,
-            widgetType: WidgetType.TRANSACTIONS,
-          },
+          widgets: [
+            {
+              title: 'best query',
+              displayType: DisplayType.AREA,
+              queries: [
+                {
+                  name: '',
+                  aggregates: ['count()'],
+                  columns: [],
+                  fields: [],
+                  orderby: '',
+                  conditions: '',
+                },
+              ],
+              interval: undefined,
+              limit: undefined,
+              widgetType: WidgetType.TRANSACTIONS,
+            },
+          ],
           source: DashboardWidgetSource.DISCOVERV2,
         })
       );
@@ -1214,30 +1166,31 @@ describe('handleAddQueryToDashboard', () => {
         eventView,
         organization,
         location,
-        router,
         source: DashboardWidgetSource.DISCOVERV2,
         widgetType: WidgetType.TRANSACTIONS,
         yAxis: ['count()'],
       });
       expect(mockedOpenAddToDashboardModal).toHaveBeenCalledWith(
         expect.objectContaining({
-          widget: {
-            title: 'best query',
-            displayType: DisplayType.AREA,
-            queries: [
-              {
-                name: '',
-                aggregates: ['count()'],
-                columns: ['transaction'],
-                fields: ['transaction'],
-                orderby: '',
-                conditions: '',
-              },
-            ],
-            interval: undefined,
-            limit: 5,
-            widgetType: WidgetType.TRANSACTIONS,
-          },
+          widgets: [
+            {
+              title: 'best query',
+              displayType: DisplayType.AREA,
+              queries: [
+                {
+                  name: '',
+                  aggregates: ['count()'],
+                  columns: ['transaction'],
+                  fields: ['transaction'],
+                  orderby: '',
+                  conditions: '',
+                },
+              ],
+              interval: undefined,
+              limit: 5,
+              widgetType: WidgetType.TRANSACTIONS,
+            },
+          ],
           source: DashboardWidgetSource.DISCOVERV2,
         })
       );
@@ -1253,30 +1206,31 @@ describe('handleAddQueryToDashboard', () => {
         eventView,
         organization,
         location,
-        router,
         source: DashboardWidgetSource.DISCOVERV2,
         widgetType: WidgetType.TRANSACTIONS,
         yAxis: ['count()', 'count_unique(user)'],
       });
       expect(mockedOpenAddToDashboardModal).toHaveBeenCalledWith(
         expect.objectContaining({
-          widget: {
-            title: 'best query',
-            displayType: DisplayType.AREA,
-            queries: [
-              {
-                name: '',
-                aggregates: ['count()', 'count_unique(user)'],
-                columns: [],
-                fields: [],
-                orderby: '',
-                conditions: '',
-              },
-            ],
-            interval: undefined,
-            limit: undefined,
-            widgetType: WidgetType.TRANSACTIONS,
-          },
+          widgets: [
+            {
+              title: 'best query',
+              displayType: DisplayType.AREA,
+              queries: [
+                {
+                  name: '',
+                  aggregates: ['count()', 'count_unique(user)'],
+                  columns: [],
+                  fields: [],
+                  orderby: '',
+                  conditions: '',
+                },
+              ],
+              interval: undefined,
+              limit: undefined,
+              widgetType: WidgetType.TRANSACTIONS,
+            },
+          ],
           source: DashboardWidgetSource.DISCOVERV2,
         })
       );

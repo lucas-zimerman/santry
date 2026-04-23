@@ -4,6 +4,7 @@ from typing import Any, Protocol
 from sentry_relay.consts import SPAN_STATUS_CODE_TO_NAME
 
 from sentry.api.utils import get_date_range_from_params
+from sentry.data_export.base import ExportError
 from sentry.models.environment import Environment
 from sentry.models.group import Group
 from sentry.models.organization import Organization
@@ -12,8 +13,6 @@ from sentry.search.events.fields import get_function_alias
 from sentry.search.events.types import SnubaParams
 from sentry.snuba import discover
 from sentry.snuba.utils import get_dataset
-
-from ..base import ExportError
 
 logger = logging.getLogger(__name__)
 
@@ -121,14 +120,12 @@ class DiscoverProcessor:
 
         if "issue" in self.header_fields:
             issue_ids = {result["issue.id"] for result in new_result_list}
-            issues = {
-                i.id: i.qualified_short_id
-                for i in Group.objects.filter(
-                    id__in=issue_ids,
-                    project__in=self.snuba_params.project_ids,
-                    project__organization_id=self.snuba_params.organization_id,
-                )
-            }
+            assert self.snuba_params.organization is not None
+            issues = Group.objects.get_issues_mapping(
+                issue_ids,
+                self.snuba_params.project_ids,
+                self.snuba_params.organization,
+            )
             for result in new_result_list:
                 if "issue.id" in result:
                     result["issue"] = issues.get(result["issue.id"], "unknown")

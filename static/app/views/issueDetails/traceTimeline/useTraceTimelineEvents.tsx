@@ -2,9 +2,11 @@ import {useMemo} from 'react';
 
 import {getTraceTimeRangeFromEvent} from 'sentry/components/quickTrace/utils';
 import type {Event} from 'sentry/types/event';
+import {HIDDEN_OCCURRENCE_TYPE_IDS} from 'sentry/types/group';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {useApiQuery} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 interface BaseEvent {
   culprit: string; // Used for default events & subtitles
@@ -53,10 +55,6 @@ export function useTraceTimelineEvents({event}: UseTraceTimelineEventsOptions): 
   traceEvents: TimelineEvent[];
 } {
   const organization = useOrganization();
-  // If the org has global views, we want to look across all projects,
-  // otherwise, just look at the current project.
-  const hasGlobalViews = organization.features.includes('global-views');
-  const project = hasGlobalViews ? -1 : event.projectID;
   const {start, end} = getTraceTimeRangeFromEvent(event);
 
   const traceId = event.contexts?.trace?.trace_id ?? '';
@@ -67,7 +65,9 @@ export function useTraceTimelineEvents({event}: UseTraceTimelineEventsOptions): 
     isError: isErrorIssuePlatform,
   } = useApiQuery<TraceEventResponse>(
     [
-      `/organizations/${organization.slug}/events/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/events/', {
+        path: {organizationIdOrSlug: organization.slug},
+      }),
       {
         query: {
           // Get issue platform issues
@@ -83,12 +83,14 @@ export function useTraceTimelineEvents({event}: UseTraceTimelineEventsOptions): 
             'event.type', // This is useful for typing TimelineEvent
           ],
           per_page: 100,
-          query: `trace:${traceId}`,
+          query: HIDDEN_OCCURRENCE_TYPE_IDS.length
+            ? `trace:${traceId} !occurrence_type_id:[${HIDDEN_OCCURRENCE_TYPE_IDS.join(',')}]`
+            : `trace:${traceId}`,
           referrer: 'api.issues.issue_events',
           sort: '-timestamp',
           start,
           end,
-          project,
+          project: -1, // Look across all projects
         },
       },
     ],
@@ -103,7 +105,9 @@ export function useTraceTimelineEvents({event}: UseTraceTimelineEventsOptions): 
     meta: unknown;
   }>(
     [
-      `/organizations/${organization.slug}/events/`,
+      getApiUrl('/organizations/$organizationIdOrSlug/events/', {
+        path: {organizationIdOrSlug: organization.slug},
+      }),
       {
         query: {
           // Other events
@@ -125,7 +129,7 @@ export function useTraceTimelineEvents({event}: UseTraceTimelineEventsOptions): 
           sort: '-timestamp',
           start,
           end,
-          project,
+          project: -1, // Look across all projects
         },
       },
     ],

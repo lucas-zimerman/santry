@@ -2,11 +2,13 @@ import {openInviteMembersModal} from 'sentry/actionCreators/modal';
 import {navigateTo} from 'sentry/actionCreators/navigation';
 import {filterSupportedTasks} from 'sentry/components/onboardingWizard/filterSupportedTasks';
 import {filterProjects} from 'sentry/components/performanceOnboarding/utils';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
 import {sourceMaps} from 'sentry/data/platformCategories';
 import {t} from 'sentry/locale';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
-import type {OnboardingTask, OnboardingTaskDescriptor} from 'sentry/types/onboarding';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
+import type {OnboardingTaskDescriptor} from 'sentry/types/onboarding';
 import {OnboardingTaskGroup, OnboardingTaskKey} from 'sentry/types/onboarding';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
@@ -57,14 +59,20 @@ function getOnboardingInstructionsUrl({projects, organization}: Options) {
   // but if the user falls into this case for some reason,
   // he needs to select the platform again since it is not available as a parameter here
   if (!projects?.length) {
-    return `/${organization.slug}/:projectId/getting-started/`;
+    return makeProjectsPathname({
+      path: '/:projectId/getting-started/',
+      organization,
+    });
   }
 
   const allProjectsWithoutErrors = projects.every(project => !project.firstEvent);
   // If all created projects don't have any errors,
   // we ask the user to pick a project before navigating to the instructions
   if (allProjectsWithoutErrors) {
-    return `/${organization.slug}/:projectId/getting-started/`;
+    return makeProjectsPathname({
+      path: '/:projectId/getting-started/',
+      organization,
+    });
   }
 
   // Pick the first project without an error
@@ -73,13 +81,10 @@ function getOnboardingInstructionsUrl({projects, organization}: Options) {
   // but if the user falls into this case for some reason, we pick the first project
   const project = firstProjectWithoutError ?? projects[0]!;
 
-  let url = `/${organization.slug}/${project.slug}/getting-started/`;
-
-  if (project.platform) {
-    url = url + `${project.platform}/`;
-  }
-
-  return url;
+  return makeProjectsPathname({
+    path: `/${project.slug}/getting-started/`,
+    organization,
+  });
 }
 
 export function getOnboardingTasks({
@@ -224,20 +229,11 @@ export function getOnboardingTasks({
       ),
       skippable: true,
       actionType: 'action',
-      action: router => {
-        // Use `features?.` because getsentry has a different `Organization` type/payload
-        if (!organization.features?.includes('performance-onboarding-checklist')) {
-          window.open(
-            'https://docs.sentry.io/product/performance/getting-started/',
-            '_blank'
-          );
-          return;
-        }
-
+      action: ({navigate, location}) => {
         // TODO: add analytics here for this specific action.
 
         if (!projects) {
-          navigateTo(performanceUrl, router);
+          navigateTo(performanceUrl, navigate, location);
           return;
         }
 
@@ -245,21 +241,23 @@ export function getOnboardingTasks({
           filterProjects(projects);
 
         if (projectsWithoutFirstTransactionEvent.length <= 0) {
-          navigateTo(performanceUrl, router);
+          navigateTo(performanceUrl, navigate, location);
           return;
         }
 
         if (projectsForOnboarding.length) {
           navigateTo(
             `${performanceUrl}?project=${projectsForOnboarding[0]!.id}#performance-sidequest`,
-            router
+            navigate,
+            location
           );
           return;
         }
 
         navigateTo(
           `${performanceUrl}?project=${projectsWithoutFirstTransactionEvent[0]!.id}#performance-sidequest`,
-          router
+          navigate,
+          location
         );
       },
       display: true,
@@ -272,8 +270,8 @@ export function getOnboardingTasks({
       ),
       skippable: true,
       actionType: 'action',
-      action: router => {
-        router.push({
+      action: ({navigate}) => {
+        navigate({
           pathname: makeReplaysPathname({
             path: '/',
             organization,
@@ -283,7 +281,7 @@ export function getOnboardingTasks({
         // Since the quick start panel is already open and closes on route change
         // Wait for the next tick to open the replay onboarding panel
         setTimeout(() => {
-          SidebarPanelStore.activatePanel(SidebarPanelKey.REPLAYS_ONBOARDING);
+          OnboardingDrawerStore.open(OnboardingDrawerKey.REPLAYS_ONBOARDING);
         }, 0);
       },
       display: organization.features?.includes('session-replay'),
@@ -336,16 +334,12 @@ export function getMergedTasks({organization, projects}: Options) {
     : organization.onboardingTasks;
 
   // Map server task state (i.e. completed status) with tasks objects
-  const allTasks = taskDescriptors.map(
-    desc =>
-      ({
-        ...desc,
-        ...serverTasks.find(
-          serverTask =>
-            serverTask.task === desc.task || serverTask.task === desc.serverTask
-        ),
-      }) as OnboardingTask
-  );
+  const allTasks = taskDescriptors.map(desc => ({
+    ...desc,
+    ...serverTasks.find(
+      serverTask => serverTask.task === desc.task || serverTask.task === desc.serverTask
+    ),
+  }));
 
   const supportedTasks = filterSupportedTasks(projects, allTasks);
   return supportedTasks;

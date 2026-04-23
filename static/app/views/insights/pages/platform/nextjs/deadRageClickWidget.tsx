@@ -1,11 +1,12 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
-import TextOverflow from 'sentry/components/textOverflow';
+import {FeatureDisabled} from 'sentry/components/acl/featureDisabled';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {IconCursorArrow} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import useDeadRageSelectors from 'sentry/utils/replays/hooks/useDeadRageSelectors';
+import {useDeadRageSelectors} from 'sentry/utils/replays/hooks/useDeadRageSelectors';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {TimeSeriesWidgetVisualization} from 'sentry/views/dashboards/widgets/timeSeriesWidget/timeSeriesWidgetVisualization';
 import {Widget} from 'sentry/views/dashboards/widgets/widget/widget';
 import {WidgetVisualizationStates} from 'sentry/views/insights/pages/platform/laravel/widgetVisualizationStates';
@@ -14,33 +15,52 @@ import {SelectorLink} from 'sentry/views/replays/selectors/selectorLink';
 import {transformSelectorQuery} from 'sentry/views/replays/selectors/utils';
 import type {DeadRageSelectorItem} from 'sentry/views/replays/types';
 
-export function DeadRageClicksWidget() {
+export function DeadRageClicksWidget({visulizationOnly}: {visulizationOnly?: boolean}) {
+  const organization = useOrganization();
+  const hasReplays = organization.features.includes('session-replay-ui');
   const {isLoading, error, data} = useDeadRageSelectors({
     per_page: 6,
     sort: '-count_dead_clicks',
     cursor: undefined,
     // Setting this to true just strips rage clicks from the data
     isWidgetData: false,
+    enabled: hasReplays,
   });
 
   const isEmpty = !isLoading && data.length === 0;
 
-  const visualization = (
-    <WidgetVisualizationStates
-      isLoading={isLoading}
-      error={error}
-      isEmpty={isEmpty}
-      emptyMessage={
-        <GenericWidgetEmptyStateWarning
-          message={t('Rage or dead clicks may not be listed due to the filters above')}
-        />
-      }
-      VisualizationType={DeadRageClickWidgetVisualization}
-      visualizationProps={{
-        items: data,
-      }}
-    />
+  let visualization = (
+    <FeatureWrapper>
+      <FeatureDisabled
+        features="organizations:session-replay-ui"
+        featureName={t('Replays')}
+        hideHelpToggle
+      />
+    </FeatureWrapper>
   );
+
+  if (hasReplays) {
+    visualization = (
+      <WidgetVisualizationStates
+        isLoading={isLoading}
+        error={error}
+        isEmpty={isEmpty}
+        emptyMessage={
+          <GenericWidgetEmptyStateWarning
+            message={t('Rage or dead clicks may not be listed due to the filters above')}
+          />
+        }
+        VisualizationType={DeadRageClickWidgetVisualization}
+        visualizationProps={{
+          items: data,
+        }}
+      />
+    );
+  }
+
+  if (visulizationOnly) {
+    return visualization;
+  }
 
   return (
     <Widget
@@ -65,13 +85,13 @@ function DeadRageClickWidgetVisualization({items}: {items: DeadRageSelectorItem[
           </ClicksGridCell>
           <ClicksGridCell>
             <ClickCount>
-              <IconCursorArrow size="xs" color="yellow400" />
+              <IconCursorArrow size="xs" variant="warning" />
               {item.count_dead_clicks || 0}
             </ClickCount>
           </ClicksGridCell>
           <ClicksGridCell>
             <ClickCount>
-              <IconCursorArrow size="xs" color="red400" />
+              <IconCursorArrow size="xs" variant="danger" />
               {item.count_rage_clicks || 0}
             </ClickCount>
           </ClicksGridCell>
@@ -90,27 +110,31 @@ const ClicksGrid = styled('div')`
   display: grid;
   grid-template-columns: 1fr repeat(${COLUMN_COUNT - 1}, min-content);
   grid-auto-rows: min-content;
-  margin-top: ${space(1)};
+  margin-top: ${p => p.theme.space.md};
   overflow-y: auto;
 `;
 
 const ClicksGridCell = styled('div')`
-  padding: ${space(1.5)} ${space(1)};
+  padding: ${p => p.theme.space.lg} ${p => p.theme.space.md};
   min-width: 0;
   overflow: hidden;
-  border-top: 1px solid ${p => p.theme.border};
+  border-top: 1px solid ${p => p.theme.tokens.border.primary};
   &:nth-child(${COLUMN_COUNT}n + 1) {
-    padding-left: ${space(2)};
+    padding-left: ${p => p.theme.space.xl};
   }
   &:nth-child(${COLUMN_COUNT}n) {
-    padding-right: ${space(2)};
+    padding-right: ${p => p.theme.space.xl};
   }
 `;
 
 const ClickCount = styled(TextOverflow)`
-  color: ${p => p.theme.gray400};
+  color: ${p => p.theme.colors.gray500};
   display: grid;
   grid-template-columns: auto auto;
-  gap: ${space(0.75)};
+  gap: ${p => p.theme.space.sm};
   align-items: center;
+`;
+
+const FeatureWrapper = styled('div')`
+  padding-top: ${p => p.theme.space.md};
 `;

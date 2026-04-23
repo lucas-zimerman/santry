@@ -1,19 +1,19 @@
 import {Fragment, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Flex} from 'sentry/components/core/layout';
-import {SegmentedControl} from 'sentry/components/core/segmentedControl';
+import {Flex} from '@sentry/scraps/layout';
+import {SegmentedControl} from '@sentry/scraps/segmentedControl';
+
 import {GroupInfoSummary} from 'sentry/components/events/groupingInfo/groupingSummary';
 import {useEventGroupingInfo} from 'sentry/components/events/groupingInfo/useEventGroupingInfo';
 import {FeatureFeedback} from 'sentry/components/featureFeedback';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {t} from 'sentry/locale';
 import type {Event} from 'sentry/types/event';
 import type {Group} from 'sentry/types/group';
-import {useHasStreamlinedUI} from 'sentry/views/issueDetails/utils';
 
-import GroupingVariant from './groupingVariant';
+import {GroupingVariant} from './groupingVariant';
 
 interface GroupingSummaryProps {
   event: Event;
@@ -30,8 +30,6 @@ export default function GroupingInfo({
 }: GroupingSummaryProps) {
   const [showNonContributing, setShowNonContributing] = useState(false);
 
-  const hasStreamlinedUI = useHasStreamlinedUI();
-
   const {groupInfo, isPending, isError, isSuccess, hasPerformanceGrouping} =
     useEventGroupingInfo({
       event,
@@ -39,11 +37,14 @@ export default function GroupingInfo({
       projectSlug,
     });
 
-  const variants = groupInfo
-    ? Object.values(groupInfo).sort((a, b) => {
-        // Sort variants with hashes before those without
-        if (a.hash && !b.hash) {
+  const variants = groupInfo?.variants
+    ? Object.values(groupInfo.variants).sort((a, b) => {
+        // Sort contributing variants before non-contributing ones
+        if (a.contributes && !b.contributes) {
           return -1;
+        }
+        if (b.contributes && !a.contributes) {
+          return 1;
         }
 
         // Sort by description alphabetically
@@ -61,29 +62,21 @@ export default function GroupingInfo({
         t('Too specific grouping'),
         t('Other grouping issue'),
       ]}
-      buttonProps={{size: hasStreamlinedUI ? 'xs' : 'sm'}}
+      buttonProps={{size: 'xs'}}
     />
   );
 
   return (
-    <GroupingInfoContainer>
-      <ConfigHeader>
-        {hasStreamlinedUI && (
-          <GroupInfoSummary
-            event={event}
-            group={group}
-            projectSlug={projectSlug}
-            showGroupingConfig={showGroupingConfig}
-          />
-        )}
-        {hasStreamlinedUI ? (
-          feedbackComponent
-        ) : (
-          <div style={{display: 'flex', justifyContent: 'flex-end', width: '100%'}}>
-            {feedbackComponent}
-          </div>
-        )}
-      </ConfigHeader>
+    <Fragment>
+      <Flex justify="between" marginBottom="2xs" gap="md">
+        <GroupInfoSummary
+          event={event}
+          group={group}
+          projectSlug={projectSlug}
+          showGroupingConfig={showGroupingConfig}
+        />
+        {feedbackComponent}
+      </Flex>
       <ToggleContainer>
         <SegmentedControl
           aria-label={t('Filter by contribution')}
@@ -101,7 +94,7 @@ export default function GroupingInfo({
       {isPending && !hasPerformanceGrouping ? <LoadingIndicator /> : null}
       {hasPerformanceGrouping || isSuccess
         ? variants
-            .filter(variant => variant.hash !== null || showNonContributing)
+            .filter(variant => variant.contributes || showNonContributing)
             .map((variant, index, filteredVariants) => (
               <Fragment key={variant.key}>
                 <GroupingVariant
@@ -113,23 +106,9 @@ export default function GroupingInfo({
               </Fragment>
             ))
         : null}
-    </GroupingInfoContainer>
+    </Fragment>
   );
 }
-
-const GroupingInfoContainer = styled('div')`
-  width: 100%;
-  max-width: 100%;
-  overflow: hidden;
-  box-sizing: border-box;
-`;
-
-const ConfigHeader = styled('div')`
-  display: flex;
-  justify-content: space-between;
-  gap: ${p => p.theme.space.md};
-  margin-bottom: ${p => p.theme.space['2xs']};
-`;
 
 const ToggleContainer = styled(Flex)`
   justify-content: flex-start;
@@ -138,5 +117,5 @@ const ToggleContainer = styled(Flex)`
 
 const VariantDivider = styled('hr')`
   padding-top: ${p => p.theme.space.md};
-  border-top: 1px solid ${p => p.theme.border};
+  border-top: 1px solid ${p => p.theme.tokens.border.primary};
 `;

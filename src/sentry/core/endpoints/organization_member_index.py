@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from sentry import audit_log, features, ratelimits, roles
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint
 from sentry.api.bases.organizationmember import MemberAndStaffPermission
 from sentry.api.paginator import OffsetPaginator
@@ -20,7 +20,7 @@ from sentry.api.serializers.models.organization_member import OrganizationMember
 from sentry.api.serializers.models.organization_member.response import OrganizationMemberResponse
 from sentry.apidocs.constants import RESPONSE_FORBIDDEN, RESPONSE_NOT_FOUND, RESPONSE_UNAUTHORIZED
 from sentry.apidocs.examples.organization_member_examples import OrganizationMemberExamples
-from sentry.apidocs.parameters import GlobalParams
+from sentry.apidocs.parameters import CursorQueryParam, GlobalParams
 from sentry.apidocs.utils import inline_sentry_response_serializer
 from sentry.auth.authenticators import available_authenticators
 from sentry.core.endpoints.organization_member_utils import (
@@ -35,6 +35,7 @@ from sentry.models.organization import Organization
 from sentry.models.organizationmember import InviteStatus, OrganizationMember
 from sentry.models.organizationmemberinvite import OrganizationMemberInvite
 from sentry.models.team import Team, TeamStatus
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.roles import organization_roles, team_roles
 from sentry.search.utils import tokenize_query
 from sentry.signals import member_invited
@@ -160,7 +161,7 @@ class OrganizationMemberRequestSerializer(serializers.Serializer[dict[str, Any]]
         return valid_team_roles
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 @extend_schema(tags=["Organizations"])
 class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
     publish_status = {
@@ -168,18 +169,20 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
         "POST": ApiPublishStatus.PUBLIC,
     }
 
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=40, window=1),
-            RateLimitCategory.USER: RateLimit(limit=40, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=40, window=1),
+                RateLimitCategory.USER: RateLimit(limit=40, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
+            },
+            "POST": {
+                RateLimitCategory.IP: RateLimit(limit=40, window=1),
+                RateLimitCategory.USER: RateLimit(limit=40, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
+            },
         },
-        "POST": {
-            RateLimitCategory.IP: RateLimit(limit=40, window=1),
-            RateLimitCategory.USER: RateLimit(limit=40, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
-        },
-    }
+    )
 
     permission_classes = (MemberAndStaffPermission,)
     owner = ApiOwner.ENTERPRISE
@@ -188,6 +191,7 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
         operation_id="List an Organization's Members",
         parameters=[
             GlobalParams.ORG_ID_OR_SLUG,
+            CursorQueryParam,
         ],
         responses={
             200: inline_sentry_response_serializer(
@@ -232,10 +236,14 @@ class OrganizationMemberIndexEndpoint(OrganizationEndpoint):
                     )
 
                 elif key == "id":
-                    queryset = queryset.filter(id__in=value)
+                    ids = [v for v in value if v.isdigit()]
+                    queryset = queryset.filter(id__in=ids) if ids else queryset.none()
 
                 elif key == "user.id":
-                    queryset = queryset.filter(user_id__in=value)
+                    user_ids = [v for v in value if v.isdigit()]
+                    queryset = (
+                        queryset.filter(user_id__in=user_ids) if user_ids else queryset.none()
+                    )
 
                 elif key == "scope":
                     queryset = queryset.filter(role__in=[r.id for r in roles.with_any_scope(value)])

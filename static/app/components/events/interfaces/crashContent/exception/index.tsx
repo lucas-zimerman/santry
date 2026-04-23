@@ -1,4 +1,4 @@
-import ErrorBoundary from 'sentry/components/errorBoundary';
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
 import {useStacktraceContext} from 'sentry/components/events/interfaces/stackTraceContext';
 import type {Event, ExceptionType} from 'sentry/types/event';
 import type {Group} from 'sentry/types/group';
@@ -6,7 +6,8 @@ import type {Project} from 'sentry/types/project';
 import {StackView} from 'sentry/types/stacktrace';
 
 import {Content} from './content';
-import RawContent from './rawContent';
+import {LineCoverageProvider} from './lineCoverageContext';
+import {RawContent} from './rawContent';
 
 type Props = {
   event: Event;
@@ -37,17 +38,19 @@ export function ExceptionContent({
           platform={event.platform}
         />
       ) : (
-        <Content
-          type={stackType}
-          stackView={stackView}
-          values={values}
-          projectSlug={projectSlug}
-          newestFirst={isNewestFramesFirst}
-          event={event}
-          groupingCurrentLevel={groupingCurrentLevel}
-          meta={meta}
-          threadId={threadId}
-        />
+        <LineCoverageProvider>
+          <Content
+            type={stackType}
+            stackView={stackView}
+            values={values}
+            projectSlug={projectSlug}
+            newestFirst={isNewestFramesFirst}
+            event={event}
+            groupingCurrentLevel={groupingCurrentLevel}
+            meta={meta}
+            threadId={threadId}
+          />
+        </LineCoverageProvider>
       )}
     </ErrorBoundary>
   );

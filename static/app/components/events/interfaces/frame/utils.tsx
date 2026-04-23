@@ -1,5 +1,3 @@
-import * as Sentry from '@sentry/react';
-
 import {t} from 'sentry/locale';
 import type {Event, Frame} from 'sentry/types/event';
 import {EventOrGroupType} from 'sentry/types/event';
@@ -45,25 +43,36 @@ export function hasAssembly(frame: Frame, platform?: string) {
   );
 }
 
+/**
+ * Returns true if the frame has enough information to potentially fetch
+ * source context from an SCM integration (filename + line number + in-app).
+ */
+export function hasPotentialSourceContext(frame: Frame) {
+  return !!frame.inApp && !!frame.lineNo && !!(frame.filename || frame.absPath);
+}
+
 export function isExpandable({
   frame,
   registers,
   emptySourceNotation,
   platform,
   isOnlyFrame,
+  hasScmSourceContext,
 }: {
   frame: Frame;
   registers: StacktraceType['registers'];
   emptySourceNotation?: boolean;
+  hasScmSourceContext?: boolean;
   isOnlyFrame?: boolean;
   platform?: string;
 }) {
-  return (
+  return !!(
     (!isOnlyFrame && emptySourceNotation) ||
     hasContextSource(frame) ||
     hasContextVars(frame) ||
     hasContextRegisters(registers) ||
-    hasAssembly(frame, platform)
+    hasAssembly(frame, platform) ||
+    (hasScmSourceContext && hasPotentialSourceContext(frame))
   );
 }
 
@@ -137,12 +146,8 @@ function getRootDomain(url: string): string {
     // Split hostname into parts and get the last two parts (if they exist)
     const parts = hostname.split('.');
     return parts.slice(-2).join('.');
-  } catch (err) {
-    // Capture to review edge cases and handle them properly
-    Sentry.withScope(scope => {
-      scope.setExtra('url', url);
-      Sentry.captureException(err);
-    });
+  } catch {
+    // Invalid URLs are possible/expected
     return '';
   }
 }
@@ -156,12 +161,8 @@ function getRootDomain(url: string): string {
 function getProtocol(url: string): string {
   try {
     return new URL(url).protocol;
-  } catch (err) {
-    // Capture to review edge cases and handle them properly
-    Sentry.withScope(scope => {
-      scope.setExtra('url', url);
-      Sentry.captureException(err);
-    });
+  } catch {
+    // Invalid URLs are possible/expected
     return '';
   }
 }

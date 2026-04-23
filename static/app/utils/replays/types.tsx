@@ -134,7 +134,6 @@ export type RawBreadcrumbFrame = TRawBreadcrumbFrame | ExtraBreadcrumbTypes;
 export type BreadcrumbFrameEvent = TBreadcrumbFrameEvent;
 export type RecordingFrame = TEventWithTime;
 export type OptionFrame = TOptionFrameEvent['data']['payload'];
-export type OptionFrameEvent = TOptionFrameEvent;
 export type RawSpanFrame =
   | Exclude<TRawSpanFrame, {op: ReplayWebVitalFrameOps}>
   | CompatibleReplayWebVitalFrame;
@@ -433,6 +432,14 @@ export type ResourceFrame = HydratedSpan<
   | 'resource.script'
 >;
 
+// OurLogs converted from log to frame for use with jump buttons etc.
+export type OurLogsPseudoFrame = {
+  category: 'ourlogs';
+  offsetMs: number;
+  timestampMs: number;
+  data?: undefined;
+};
+
 /**
  * This is a result of a custom discover query
  */
@@ -443,7 +450,9 @@ export type RawReplayError = {
   ['issue.id']: number;
   level: string;
   ['project.name']: string;
-  timestamp: string;
+  // Discover returns ms-precision timestamps in "YYYY-MM-DD HH:MM:SS.sss"
+  // format (no "T", no timezone).
+  timestamp_ms: string;
   title: string;
 };
 
@@ -464,7 +473,7 @@ export type ErrorFrame = Overwrite<
   }
 >;
 
-export type ReplayFrame = BreadcrumbFrame | ErrorFrame | SpanFrame;
+export type ReplayFrame = BreadcrumbFrame | ErrorFrame | SpanFrame | OurLogsPseudoFrame;
 
 interface VideoFrame {
   container: string;

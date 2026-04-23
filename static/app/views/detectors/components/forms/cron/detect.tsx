@@ -2,18 +2,20 @@ import {Fragment} from 'react';
 import {css, useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import {Alert} from 'sentry/components/core/alert';
-import {ExternalLink} from 'sentry/components/core/link';
-import {Text} from 'sentry/components/core/text';
+import {ExternalLink} from '@sentry/scraps/link';
+import {Text} from '@sentry/scraps/text';
+
 import {FieldWrapper} from 'sentry/components/forms/fieldGroup/fieldWrapper';
-import NumberField from 'sentry/components/forms/fields/numberField';
-import SelectField from 'sentry/components/forms/fields/selectField';
-import TextField from 'sentry/components/forms/fields/textField';
+import {NumberField} from 'sentry/components/forms/fields/numberField';
+import {SelectField} from 'sentry/components/forms/fields/selectField';
+import {TextField} from 'sentry/components/forms/fields/textField';
 import {Container} from 'sentry/components/workflowEngine/ui/container';
-import Section, {SectionSubHeading} from 'sentry/components/workflowEngine/ui/section';
+import {
+  FormSection,
+  FormSectionSubHeading,
+} from 'sentry/components/workflowEngine/ui/formSection';
 import {timezoneOptions} from 'sentry/data/timezones';
 import {t, tct, tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {SelectValue} from 'sentry/types/core';
 import {
   CRON_DEFAULT_CHECKIN_MARGIN,
@@ -37,10 +39,6 @@ const SCHEDULE_OPTIONS: Array<SelectValue<string>> = [
 const CHECKIN_MARGIN_MINIMUM = 1;
 const TIMEOUT_MINIMUM = 1;
 
-type Props = {
-  isEditing: boolean;
-};
-
 function ScheduleTypeField() {
   return (
     <SelectField
@@ -49,7 +47,6 @@ function ScheduleTypeField() {
       hideLabel
       options={SCHEDULE_OPTIONS}
       defaultValue={CRON_DEFAULT_SCHEDULE_TYPE}
-      orientInline
       required
       stacked
       inline={false}
@@ -80,7 +77,7 @@ function Schedule() {
             defaultValue={DEFAULT_CRONTAB}
             css={css`
               input {
-                font-family: ${theme.text.familyMono};
+                font-family: ${theme.font.family.mono};
               }
             `}
             required
@@ -146,7 +143,7 @@ function Margins() {
   return (
     <Fragment>
       <SubSectionSeparator aria-hidden="true" />
-      <SectionSubHeading>{t('Set margins')}</SectionSubHeading>
+      <FormSectionSubHeading>{t('Set margins')}</FormSectionSubHeading>
       <InputGroup>
         <NumberField
           name="checkinMargin"
@@ -183,11 +180,12 @@ function Thresholds() {
   return (
     <Fragment>
       <SubSectionSeparator aria-hidden="true" />
-      <SectionSubHeading>{t('Set thresholds')}</SectionSubHeading>
+      <FormSectionSubHeading>{t('Set thresholds')}</FormSectionSubHeading>
       <InputGroup>
         <NumberField
           name="failureIssueThreshold"
           min={1}
+          max={720}
           placeholder="1"
           defaultValue={CRON_DEFAULT_FAILURE_ISSUE_THRESHOLD}
           help={t(
@@ -200,31 +198,24 @@ function Thresholds() {
   );
 }
 
-export function CronDetectorFormDetectSection({isEditing}: Props) {
+export function CronDetectorFormDetectSection({step}: {step?: number}) {
   return (
     <Container>
-      <Section title={t('Detect')}>
+      <FormSection step={step} title={t('Issue Detection')}>
         <DetectFieldsContainer>
           <div>
-            <SectionSubHeading>{t('Set your schedule')}</SectionSubHeading>
+            <FormSectionSubHeading>{t('Set your schedule')}</FormSectionSubHeading>
             <Text variant="muted">
               {tct('You can use [link:the crontab syntax] or our interval schedule.', {
                 link: <ExternalLink href="https://en.wikipedia.org/wiki/Cron" />,
               })}
             </Text>
-            {isEditing && (
-              <Alert type="info" showIcon={false}>
-                {t(
-                  'Any changes you make to the execution schedule will only be applied after the next expected check-in.'
-                )}
-              </Alert>
-            )}
             <Schedule />
             <Margins />
             <Thresholds />
           </div>
         </DetectFieldsContainer>
-      </Section>
+      </FormSection>
     </Container>
   );
 }
@@ -240,13 +231,14 @@ const SubSectionSeparator = styled('hr')`
   border: none;
   margin: 0;
   margin-bottom: ${p => p.theme.space.lg};
-  background-color: ${p => p.theme.border};
+  /* eslint-disable-next-line @sentry/scraps/use-semantic-token */
+  background-color: ${p => p.theme.tokens.border.primary};
 `;
 
 const InputGroup = styled('div')<{removeFieldPadding?: boolean}>`
   display: flex;
   flex-direction: column;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
 
   ${p =>
     p.removeFieldPadding &&
@@ -265,14 +257,14 @@ const InputGroup = styled('div')<{removeFieldPadding?: boolean}>`
 `;
 
 const LabelText = styled(Text)`
-  font-weight: ${p => p.theme.fontWeight.bold};
-  color: ${p => p.theme.subText};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const MultiColumnInput = styled('div')<{columns?: string}>`
   display: grid;
   align-items: center;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   grid-template-columns: ${p => p.columns};
 
   ${FieldWrapper} {
@@ -281,8 +273,8 @@ const MultiColumnInput = styled('div')<{columns?: string}>`
 `;
 
 const CronstrueText = styled(LabelText)`
-  font-weight: ${p => p.theme.fontWeight.normal};
-  font-size: ${p => p.theme.fontSize.xs};
-  font-family: ${p => p.theme.text.familyMono};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
+  font-size: ${p => p.theme.font.size.xs};
+  font-family: ${p => p.theme.font.family.mono};
   grid-column: auto / span 2;
 `;

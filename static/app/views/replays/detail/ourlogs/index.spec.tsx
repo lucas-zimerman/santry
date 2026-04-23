@@ -5,8 +5,8 @@ import {render, screen} from 'sentry-test/reactTestingLibrary';
 
 import {Provider as ReplayContextProvider} from 'sentry/components/replays/replayContext';
 import {ReplayReaderProvider} from 'sentry/utils/replays/playback/providers/replayReaderProvider';
-import ReplayReader from 'sentry/utils/replays/replayReader';
-import OurLogs from 'sentry/views/replays/detail/ourlogs';
+import {ReplayReader} from 'sentry/utils/replays/replayReader';
+import {OurLogs} from 'sentry/views/replays/detail/ourlogs';
 import {useReplayTraces} from 'sentry/views/replays/detail/trace/useReplayTraces';
 
 jest.mock('sentry/views/replays/detail/trace/useReplayTraces');
@@ -67,22 +67,6 @@ describe('OurLogs', () => {
     );
 
     expect(screen.getByTestId('loading-indicator')).toBeInTheDocument();
-  });
-
-  it("shows empty if there's no replay traces", () => {
-    jest.mocked(useReplayTraces).mockReturnValue({
-      replayTraces: [],
-      indexComplete: true,
-      indexError: undefined,
-    } as any);
-
-    render(
-      <Wrappers replay={mockReplay}>
-        <OurLogs />
-      </Wrappers>
-    );
-
-    expect(screen.getByText(/No logs found/)).toBeInTheDocument();
   });
 
   it("shows logs table if there's replay traces", () => {

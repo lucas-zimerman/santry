@@ -59,7 +59,7 @@ class UserOptionManager(OptionManager["UserOption"]):
         """
         This isn't implemented for user-organization scoped options yet, because it hasn't been needed.
         """
-        self.filter(user=user, project=project, key=key).delete()
+        self.filter(user=user, project_id=project.id, key=key).delete()
 
         if not hasattr(self, "_metadata"):
             return
@@ -109,7 +109,7 @@ class UserOptionManager(OptionManager["UserOption"]):
         if organization and project:
             raise NotImplementedError(option_scope_error)
 
-        uid = user.id if user and not isinstance(user, int) else user
+        uid = user if isinstance(user, int) else user.id
         metakey = self._make_key(user, project=project, organization=organization)
         project_id: int | None = project.id if isinstance(project, Model) else project
         organization_id: int | None = (
@@ -164,12 +164,6 @@ class UserOption(Model):
         - unused
      - prefers_issue_details_streamlined_ui
         - Whether the user prefers the new issue details experience (boolean)
-     - prefers_stacked_navigation
-        - Whether the user prefers the new stacked navigation experience (boolean)
-    - prefers_nextjs_insights_overview
-        - Whether the user prefers the new NextJS insights overview experience (boolean)
-     - prefers_chonk_ui
-        - Whether the user prefers the new Chonk UI experience (boolean)
      - language
         - which language to display the app in
      - mail:email

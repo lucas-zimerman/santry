@@ -1,21 +1,18 @@
 import type React from 'react';
-import {Fragment, useState} from 'react';
+import {useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Button} from 'sentry/components/core/button';
+import {Button} from '@sentry/scraps/button';
+import {Flex, Grid} from '@sentry/scraps/layout';
+
 import {ContentBlocksRenderer} from 'sentry/components/onboarding/gettingStartedDoc/contentBlocks/renderer';
-import {
-  OnboardingCodeSnippet,
-  TabbedCodeSnippet,
-} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCodeSnippet';
+import {StepIndexProvider} from 'sentry/components/onboarding/gettingStartedDoc/selectedCodeTabContext';
 import {
   StepType,
-  type Configuration,
   type OnboardingStep,
 } from 'sentry/components/onboarding/gettingStartedDoc/types';
 import {IconChevron} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 
 export const StepTitles: Record<StepType, string> = {
   [StepType.INSTALL]: t('Install'),
@@ -23,97 +20,35 @@ export const StepTitles: Record<StepType, string> = {
   [StepType.VERIFY]: t('Verify'),
 };
 
-function getConfiguration({
-  description,
-  code,
-  language,
-  additionalInfo,
-  onCopy,
-  onSelectAndCopy,
-  partialLoading,
-}: Configuration) {
-  return (
-    <Configuration>
-      {description && <Description>{description}</Description>}
-      {Array.isArray(code) ? (
-        <TabbedCodeSnippet
-          tabs={code}
-          onCopy={onCopy}
-          onSelectAndCopy={onSelectAndCopy}
-          partialLoading={partialLoading}
-        />
-      ) : (
-        language &&
-        code && (
-          <OnboardingCodeSnippet
-            language={language}
-            onCopy={onCopy}
-            onSelectAndCopy={onSelectAndCopy}
-            hideCopyButton={partialLoading}
-            disableUserSelection={partialLoading}
-          >
-            {code}
-          </OnboardingCodeSnippet>
-        )
-      )}
-      {additionalInfo && <AdditionalInfo>{additionalInfo}</AdditionalInfo>}
-    </Configuration>
-  );
-}
-
 export function Step({
   title,
   type,
-  configurations,
   content,
-  additionalInfo,
-  description,
   onOptionalToggleClick,
   collapsible = false,
   trailingItems,
-  codeHeader,
+  stepIndex,
   ...props
-}: Omit<React.HTMLAttributes<HTMLDivElement>, 'content'> & OnboardingStep) {
+}: Omit<React.HTMLAttributes<HTMLDivElement>, 'content'> &
+  // stepIndex is required so StepIndexProvider can disambiguate tab
+  // selection keys across steps (used by the Copy as Markdown feature).
+  OnboardingStep & {stepIndex: number}) {
   const [showOptionalConfig, setShowOptionalConfig] = useState(false);
 
-  const config = content ? (
+  const config = (
     <ContentWrapper>
-      <ContentBlocksRenderer contentBlocks={content} />
-    </ContentWrapper>
-  ) : (
-    <ContentWrapper>
-      {description && <Description>{description}</Description>}
-
-      {!!configurations?.length &&
-        configurations.map((configuration, index) => {
-          if (configuration.configurations) {
-            return (
-              <Fragment key={index}>
-                {getConfiguration(configuration)}
-                {configuration.configurations.map(
-                  (nestedConfiguration, nestedConfigurationIndex) => (
-                    <Fragment key={nestedConfigurationIndex}>
-                      {nestedConfigurationIndex ===
-                      (configuration.configurations?.length ?? 1) - 1
-                        ? codeHeader
-                        : null}
-                      {getConfiguration(nestedConfiguration)}
-                    </Fragment>
-                  )
-                )}
-              </Fragment>
-            );
-          }
-          return (
-            <Fragment key={index}>
-              {index === configurations.length - 1 ? codeHeader : null}
-              {getConfiguration(configuration)}
-            </Fragment>
-          );
-        })}
-      {additionalInfo && <GeneralAdditionalInfo>{additionalInfo}</GeneralAdditionalInfo>}
+      <StepIndexProvider index={stepIndex}>
+        <ContentBlocksRenderer contentBlocks={content} />
+      </StepIndexProvider>
     </ContentWrapper>
   );
+
+  const stepTitle = <StepTitle>{title ?? StepTitles[type]}</StepTitle>;
+  const trailingItemsContent = trailingItems ? (
+    <Grid flow="column" align="center" gap="md" onClick={e => e.stopPropagation()}>
+      {trailingItems}
+    </Grid>
+  ) : null;
 
   return collapsible ? (
     <div {...props}>
@@ -124,21 +59,27 @@ export function Step({
           setShowOptionalConfig(!showOptionalConfig);
         }}
       >
-        <StepTitle>{title ?? StepTitles[type]}</StepTitle>
+        {stepTitle}
         <ToggleButton
           priority="link"
-          borderless
           size="zero"
           icon={<IconChevron direction={showOptionalConfig ? 'down' : 'right'} />}
           aria-label={t('Toggle optional configuration')}
         />
-        {trailingItems && <div onClick={e => e.stopPropagation()}>{trailingItems}</div>}
+        {trailingItemsContent}
       </OptionalConfigWrapper>
       {showOptionalConfig ? config : null}
     </div>
   ) : (
     <div {...props}>
-      <StepTitle>{title ?? StepTitles[type]}</StepTitle>
+      {trailingItems ? (
+        <Flex justify="between" align="center" gap="sm">
+          {stepTitle}
+          {trailingItemsContent}
+        </Flex>
+      ) : (
+        stepTitle
+      )}
       {config}
     </div>
   );
@@ -147,56 +88,20 @@ export function Step({
 // NOTE: We intentionally avoid using flex or grid here
 // as it leads to weird text selection behavior in Safari
 // see https://github.com/getsentry/sentry/issues/79958
-
-const CONTENT_SPACING = space(2);
-
 const ContentWrapper = styled('div')`
-  margin-top: ${CONTENT_SPACING};
+  margin-top: ${p => p.theme.space.xl};
 `;
 
 const StepTitle = styled('h4')`
   margin-bottom: 0 !important;
 `;
 
-const Configuration = styled('div')`
-  :not(:last-child) {
-    margin-bottom: ${CONTENT_SPACING};
-  }
-`;
-
-const Description = styled('div')`
-  code:not([class*='language-']) {
-    color: ${p => p.theme.pink400};
-  }
-
-  :not(:last-child) {
-    margin-bottom: ${CONTENT_SPACING};
-  }
-
-  && > p,
-  && > h4,
-  && > h5,
-  && > h6 {
-    &:not(:last-child) {
-      margin-bottom: ${CONTENT_SPACING};
-    }
-  }
-`;
-
-const AdditionalInfo = styled(Description)`
-  margin-top: ${CONTENT_SPACING};
-`;
-
-const GeneralAdditionalInfo = styled(Description)`
-  margin-top: ${CONTENT_SPACING};
-`;
-
 const OptionalConfigWrapper = styled('div')<{expanded: boolean}>`
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: ${space(1)};
-  margin-bottom: ${p => (p.expanded ? space(2) : 0)};
+  gap: ${p => p.theme.space.md};
+  margin-bottom: ${p => (p.expanded ? p.theme.space.xl : 0)};
   cursor: pointer;
 `;
 
@@ -207,6 +112,6 @@ const ToggleButton = styled(Button)`
   padding: 0;
   &,
   :hover {
-    color: ${p => p.theme.gray500};
+    color: ${p => p.theme.colors.gray800};
   }
 `;

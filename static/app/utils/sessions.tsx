@@ -54,7 +54,7 @@ export function getSeriesSum(
   field: SessionFieldWithOperation,
   intervals: SessionApiResponse['intervals'] = []
 ) {
-  const dataPointsSums: number[] = new Array(intervals.length).fill(0);
+  const dataPointsSums = Array.from<number>({length: intervals.length}).fill(0);
   const groupSeries = groups.map(group => group.series[field]);
 
   groupSeries.forEach(series => {
@@ -190,9 +190,9 @@ export function initSessionsChart(theme: Theme) {
     [SessionStatus.HEALTHY]: {
       seriesName: sessionTerm.healthy,
       data: [],
-      color: theme.green300,
+      color: theme.colors.green400,
       areaStyle: {
-        color: theme.green300,
+        color: theme.colors.green400,
         opacity: 1,
       },
       lineStyle: {
@@ -206,6 +206,19 @@ export function initSessionsChart(theme: Theme) {
       color: colors[12],
       areaStyle: {
         color: colors[12],
+        opacity: 1,
+      },
+      lineStyle: {
+        opacity: 0,
+        width: 0.4,
+      },
+    },
+    [SessionStatus.UNHANDLED]: {
+      seriesName: sessionTerm.unhandled,
+      data: [],
+      color: colors[13],
+      areaStyle: {
+        color: colors[13],
         opacity: 1,
       },
       lineStyle: {
@@ -229,9 +242,9 @@ export function initSessionsChart(theme: Theme) {
     [SessionStatus.CRASHED]: {
       seriesName: sessionTerm.crashed,
       data: [],
-      color: theme.red300,
+      color: theme.colors.red400,
       areaStyle: {
-        color: theme.red300,
+        color: theme.colors.red400,
         opacity: 1,
       },
       lineStyle: {
@@ -244,19 +257,13 @@ export function initSessionsChart(theme: Theme) {
 
 type GetSessionsIntervalOptions = {
   dailyInterval?: boolean;
-  highFidelity?: boolean;
 };
 
 export function getSessionsInterval(
   datetimeObj: DateTimeObject,
-  {highFidelity, dailyInterval}: GetSessionsIntervalOptions = {}
+  {dailyInterval}: GetSessionsIntervalOptions = {}
 ) {
   const diffInMinutes = getDiffInMinutes(datetimeObj);
-
-  if (moment(datetimeObj.start).isSameOrBefore(moment().subtract(30, 'days'))) {
-    // we cannot use sub-hour session resolution on buckets older than 30 days
-    highFidelity = false;
-  }
 
   if (dailyInterval === true && diffInMinutes > TWENTY_FOUR_HOURS) {
     return '1d';
@@ -274,22 +281,23 @@ export function getSessionsInterval(
     return '1h';
   }
 
-  // limit on backend for sub-hour session resolution is set to six hours
-  if (highFidelity) {
-    if (diffInMinutes <= MINUTES_THRESHOLD_TO_DISPLAY_SECONDS) {
-      // This only works for metrics-based session stats.
-      // Backend will silently replace with '1m' for session-based stats.
-      return '10s';
-    }
-
-    if (diffInMinutes <= 30) {
-      return '1m';
-    }
-
-    return '5m';
+  // we cannot use sub-hour session resolution on buckets older than 30 days
+  if (moment(datetimeObj.start).isSameOrBefore(moment().subtract(30, 'days'))) {
+    return '1h';
   }
 
-  return '1h';
+  // limit on backend for sub-hour session resolution is set to six hours
+  if (diffInMinutes <= MINUTES_THRESHOLD_TO_DISPLAY_SECONDS) {
+    // This only works for metrics-based session stats.
+    // Backend will silently replace with '1m' for session-based stats.
+    return '10s';
+  }
+
+  if (diffInMinutes <= 30) {
+    return '1m';
+  }
+
+  return '5m';
 }
 
 // Sessions API can only round intervals to the closest hour - this is especially problematic when using sub-hour resolution.

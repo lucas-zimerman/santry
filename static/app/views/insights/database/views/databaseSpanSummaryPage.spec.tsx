@@ -1,19 +1,13 @@
 import {GroupFixture} from 'sentry-fixture/group';
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {render, screen, waitForElementToBeRemoved} from 'sentry-test/reactTestingLibrary';
 
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import {useParams} from 'sentry/utils/useParams';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
 import {useReleaseStats} from 'sentry/utils/useReleaseStats';
 import {SAMPLING_MODE} from 'sentry/views/explore/hooks/useProgressiveQuery';
 import {DatabaseSpanSummaryPage} from 'sentry/views/insights/database/views/databaseSpanSummaryPage';
-
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/useParams');
-jest.mock('sentry/utils/usePageFilters');
 
 jest.mock('sentry/utils/useReleaseStats');
 
@@ -24,34 +18,13 @@ describe('DatabaseSpanSummaryPage', () => {
   const group = GroupFixture();
   const groupId = '1756baf8fd19c116';
 
-  jest.mocked(usePageFilters).mockReturnValue(
-    PageFilterStateFixture({
-      selection: {
-        datetime: {
-          period: '10d',
-          start: null,
-          end: null,
-          utc: false,
-        },
-        environments: [],
-        projects: [],
-      },
-    })
-  );
-
-  jest.mocked(useParams).mockReturnValue({
-    groupId,
-  });
-
-  jest.mocked(useLocation).mockReturnValue({
-    pathname: '',
-    search: '',
-    query: {statsPeriod: '10d', transactionsCursor: '0:25:0'},
-    hash: '',
-    state: undefined,
-    action: 'PUSH',
-    key: '',
-  });
+  const initialRouterConfig = {
+    route: '/organizations/:orgId/insights/backend/database/spans/span/:groupId/',
+    location: {
+      pathname: `/organizations/${organization.slug}/insights/backend/database/spans/span/${groupId}/`,
+      query: {statsPeriod: '10d', transactionsCursor: '0:25:0'},
+    },
+  };
 
   jest.mocked(useReleaseStats).mockReturnValue({
     isLoading: false,
@@ -63,6 +36,17 @@ describe('DatabaseSpanSummaryPage', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    PageFiltersStore.onInitializeUrlState({
+      projects: [],
+      environments: [],
+      datetime: {
+        period: '10d',
+        start: null,
+        end: null,
+        utc: false,
+      },
+    });
   });
 
   afterAll(() => {
@@ -84,29 +68,17 @@ describe('DatabaseSpanSummaryPage', () => {
     });
 
     const eventsStatsRequestMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       method: 'GET',
       body: {
-        'epm()': {
-          data: [
-            [1672531200, [{count: 5}]],
-            [1672542000, [{count: 10}]],
-            [1672552800, [{count: 15}]],
-          ],
-          order: 0,
-          start: 1672531200,
-          end: 1672552800,
-        },
-        'avg(span.self_time)': {
-          data: [
-            [1672531200, [{count: 100}]],
-            [1672542000, [{count: 150}]],
-            [1672552800, [{count: 200}]],
-          ],
-          order: 1,
-          start: 1672531200,
-          end: 1672552800,
-        },
+        timeSeries: [
+          TimeSeriesFixture({
+            yAxis: 'epm()',
+          }),
+          TimeSeriesFixture({
+            yAxis: 'avg(span.self_time)',
+          }),
+        ],
       },
     });
 
@@ -166,7 +138,7 @@ describe('DatabaseSpanSummaryPage', () => {
     });
 
     MockApiClient.addMockResponse({
-      url: `/projects/org-slug//releases/1.0.0/`,
+      url: '/projects/org-slug//releases/1.0.0/',
       method: 'GET',
       body: [],
     });
@@ -186,12 +158,7 @@ describe('DatabaseSpanSummaryPage', () => {
 
     render(<DatabaseSpanSummaryPage />, {
       organization,
-      initialRouterConfig: {
-        route: `/organizations/:orgId/insights/backend/database/spans/span/:groupId/`,
-        location: {
-          pathname: `/organizations/${organization.slug}/insights/backend/database/spans/span/${groupId}/`,
-        },
-      },
+      initialRouterConfig,
     });
 
     // Metrics ribbon
@@ -254,27 +221,25 @@ describe('DatabaseSpanSummaryPage', () => {
     // EPM Chart
     expect(eventsStatsRequestMock).toHaveBeenNthCalledWith(
       1,
-      `/organizations/${organization.slug}/events-stats/`,
+      `/organizations/${organization.slug}/events-timeseries/`,
       expect.objectContaining({
         method: 'GET',
         query: {
-          cursor: undefined,
           dataset: 'spans',
           sampling: SAMPLING_MODE.NORMAL,
           environment: [],
           excludeOther: 0,
-          field: [],
+          groupBy: undefined,
           interval: '30m',
-          orderby: undefined,
+          sort: undefined,
           partial: 1,
-          per_page: 50,
           project: [],
           query: 'span.group:1756baf8fd19c116',
           referrer: 'api.insights.database.summary-throughput-chart',
           statsPeriod: '10d',
           topEvents: undefined,
-          yAxis: 'epm()',
-          transformAliasToInputFormat: '1',
+          yAxis: ['epm()'],
+          caseInsensitive: undefined,
         },
       })
     );
@@ -282,27 +247,25 @@ describe('DatabaseSpanSummaryPage', () => {
     // Duration Chart
     expect(eventsStatsRequestMock).toHaveBeenNthCalledWith(
       2,
-      `/organizations/${organization.slug}/events-stats/`,
+      `/organizations/${organization.slug}/events-timeseries/`,
       expect.objectContaining({
         method: 'GET',
         query: {
-          cursor: undefined,
           dataset: 'spans',
           sampling: SAMPLING_MODE.NORMAL,
           environment: [],
           excludeOther: 0,
-          field: [],
+          groupBy: undefined,
           interval: '30m',
-          orderby: undefined,
+          sort: undefined,
           partial: 1,
-          per_page: 50,
           project: [],
           query: 'span.group:1756baf8fd19c116',
           referrer: 'api.insights.database.summary-duration-chart',
           statsPeriod: '10d',
           topEvents: undefined,
-          yAxis: 'avg(span.self_time)',
-          transformAliasToInputFormat: '1',
+          yAxis: ['avg(span.self_time)'],
+          caseInsensitive: undefined,
         },
       })
     );
@@ -383,7 +346,7 @@ describe('DatabaseSpanSummaryPage', () => {
     expect(screen.getByRole('heading', {name: 'Events'})).toBeInTheDocument();
     expect(screen.getByRole('heading', {name: 'Users'})).toBeInTheDocument();
     expect(screen.getByRole('heading', {name: 'Assignee'})).toBeInTheDocument();
-    expect(screen.getByText('327k')).toBeInTheDocument();
-    expect(screen.getByText('35k')).toBeInTheDocument();
+    expect(screen.getByText('327K')).toBeInTheDocument();
+    expect(screen.getByText('35K')).toBeInTheDocument();
   });
 });

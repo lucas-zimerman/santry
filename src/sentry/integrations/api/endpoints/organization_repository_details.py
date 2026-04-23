@@ -9,20 +9,18 @@ from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationIntegrationsPermission
 from sentry.api.exceptions import ResourceDoesNotExist
-from sentry.api.fields.empty_integer import EmptyIntegerField
 from sentry.api.serializers import serialize
+from sentry.api.serializers.models.repository import RepositorySerializer as RepositoryApiSerializer
 from sentry.constants import ObjectStatus
-from sentry.deletions.models.scheduleddeletion import RegionScheduledDeletion
-from sentry.hybridcloud.rpc import coerce_id_from
-from sentry.integrations.services.integration import integration_service
+from sentry.deletions.models.scheduleddeletion import CellScheduledDeletion
 from sentry.models.commit import Commit
 from sentry.models.organization import Organization
 from sentry.models.repository import Repository
 from sentry.tasks.repository import repository_cascade_delete_on_hide
-from sentry.tasks.seer import cleanup_seer_repository_preferences
+from sentry.tasks.seer.cleanup import cleanup_seer_repository_preferences
 
 
 class RepositorySerializer(serializers.Serializer):
@@ -36,17 +34,26 @@ class RepositorySerializer(serializers.Serializer):
     )
     name = serializers.CharField(required=False)
     url = serializers.URLField(required=False, allow_blank=True)
-    integrationId = EmptyIntegerField(required=False, allow_null=True)
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
     owner = ApiOwner.INTEGRATIONS
     publish_status = {
         "DELETE": ApiPublishStatus.PRIVATE,
+        "GET": ApiPublishStatus.PRIVATE,
         "PUT": ApiPublishStatus.PRIVATE,
     }
     permission_classes = (OrganizationIntegrationsPermission,)
+
+    def get(self, request: Request, organization: Organization, repo_id) -> Response:
+        try:
+            repo = Repository.objects.get(id=repo_id, organization_id=organization.id)
+        except Repository.DoesNotExist:
+            raise ResourceDoesNotExist
+
+        expand = request.GET.getlist("expand", [])
+        return Response(serialize(repo, request.user, RepositoryApiSerializer(expand=expand)))
 
     def put(self, request: Request, organization: Organization, repo_id) -> Response:
         if not request.user.is_authenticated:
@@ -59,6 +66,11 @@ class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
 
         if repo.status == ObjectStatus.DELETION_IN_PROGRESS:
             return Response(status=400)
+
+        if "integrationId" in request.data:
+            return Response(
+                {"detail": "Changing the repository provider is not allowed"}, status=400
+            )
 
         serializer = RepositorySerializer(data=request.data, partial=True)
 
@@ -74,18 +86,6 @@ class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
                 update_kwargs["status"] = ObjectStatus.HIDDEN
             else:
                 raise NotImplementedError
-        if result.get("integrationId"):
-            integration = integration_service.get_integration(
-                integration_id=result["integrationId"],
-                organization_id=coerce_id_from(organization),
-                status=ObjectStatus.ACTIVE,
-            )
-            if integration is None:
-                return Response({"detail": "Invalid integration id"}, status=400)
-
-            update_kwargs["integration_id"] = integration.id
-            update_kwargs["provider"] = f"integrations:{integration.provider}"
-
         if update_kwargs:
             old_status = repo.status
             with transaction.atomic(router.db_for_write(Repository)):
@@ -103,6 +103,7 @@ class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
                         cleanup_seer_repository_preferences.apply_async(
                             kwargs={
                                 "organization_id": repo.organization_id,
+                                "repo_id": repo.id,
                                 "repo_external_id": repo.external_id,
                                 "repo_provider": repo.provider,
                             }
@@ -133,8 +134,8 @@ class OrganizationRepositoryDetailsEndpoint(OrganizationEndpoint):
                 repo.rename_on_pending_deletion()
 
                 if has_commits:
-                    RegionScheduledDeletion.schedule(repo, days=0, hours=1, actor=request.user)
+                    CellScheduledDeletion.schedule(repo, days=0, hours=1, actor=request.user)
                 else:
-                    RegionScheduledDeletion.schedule(repo, days=0, actor=request.user)
+                    CellScheduledDeletion.schedule(repo, days=0, actor=request.user)
 
         return Response(serialize(repo, request.user), status=202)

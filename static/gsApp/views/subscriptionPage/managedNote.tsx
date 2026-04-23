@@ -1,7 +1,8 @@
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
+import {Container} from '@sentry/scraps/layout';
+
+import {PanelBody} from 'sentry/components/panels/panelBody';
 import {tct} from 'sentry/locale';
-import TextBlock from 'sentry/views/settings/components/text/textBlock';
+import {TextBlock} from 'sentry/views/settings/components/text/textBlock';
 
 import type {Subscription} from 'getsentry/types';
 import {BillingType} from 'getsentry/types';
@@ -62,7 +63,7 @@ type Props = {
  * @param {Props} props - Component props containing the subscription object
  * @returns {React.ReactNode | null} Returns null for self-serve cases, otherwise returns a Panel with guidance
  */
-function ManagedNote({subscription}: Props) {
+export function ManagedNote({subscription}: Props) {
   // Early return for self-serve subscriptions
   if (subscription.canSelfServe) {
     return null;
@@ -83,7 +84,12 @@ function ManagedNote({subscription}: Props) {
     (subscription.customPrice !== null && subscription.customPrice > 0);
 
   return (
-    <Panel data-test-id="managed-note">
+    <Container
+      data-test-id="managed-note"
+      background="primary"
+      border="primary"
+      radius="md"
+    >
       <PanelBody withPadding>
         <TextBlock noMargin>
           {isSalesAccount
@@ -96,8 +102,6 @@ function ManagedNote({subscription}: Props) {
               DEFAULT_MESSAGE)}
         </TextBlock>
       </PanelBody>
-    </Panel>
+    </Container>
   );
 }
-
-export default ManagedNote;

@@ -5,7 +5,8 @@ from typing import Any
 from django.db import router, transaction
 from django.forms import ValidationError
 
-from sentry.deletions.models.scheduleddeletion import RegionScheduledDeletion
+from sentry.constants import ObjectStatus
+from sentry.deletions.models.scheduleddeletion import CellScheduledDeletion
 from sentry.incidents.grouptype import MetricIssue
 from sentry.incidents.models.alert_rule import (
     AlertRule,
@@ -18,7 +19,7 @@ from sentry.incidents.models.incident import Incident, IncidentStatus
 from sentry.incidents.utils.types import DATA_SOURCE_SNUBA_QUERY_SUBSCRIPTION
 from sentry.integrations.opsgenie.client import OPSGENIE_DEFAULT_PRIORITY
 from sentry.integrations.pagerduty.client import PAGERDUTY_DEFAULT_SEVERITY
-from sentry.notifications.models.notificationaction import ActionService, ActionTarget
+from sentry.notifications.models.notificationaction import ActionService
 from sentry.snuba.models import QuerySubscription, SnubaQuery
 from sentry.users.services.user import RpcUser
 from sentry.workflow_engine.migration_helpers.utils import get_workflow_name
@@ -40,11 +41,7 @@ from sentry.workflow_engine.models import (
 )
 from sentry.workflow_engine.models.data_condition import Condition
 from sentry.workflow_engine.types import DetectorPriorityLevel
-from sentry.workflow_engine.typings.notification_action import (
-    OnCallDataBlob,
-    SentryAppDataBlob,
-    SentryAppIdentifier,
-)
+from sentry.workflow_engine.typings.notification_action import OnCallDataBlob, SentryAppDataBlob
 
 logger = logging.getLogger(__name__)
 
@@ -154,14 +151,11 @@ def get_target_identifier(
 def build_action_config(
     target_display: str | None, target_identifier: str | None, target_type: int
 ) -> dict[str, str | int | None]:
-    base_config = {
+    return {
         "target_display": target_display,
         "target_identifier": target_identifier,
         "target_type": target_type,
     }
-    if target_type == ActionTarget.SENTRY_APP.value:
-        base_config["sentry_app_identifier"] = SentryAppIdentifier.SENTRY_APP_ID
-    return base_config
 
 
 def get_detector_trigger(
@@ -443,6 +437,59 @@ def create_data_source(
     )
 
 
+def update_data_source_for_detector(alert_rule: AlertRule, detector: Detector) -> None:
+    """
+    Updates the Detector's DataSource to point to the AlertRule's current QuerySubscription.
+    """
+    snuba_query = alert_rule.snuba_query
+    if not snuba_query:
+        logger.error(
+            "AlertRule has no SnubaQuery",
+            extra={"alert_rule_id": alert_rule.id},
+        )
+        return
+
+    current_subscription = (
+        QuerySubscription.objects.filter(snuba_query=snuba_query.id)
+        .exclude(status=QuerySubscription.Status.DELETING.value)
+        .first()
+    )
+    if not current_subscription:
+        logger.error(
+            "No QuerySubscription found for AlertRule's SnubaQuery",
+            extra={"alert_rule_id": alert_rule.id, "snuba_query_id": snuba_query.id},
+        )
+        return
+
+    data_source = DataSource.objects.filter(
+        detectors=detector,
+        type=DATA_SOURCE_SNUBA_QUERY_SUBSCRIPTION,
+    ).first()
+
+    if not data_source:
+        logger.warning(
+            "No DataSource found for Detector",
+            extra={"detector_id": detector.id, "alert_rule_id": alert_rule.id},
+        )
+        return
+
+    new_source_id = str(current_subscription.id)
+    if data_source.source_id == new_source_id:
+        return
+
+    old_source_id = data_source.source_id
+    data_source.update(source_id=new_source_id)
+    logger.info(
+        "Updated DataSource to current QuerySubscription",
+        extra={
+            "data_source_id": data_source.id,
+            "old_source_id": old_source_id,
+            "new_source_id": new_source_id,
+            "alert_rule_id": alert_rule.id,
+        },
+    )
+
+
 def create_data_condition_group(organization_id: int) -> DataConditionGroup:
     return DataConditionGroup.objects.create(
         organization_id=organization_id,
@@ -462,7 +509,7 @@ def create_workflow(
         enabled=True,
         created_by_id=user.id if user else None,
         owner_user_id=alert_rule.user_id,
-        owner_team=alert_rule.team,
+        owner_team_id=alert_rule.team_id,
         config={},
     )
 
@@ -478,7 +525,7 @@ def get_detector_field_values(
         "description": alert_rule.description,
         "workflow_condition_group": data_condition_group,
         "owner_user_id": alert_rule.user_id,
-        "owner_team": alert_rule.team,
+        "owner_team_id": alert_rule.team_id,
         "config": {
             "comparison_delta": alert_rule.comparison_delta,
             "detection_type": alert_rule.detection_type,
@@ -644,7 +691,9 @@ def dual_update_alert_rule(alert_rule: AlertRule) -> None:
         dual_update_resolve_condition(alert_rule)
 
 
-def dual_update_migrated_alert_rule(alert_rule: AlertRule) -> (
+def dual_update_migrated_alert_rule(
+    alert_rule: AlertRule,
+) -> (
     tuple[
         DetectorState,
         Detector,
@@ -656,6 +705,9 @@ def dual_update_migrated_alert_rule(alert_rule: AlertRule) -> (
     detector_state = DetectorState.objects.get(detector=detector)
 
     update_detector(alert_rule, detector)
+
+    # Sync the DataSource to ensure it points to a valid QuerySubscription
+    update_data_source_for_detector(alert_rule, detector)
 
     data_condition_group = detector.workflow_condition_group
     if data_condition_group is None:
@@ -846,14 +898,29 @@ def dual_delete_migrated_alert_rule(alert_rule: AlertRule) -> None:
             extra={"alert_rule_id": alert_rule.id},
         )
         return
-    alert_rule_workflow = AlertRuleWorkflow.objects.get(alert_rule_id=alert_rule.id)
 
-    workflow: Workflow = alert_rule_workflow.workflow
     detector: Detector = alert_rule_detector.detector
+    alert_rule_workflow = None
 
-    with transaction.atomic(router.db_for_write(Detector)):
-        RegionScheduledDeletion.schedule(instance=detector, days=0)
-        RegionScheduledDeletion.schedule(instance=workflow, days=0)
+    try:
+        alert_rule_workflow = AlertRuleWorkflow.objects.get(alert_rule_id=alert_rule.id)
+    except AlertRuleWorkflow.DoesNotExist:
+        logger.exception(
+            "AlertRuleWorkflow not found for AlertRule, workflow may be orphaned",
+            extra={"detector_id": detector.id},
+        )
+    if alert_rule_workflow:
+        workflow: Workflow = alert_rule_workflow.workflow
+        with transaction.atomic(router.db_for_write(Detector)):
+            detector.update(status=ObjectStatus.PENDING_DELETION)
+            workflow.update(status=ObjectStatus.PENDING_DELETION)
+            CellScheduledDeletion.schedule(instance=detector, days=0)
+            CellScheduledDeletion.schedule(instance=workflow, days=0)
+
+    else:
+        with transaction.atomic(router.db_for_write(Detector)):
+            detector.update(status=ObjectStatus.PENDING_DELETION)
+            CellScheduledDeletion.schedule(instance=detector, days=0)
 
     return
 

@@ -34,8 +34,8 @@ def detect(path: str, detector_class: str | None, verbose: int) -> None:
     using default detector settings with every detector. Path should be a
     path to a JSON event data file or directory containing JSON event data files or folders of JSON event data files.
     """
-    from sentry.performance_issues import performance_detection
-    from sentry.performance_issues.base import PerformanceDetector
+    from sentry.issue_detection import performance_detection
+    from sentry.issue_detection.base import PerformanceDetector
 
     if detector_class:
         detector_classes = [performance_detection.__dict__[detector_class]]
@@ -56,7 +56,7 @@ def detect(path: str, detector_class: str | None, verbose: int) -> None:
             if verbose > 1:
                 click.echo(f"Event ID: {data['event_id']}")
 
-            detectors = [cls(settings, data) for cls in detector_classes]
+            detectors = [cls(settings[cls.settings_key], data) for cls in detector_classes]
 
             for detector in detectors:
                 if verbose > 0:
@@ -105,14 +105,15 @@ def timeit(filename: str, detector_class: str, n: int) -> None:
 
     import timeit
 
-    from sentry.performance_issues import performance_detection
+    from sentry.issue_detection import performance_detection
 
     settings = performance_detection.get_detection_settings()
 
     with open(filename) as file:
         data = json.loads(file.read())
 
-    detector = performance_detection.__dict__[detector_class](settings, data)
+    detector_cls = performance_detection.__dict__[detector_class]
+    detector = detector_cls(settings[detector_cls.settings_key], data)
 
     def detect() -> None:
         performance_detection.run_detector_on_data(detector, data)

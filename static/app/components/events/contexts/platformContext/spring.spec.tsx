@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getSpringContextData,
   type SpringContext,
@@ -38,8 +38,8 @@ describe('SpringContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'spring'}
-        alias={'spring'}
+        type="spring"
+        alias="spring"
         value={{...MOCK_SPRING_CONTEXT}}
       />
     );

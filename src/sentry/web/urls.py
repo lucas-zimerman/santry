@@ -4,7 +4,6 @@ import re
 
 from django.conf import settings
 from django.conf.urls import include
-from django.http import HttpResponse
 from django.urls import URLPattern, URLResolver, re_path
 from django.views.generic import RedirectView
 
@@ -12,6 +11,8 @@ from sentry.api.endpoints.oauth_userinfo import OAuthUserInfoEndpoint
 from sentry.api.endpoints.warmup import WarmupEndpoint
 from sentry.auth.providers.saml2.provider import SAML2AcceptACSView, SAML2MetadataView, SAML2SLSView
 from sentry.charts.endpoints import serve_chartcuterie_config
+from sentry.conf.types.sentry_config import SentryMode
+from sentry.feedback.endpoints.error_page_embed import ErrorPageEmbedView
 from sentry.integrations.web.doc_integration_avatar import DocIntegrationAvatarPhotoView
 from sentry.integrations.web.organization_integration_setup import OrganizationIntegrationSetupView
 from sentry.sentry_apps.web.sentryapp_avatar import SentryAppAvatarPhotoView
@@ -22,6 +23,9 @@ from sentry.users.web.account_identity import AccountIdentityAssociateView
 from sentry.users.web.user_avatar import UserAvatarPhotoView
 from sentry.web import api
 from sentry.web.frontend import csrf_failure, generic
+from sentry.web.frontend.accept_organization_invite_redirect import (
+    AcceptOrganizationInviteRedirectView,
+)
 from sentry.web.frontend.auth_channel_login import AuthChannelLoginView
 from sentry.web.frontend.auth_close import AuthCloseView
 from sentry.web.frontend.auth_login import AuthLoginView
@@ -32,7 +36,6 @@ from sentry.web.frontend.cli import get_cli, get_cli_download_url
 from sentry.web.frontend.disabled_member_view import DisabledMemberView
 from sentry.web.frontend.error_404 import Error404View
 from sentry.web.frontend.error_500 import Error500View
-from sentry.web.frontend.error_page_embed import ErrorPageEmbedView
 from sentry.web.frontend.group_event_json import GroupEventJsonView
 from sentry.web.frontend.group_plugin_action import GroupPluginActionView
 from sentry.web.frontend.group_tag_export import GroupTagExportView
@@ -41,6 +44,8 @@ from sentry.web.frontend.idp_email_verification import AccountConfirmationView
 from sentry.web.frontend.js_sdk_loader import JavaScriptSdkLoader
 from sentry.web.frontend.mailgun_inbound_webhook import MailgunInboundWebhookView
 from sentry.web.frontend.oauth_authorize import OAuthAuthorizeView
+from sentry.web.frontend.oauth_device import OAuthDeviceView
+from sentry.web.frontend.oauth_device_authorization import OAuthDeviceAuthorizationView
 from sentry.web.frontend.oauth_token import OAuthTokenView
 from sentry.web.frontend.organization_auth_settings import OrganizationAuthSettingsView
 from sentry.web.frontend.organization_avatar import OrganizationAvatarPhotoView
@@ -111,6 +116,16 @@ if settings.DEBUG:
         ),
     ]
 
+if settings.SENTRY_MODE != SentryMode.SAAS:
+    # Admin endpoint only available in self-hosted mode
+    urlpatterns += [
+        re_path(
+            r"^manage/",
+            react_page_view,
+            name="sentry-admin-overview",
+        ),
+    ]
+
 urlpatterns += [
     # warmup, used to initialize any connections / pre-load
     # the application so that user initiated requests are faster
@@ -118,11 +133,6 @@ urlpatterns += [
         r"^_warmup/$",
         WarmupEndpoint.as_view(),
         name="sentry-warmup",
-    ),
-    re_path(
-        r"^api/(?P<project_id>[^/]+)/crossdomain\.xml$",
-        api.crossdomain_xml,
-        name="sentry-api-crossdomain-xml",
     ),
     # Frontend client config
     re_path(
@@ -208,6 +218,17 @@ urlpatterns += [
                     r"^userinfo/$",
                     OAuthUserInfoEndpoint.as_view(),
                     name="sentry-api-0-oauth-userinfo",
+                ),
+                # Device Authorization Flow (RFC 8628)
+                re_path(
+                    r"^device/code/$",
+                    OAuthDeviceAuthorizationView.as_view(),
+                    name="sentry-oauth-device-code",
+                ),
+                re_path(
+                    r"^device/$",
+                    OAuthDeviceView.as_view(),
+                    name="sentry-oauth-device",
                 ),
             ]
         ),
@@ -469,12 +490,6 @@ urlpatterns += [
     ),
     # Relocation
     re_path(r"^relocation/", generic_react_page_view, name="sentry-relocation"),
-    # Admin
-    re_path(
-        r"^manage/",
-        react_page_view,
-        name="sentry-admin-overview",
-    ),
     # Admin UI (for local dev)
     re_path(
         r"^_admin/",
@@ -542,7 +557,7 @@ urlpatterns += [
     ),
     re_path(
         r"^accept/(?P<member_id>\d+)/(?P<token>\w+)/$",
-        GenericReactPageView.as_view(auth_required=False),
+        AcceptOrganizationInviteRedirectView.as_view(),
         name="sentry-accept-invite",
     ),
     re_path(
@@ -983,6 +998,12 @@ urlpatterns += [
         react_page_view,
         name="prevent",
     ),
+    # Monitors
+    re_path(
+        r"^monitors/",
+        react_page_view,
+        name="monitors",
+    ),
     # Data Export
     re_path(
         r"^data-export/",
@@ -1084,7 +1105,7 @@ urlpatterns += [
                 re_path(
                     r"^(?P<organization_slug>[^/]+)/projects/(?P<project_id_or_slug>[^/]+)/events/(?P<client_event_id>[^/]+)/$",
                     ProjectEventRedirect.as_view(),
-                    name="sentry-project-event-redirect",
+                    name="sentry-organization-project-event-redirect",
                 ),
                 re_path(
                     r"^(?P<organization_slug>[^/]+)/api-keys/$",
@@ -1251,14 +1272,8 @@ urlpatterns += [
     # See: https://github.com/getsentry/sentry/issues/2195
     re_path(
         r"^favicon\.ico$",
-        lambda r: HttpResponse(status=404),
+        api.not_found,
         name="sentry-favicon-404",
-    ),
-    # crossdomain.xml
-    re_path(
-        r"^crossdomain\.xml$",
-        lambda r: HttpResponse(status=404),
-        name="sentry-crossdomain-404",
     ),
     # plugins
     # XXX(dcramer): preferably we'd be able to use 'integrations' as the URL
@@ -1284,6 +1299,10 @@ urlpatterns += [
                 re_path(
                     r"^slack/",
                     include("sentry.integrations.slack.urls"),
+                ),
+                re_path(
+                    r"^slack-staging/",
+                    include("sentry.integrations.slack.staging.urls"),
                 ),
                 re_path(
                     r"^github/",
@@ -1320,6 +1339,10 @@ urlpatterns += [
                 re_path(
                     r"^discord/",
                     include("sentry.integrations.discord.urls"),
+                ),
+                re_path(
+                    r"^cursor/",
+                    include("sentry.integrations.cursor.urls"),
                 ),
             ]
         ),

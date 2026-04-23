@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 
-from django.http.request import HttpRequest
-
 from sentry.integrations.messaging.metrics import (
     MessagingInteractionEvent,
     MessagingInteractionType,
@@ -28,12 +26,12 @@ map_issue_args = make_type_coercer(
     {
         "issue_id": int,
         "event_id": str,
+        "org_slug": str,
     }
 )
 
 
 def unfurl_issues(
-    request: HttpRequest,
     integration: Integration | RpcIntegration,
     links: list[UnfurlableUrl],
     user: User | RpcUser | None = None,
@@ -43,10 +41,10 @@ def unfurl_issues(
     for a particular issue by the URL of the yet-unfurled links a user included
     in their Slack message.
     """
-    event = MessagingInteractionEvent(
+    with MessagingInteractionEvent(
         MessagingInteractionType.UNFURL_ISSUES, SlackMessagingSpec(), user=user
-    )
-    with event.capture():
+    ).capture() as lifecycle:
+        lifecycle.add_extras({"integration_id": integration.id})
         return _unfurl_issues(integration, links)
 
 
@@ -88,11 +86,11 @@ def _unfurl_issues(
 
 
 issue_link_regex = re.compile(
-    r"^https?\://(?#url_prefix)[^/]+/organizations/(?#organization_slug)[^/]+/issues/(?P<issue_id>\d+)(?:/events/(?P<event_id>\w+))?"
+    r"^https?\://(?#url_prefix)[^/]+/organizations/(?P<org_slug>[^/]+)/issues/(?P<issue_id>\d+)(?:/events/(?P<event_id>\w+))?"
 )
 
 customer_domain_issue_link_regex = re.compile(
-    r"^https?\://(?#url_prefix)[^/]+/issues/(?P<issue_id>\d+)(?:/events/(?P<event_id>\w+))?"
+    r"^https?\://(?P<org_slug>[^.]+?)\.(?#url_prefix)[^/]+/issues/(?P<issue_id>\d+)(?:/events/(?P<event_id>\w+))?"
 )
 
 issues_handler = Handler(

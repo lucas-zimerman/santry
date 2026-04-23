@@ -11,7 +11,7 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.models.release import Release, follows_semver_versioning_scheme
@@ -19,7 +19,7 @@ from sentry.models.releases.constants import DB_VERSION_LENGTH
 from sentry.utils import metrics
 
 
-@region_silo_model
+@cell_silo_model
 class GroupResolution(Model):
     """
     Describes when a group was marked as resolved.
@@ -42,6 +42,9 @@ class GroupResolution(Model):
     # This release field represents the latest release version associated with a group when the
     # user chooses "resolve in next release", and is set for both semver and date ordered releases
     current_release_version = models.CharField(max_length=DB_VERSION_LENGTH, null=True, blank=True)
+    # This release field represents the future release version associated with a group when the
+    # user chooses "resolve in future release"
+    future_release_version = models.CharField(max_length=DB_VERSION_LENGTH, null=True, blank=True)
     type = BoundedPositiveIntegerField(
         choices=((Type.in_next_release, "in_next_release"), (Type.in_release, "in_release")),
         null=True,
@@ -56,6 +59,12 @@ class GroupResolution(Model):
     class Meta:
         db_table = "sentry_groupresolution"
         app_label = "sentry"
+        indexes = [
+            models.Index(
+                fields=["type", "status", "future_release_version"],
+                name="groupres_future_release_idx",
+            ),
+        ]
 
     __repr__ = sane_repr("group_id", "release_id")
 
@@ -123,7 +132,19 @@ class GroupResolution(Model):
                     release_raw = parse_release(release.version, json_loads=orjson.loads).get(
                         "version_raw"
                     )
-                    return compare_version_relay(current_release_raw, release_raw) >= 0
+                    if compare_version_relay(current_release_raw, release_raw) >= 0:
+                        return True
+
+                    # If current_release_version was set under different
+                    # follows_semver conditions (e.g. date ordering when
+                    # follows_semver was False), it may be stale. Fall back to
+                    # comparing the event release against the resolved-in
+                    # release: if the event is on an older version than the fix,
+                    # the resolution still holds.
+                    res_release_raw = parse_release(
+                        res_release_version, json_loads=orjson.loads
+                    ).get("version_raw")
+                    return compare_version_relay(res_release_raw, release_raw) == 1
                 except RelayError:
                     ...
             else:

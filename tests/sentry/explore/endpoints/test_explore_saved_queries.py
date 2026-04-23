@@ -3,6 +3,7 @@ from rest_framework.exceptions import ErrorDetail
 
 from sentry.explore.models import (
     ExploreSavedQuery,
+    ExploreSavedQueryDataset,
     ExploreSavedQueryLastVisited,
     ExploreSavedQueryStarred,
 )
@@ -57,6 +58,7 @@ class ExploreSavedQueriesTest(APITestCase):
         assert "range" not in response.data[0]
         assert response.data[0]["query"] == [
             {
+                "caseInsensitive": False,
                 "fields": [
                     "id",
                     "span.op",
@@ -86,7 +88,7 @@ class ExploreSavedQueriesTest(APITestCase):
 
         # User saved query
         assert response.data[3]["name"] == "Test query"
-        assert response.data[3]["projects"] == self.project_ids
+        assert sorted(response.data[3]["projects"]) == sorted(self.project_ids)
         assert response.data[3]["range"] == "24h"
         assert response.data[3]["query"] == [{"fields": ["span.op"], "mode": "samples"}]
         assert "createdBy" in response.data[3]
@@ -617,6 +619,7 @@ class ExploreSavedQueriesTest(APITestCase):
         assert data["environment"] == ["dev"]
         assert data["query"] == [
             {
+                "caseInsensitive": False,
                 "fields": ["span.op", "count(span.duration)"],
                 "mode": "samples",
                 "query": "span.op:pageload",
@@ -1076,3 +1079,442 @@ class ExploreSavedQueriesTest(APITestCase):
                 },
             },
         }
+
+    def test_get_with_migration_feature_flag(self) -> None:
+        self.features_with_migration = {"organizations:expose-migrated-discover-queries": True}
+        self.features_with_migration.update(self.features)
+        model = ExploreSavedQuery.objects.create(
+            organization=self.org,
+            created_by_id=self.user.id,
+            date_added=before_now(),
+            # sort by name so it shows up last
+            name="Z - Segment span query",
+            query={"range": "24h", "query": [{"fields": ["span.op"], "mode": "samples"}]},
+            dataset=ExploreSavedQueryDataset.SEGMENT_SPANS,
+        )
+
+        ExploreSavedQueryLastVisited.objects.create(
+            organization=self.org,
+            user_id=self.user.id,
+            explore_saved_query=model,
+            last_visited=before_now(),
+        )
+
+        with self.feature(self.features_with_migration):
+            response_with_flag = self.client.get(self.url, data={"sortBy": ["name"]})
+
+        assert response_with_flag.status_code == 200, response_with_flag.content
+        assert len(response_with_flag.data) == 6
+
+        assert response_with_flag.data[5]["name"] == "Z - Segment span query"
+        assert response_with_flag.data[5]["dataset"] == "segment_spans"
+
+        with self.feature(self.features):
+            response_without_flag = self.client.get(self.url)
+
+        assert response_without_flag.status_code == 200, response_without_flag.content
+        assert len(response_without_flag.data) == 5
+
+    def test_post_metrics_dataset_with_metric_field(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Metrics query with metric field",
+                    "projects": self.project_ids,
+                    "dataset": "metrics",
+                    "query": [
+                        {
+                            "fields": ["count()"],
+                            "mode": "aggregate",
+                            "metric": {
+                                "name": "sentry.alert_endpoint.executed",
+                                "type": "counter",
+                            },
+                        }
+                    ],
+                    "range": "24h",
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["dataset"] == "metrics"
+        assert data["query"] == [
+            {
+                "caseInsensitive": False,
+                "fields": ["count()"],
+                "mode": "aggregate",
+                "metric": {
+                    "name": "sentry.alert_endpoint.executed",
+                    "type": "counter",
+                },
+            }
+        ]
+
+    def test_post_metrics_dataset_with_metric_field_and_unit(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Metrics query with unit",
+                    "projects": self.project_ids,
+                    "dataset": "metrics",
+                    "query": [
+                        {
+                            "fields": ["avg()"],
+                            "mode": "aggregate",
+                            "metric": {
+                                "name": "sentry.response_time",
+                                "type": "gauge",
+                                "unit": "millisecond",
+                            },
+                        }
+                    ],
+                    "range": "1h",
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["dataset"] == "metrics"
+        assert data["query"] == [
+            {
+                "caseInsensitive": False,
+                "fields": ["avg()"],
+                "mode": "aggregate",
+                "metric": {
+                    "name": "sentry.response_time",
+                    "type": "gauge",
+                    "unit": "millisecond",
+                },
+            }
+        ]
+
+    def test_get_metrics_dataset_with_metric_field(self) -> None:
+        query = {
+            "range": "24h",
+            "query": [
+                {
+                    "fields": ["count()"],
+                    "mode": "aggregate",
+                    "metric": {
+                        "name": "sentry.alert_endpoint.executed",
+                        "type": "counter",
+                    },
+                }
+            ],
+        }
+
+        model = ExploreSavedQuery.objects.create(
+            organization=self.org,
+            created_by_id=self.user.id,
+            name="Test metrics query",
+            query=query,
+            dataset=ExploreSavedQueryDataset.METRICS,
+        )
+        model.set_projects(self.project_ids)
+
+        with self.feature(self.features):
+            response = self.client.get(self.url)
+
+        assert response.status_code == 200, response.content
+
+        test_query = None
+        for item in response.data:
+            if item["name"] == "Test metrics query":
+                test_query = item
+                break
+
+        assert test_query is not None
+        assert test_query["dataset"] == "metrics"
+        assert test_query["query"][0]["metric"] == {
+            "name": "sentry.alert_endpoint.executed",
+            "type": "counter",
+        }
+
+    def test_post_non_metrics_dataset_rejects_metric_field(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Spans query with invalid metric",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                            "metric": {
+                                "name": "sentry.alert_endpoint.executed",
+                                "type": "counter",
+                            },
+                        }
+                    ],
+                    "range": "24h",
+                },
+            )
+        assert response.status_code == 400, response.content
+        assert "Metric field is only allowed for metrics dataset" in str(response.data)
+
+    def test_post_metrics_dataset_requires_metric_field(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Metrics query without metric field",
+                    "projects": self.project_ids,
+                    "dataset": "metrics",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                        }
+                    ],
+                    "range": "24h",
+                },
+            )
+        assert response.status_code == 400, response.content
+        assert "Metric field is required for non-equation queries on the metrics dataset" in str(
+            response.data
+        )
+
+    def test_save_with_start_and_end_time(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Start and end time query",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "start": "2025-11-12T23:00:00.000Z",
+                    "end": "2025-11-20T22:59:59.000Z",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                        }
+                    ],
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["start"] is not None
+        assert data["end"] is not None
+
+    def test_save_with_case_insensitive(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Case insensitive query",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                            "caseInsensitive": 1,
+                        }
+                    ],
+                    "range": "24h",
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["query"][0]["caseInsensitive"] is True
+
+    def test_save_with_cross_events(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Cross event query",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                        }
+                    ],
+                    "range": "24h",
+                    "crossEvents": [
+                        {"query": "span.op:db", "type": "spans"},
+                        {"query": "severity:error", "type": "logs"},
+                    ],
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["crossEvents"] == [
+            {"query": "span.op:db", "type": "spans"},
+            {"query": "severity:error", "type": "logs"},
+        ]
+
+        saved = ExploreSavedQuery.objects.get(id=data["id"])
+        assert saved.query["crossEvents"] == [
+            {"query": "span.op:db", "type": "spans"},
+            {"query": "severity:error", "type": "logs"},
+        ]
+
+    def test_save_with_cross_events_too_many(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Too many cross events",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                        }
+                    ],
+                    "range": "24h",
+                    "crossEvents": [
+                        {"query": "a", "type": "spans"},
+                        {"query": "b", "type": "logs"},
+                        {"query": "c", "type": "spans"},
+                    ],
+                },
+            )
+        assert response.status_code == 400, response.content
+
+    def test_save_with_cross_events_invalid_type(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Invalid type",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                        }
+                    ],
+                    "range": "24h",
+                    "crossEvents": [
+                        {"query": "foo", "type": "errors"},
+                    ],
+                },
+            )
+        assert response.status_code == 400, response.content
+
+    def test_save_with_cross_events_range_exceeds_seven_days(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Too long range",
+                    "projects": self.project_ids,
+                    "dataset": "spans",
+                    "query": [
+                        {
+                            "fields": ["span.op"],
+                            "mode": "samples",
+                        }
+                    ],
+                    "range": "14d",
+                    "crossEvents": [
+                        {"query": "foo", "type": "spans"},
+                    ],
+                },
+            )
+        assert response.status_code == 400, response.content
+        assert "Cross event queries are limited to 7 days." in str(response.content)
+
+    def test_save_replay_query(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Replay dataset",
+                    "projects": self.project_ids,
+                    "dataset": "replays",
+                    "query": [
+                        {
+                            "query": "user.email:*@sentry.io",
+                            "mode": "samples",
+                        }
+                    ],
+                    "range": "48h",
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["query"][0]["query"] == "user.email:*@sentry.io"
+        assert data["query"][0]["mode"] == "samples"
+
+    def test_malformed_query_missing_query_field_in_get(self) -> None:
+        """VULN-950: A saved query with no 'query' content returns a response
+        missing the 'query' key, which crashes the frontend All Queries page."""
+        malformed = ExploreSavedQuery.objects.create(
+            organization=self.org,
+            created_by_id=self.user.id,
+            name="malformed",
+            query={"range": "24h"},
+        )
+        malformed.set_projects(self.project_ids)
+
+        with self.feature(self.features):
+            url = reverse(
+                "sentry-api-0-explore-saved-query-detail",
+                args=[self.org.slug, malformed.id],
+            )
+            response = self.client.get(url)
+
+        assert response.status_code == 200
+        # The response is missing the 'query' key entirely — this is what
+        # crashes the frontend, which expects it to be an array.
+        assert "query" not in response.data
+
+    def test_post_without_query_is_rejected(self) -> None:
+        """VULN-950: POST with no query field should be rejected."""
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "crash",
+                    "projects": self.project_ids,
+                    "range": "24h",
+                },
+            )
+        assert response.status_code == 400
+
+    def test_post_with_empty_query_is_rejected(self) -> None:
+        """VULN-950: POST with empty query list should also be rejected."""
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "crash",
+                    "projects": self.project_ids,
+                    "query": [],
+                    "range": "24h",
+                },
+            )
+        assert response.status_code == 400
+
+    def test_post_with_equation_is_accepted(self) -> None:
+        with self.feature(self.features):
+            response = self.client.post(
+                self.url,
+                {
+                    "name": "Equation query",
+                    "projects": self.project_ids,
+                    "dataset": "metrics",
+                    "query": [
+                        {
+                            "aggregateField": [{"yAxes": ["equation|A + B"], "chartType": 1}],
+                            "mode": "samples",
+                            "fields": ["A", "B"],
+                            "orderby": "-timestamp",
+                        },
+                    ],
+                },
+            )
+        assert response.status_code == 201, response.content
+        data = response.data
+        assert data["query"][0].get("metric") is None

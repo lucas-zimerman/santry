@@ -1,17 +1,14 @@
+import {useQuery} from '@tanstack/react-query';
 import {OrganizationFixture} from 'sentry-fixture/organization';
 import {ProjectFixture} from 'sentry-fixture/project';
 
 import {initializeOrg} from 'sentry-test/initializeOrg';
-import {makeTestQueryClient} from 'sentry-test/queryClient';
-import {act, renderHook, waitFor} from 'sentry-test/reactTestingLibrary';
+import {act, renderHookWithProviders, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
-import type {Organization} from 'sentry/types/organization';
-import {QueryClientProvider} from 'sentry/utils/queryClient';
-import {OrganizationContext} from 'sentry/views/organizationContext';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 
-import {useTraces, type TraceResult} from './useTraces';
+import {useTracesApiOptions, type TraceResult} from './useTraces';
 
 function createTraceResult(trace?: Partial<TraceResult>): TraceResult {
   return {
@@ -29,16 +26,6 @@ function createTraceResult(trace?: Partial<TraceResult>): TraceResult {
     start: 123,
     trace: '00000000000000000000000000000000',
     ...trace,
-  };
-}
-
-function createWrapper(organization: Organization) {
-  return function ({children}: {children?: React.ReactNode}) {
-    return (
-      <QueryClientProvider client={makeTestQueryClient()}>
-        <OrganizationContext value={organization}>{children}</OrganizationContext>
-      </QueryClientProvider>
-    );
   };
 }
 
@@ -62,19 +49,16 @@ describe('useTraces', () => {
     act(() => {
       ProjectsStore.loadInitialData([project]);
       PageFiltersStore.init();
-      PageFiltersStore.onInitializeUrlState(
-        {
-          projects: [project].map(p => parseInt(p.id, 10)),
-          environments: [],
-          datetime: {
-            period: '3d',
-            start: null,
-            end: null,
-            utc: null,
-          },
+      PageFiltersStore.onInitializeUrlState({
+        projects: [project].map(p => parseInt(p.id, 10)),
+        environments: [],
+        datetime: {
+          period: '3d',
+          start: null,
+          end: null,
+          utc: null,
         },
-        new Set()
-      );
+      });
     });
   });
 
@@ -100,9 +84,11 @@ describe('useTraces', () => {
       ],
     });
 
-    const {result} = renderHook(useTraces, {
+    const useTracesQuery = (...params: Parameters<typeof useTracesApiOptions>) =>
+      useQuery(useTracesApiOptions(...params));
+
+    const {result} = renderHookWithProviders(useTracesQuery, {
       ...context,
-      wrapper: createWrapper(organization),
       initialProps: {
         datetime: {
           end: null,
@@ -115,7 +101,7 @@ describe('useTraces', () => {
       },
     });
 
-    await waitFor(() => result.current.isSuccess);
+    await waitFor(() => expect(result.current.data).toBeDefined());
     expect(result.current.data).toEqual(body);
   });
 });

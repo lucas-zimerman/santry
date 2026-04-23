@@ -1,11 +1,10 @@
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {
-  setApiQueryData,
   useApiQuery,
   type ApiQueryKey,
-  type QueryClient,
   type UseApiQueryOptions,
 } from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import type {UptimeRule} from 'sentry/views/alerts/rules/uptime/types';
 
 interface UseUptimeRuleOptions {
@@ -20,26 +19,16 @@ export function useUptimeRule(
   const organization = useOrganization();
 
   const queryKey: ApiQueryKey = [
-    `/projects/${organization.slug}/${projectSlug}/uptime/${detectorId}/`,
+    getApiUrl(
+      '/projects/$organizationIdOrSlug/$projectIdOrSlug/uptime/$uptimeDetectorId/',
+      {
+        path: {
+          organizationIdOrSlug: organization.slug,
+          projectIdOrSlug: projectSlug,
+          uptimeDetectorId: detectorId,
+        },
+      }
+    ),
   ];
   return useApiQuery<UptimeRule>(queryKey, {staleTime: 0, ...options});
-}
-
-interface SetUptimeRuleDataOptions {
-  organizationSlug: string;
-  projectSlug: string;
-  queryClient: QueryClient;
-  uptimeRule: UptimeRule;
-}
-
-export function setUptimeRuleData({
-  queryClient,
-  organizationSlug,
-  projectSlug,
-  uptimeRule,
-}: SetUptimeRuleDataOptions) {
-  const queryKey: ApiQueryKey = [
-    `/projects/${organizationSlug}/${projectSlug}/uptime/${uptimeRule.id}/`,
-  ];
-  setApiQueryData(queryClient, queryKey, uptimeRule);
 }

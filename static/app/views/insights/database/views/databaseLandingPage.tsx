@@ -1,16 +1,19 @@
 import React from 'react';
 
-import type {AlertProps} from 'sentry/components/core/alert';
-import {Alert} from 'sentry/components/core/alert';
+import type {AlertProps} from '@sentry/scraps/alert';
+import {Alert} from '@sentry/scraps/alert';
+
 import * as Layout from 'sentry/components/layouts/thirds';
-import SearchBar from 'sentry/components/searchBar';
+import {SearchBar} from 'sentry/components/searchBar';
 import {t} from 'sentry/locale';
+import {DataCategory} from 'sentry/types/core';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {decodeScalar, decodeSorts} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import {useLocation} from 'sentry/utils/useLocation';
+import {useMaxPickableDays} from 'sentry/utils/useMaxPickableDays';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {ModuleFeature} from 'sentry/views/insights/common/components/moduleFeature';
 import * as ModuleLayout from 'sentry/views/insights/common/components/moduleLayout';
 import {ModulePageProviders} from 'sentry/views/insights/common/components/modulePageProviders';
@@ -23,6 +26,7 @@ import {useDatabaseLandingThroughputQuery} from 'sentry/views/insights/common/co
 import {useSpans} from 'sentry/views/insights/common/queries/useDiscover';
 import {useHasFirstSpan} from 'sentry/views/insights/common/queries/useHasFirstSpan';
 import {useOnboardingProject} from 'sentry/views/insights/common/queries/useOnboardingProject';
+import {useHasPlatformizedInsights} from 'sentry/views/insights/common/utils/useHasPlatformizedInsights';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
 import {DatabasePageFilters} from 'sentry/views/insights/database/components/databasePageFilters';
 import {NoDataMessage} from 'sentry/views/insights/database/components/noDataMessage';
@@ -31,11 +35,8 @@ import {
   QueriesTable,
 } from 'sentry/views/insights/database/components/tables/queriesTable';
 import {useSystemSelectorOptions} from 'sentry/views/insights/database/components/useSystemSelectorOptions';
-import {
-  BASE_FILTERS,
-  DEFAULT_DURATION_AGGREGATE,
-} from 'sentry/views/insights/database/settings';
-import {BackendHeader} from 'sentry/views/insights/pages/backend/backendPageHeader';
+import {BASE_FILTERS} from 'sentry/views/insights/database/settings';
+import {PlatformizedQueriesOverview} from 'sentry/views/insights/database/views/platformizedOverview';
 import {ModuleName, SpanFields} from 'sentry/views/insights/types';
 
 export function DatabaseLandingPage() {
@@ -46,7 +47,6 @@ export function DatabaseLandingPage() {
   const hasModuleData = useHasFirstSpan(moduleName);
   const {search, enabled} = useDatabaseLandingChartFilter();
 
-  const selectedAggregate = DEFAULT_DURATION_AGGREGATE;
   const spanDescription =
     decodeScalar(location.query?.['sentry.normalized_description'], '') ||
     decodeScalar(location.query?.['span.description'], '');
@@ -124,17 +124,15 @@ export function DatabaseLandingPage() {
 
   const isAnyCriticalDataAvailable =
     (queryListResponse.data ?? []).length > 0 ||
-    durationData[`${selectedAggregate}(span.self_time)`].data?.some(
-      ({value}) => value > 0
-    ) ||
-    throughputData['epm()'].data?.some(({value}) => value > 0);
+    [...(durationData?.timeSeries ?? []), ...(throughputData?.timeSeries ?? [])]
+      .flatMap(timeSeries => timeSeries.values)
+      .some(({value}) => value && value > 0);
 
   return (
     <React.Fragment>
-      <BackendHeader module={ModuleName.DB} />
       <ModuleFeature moduleName={ModuleName.DB}>
         <Layout.Body>
-          <Layout.Main fullWidth>
+          <Layout.Main width="full">
             <ModuleLayout.Layout>
               {hasModuleData && !onboardingProject && !isCriticalDataLoading && (
                 <NoDataMessage
@@ -192,7 +190,7 @@ function AlertBanner(props: Omit<AlertProps, 'type' | 'showIcon'>) {
   return (
     <ModuleLayout.Full>
       <Alert.Container>
-        <Alert {...props} type="info" showIcon />
+        <Alert {...props} variant="info" showIcon />
       </Alert.Container>
     </ModuleLayout.Full>
   );
@@ -201,8 +199,20 @@ function AlertBanner(props: Omit<AlertProps, 'type' | 'showIcon'>) {
 const LIMIT = 25;
 
 function PageWithProviders() {
+  const maxPickableDays = useMaxPickableDays({
+    dataCategories: [DataCategory.SPANS],
+  });
+
+  const hasPlatformizedInsights = useHasPlatformizedInsights();
+  if (hasPlatformizedInsights) {
+    return <PlatformizedQueriesOverview />;
+  }
   return (
-    <ModulePageProviders moduleName="db" analyticEventName="insight.page_loads.db">
+    <ModulePageProviders
+      moduleName="db"
+      analyticEventName="insight.page_loads.db"
+      maxPickableDays={maxPickableDays.maxPickableDays}
+    >
       <DatabaseLandingPage />
     </ModulePageProviders>
   );

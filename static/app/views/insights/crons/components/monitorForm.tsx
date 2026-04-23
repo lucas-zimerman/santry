@@ -3,32 +3,32 @@ import {css, useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import {Observer} from 'mobx-react-lite';
 
-import {Alert} from 'sentry/components/core/alert';
-import {AlertLink} from 'sentry/components/core/alert/alertLink';
-import {ExternalLink} from 'sentry/components/core/link';
-import {Text} from 'sentry/components/core/text';
+import {Alert, AlertLink} from '@sentry/scraps/alert';
+import {ExternalLink} from '@sentry/scraps/link';
+import {Text} from '@sentry/scraps/text';
+
 import {FieldWrapper} from 'sentry/components/forms/fieldGroup/fieldWrapper';
-import NumberField from 'sentry/components/forms/fields/numberField';
-import SelectField from 'sentry/components/forms/fields/selectField';
-import SentryMemberTeamSelectorField from 'sentry/components/forms/fields/sentryMemberTeamSelectorField';
-import SentryProjectSelectorField from 'sentry/components/forms/fields/sentryProjectSelectorField';
-import TextField from 'sentry/components/forms/fields/textField';
+import {NumberField} from 'sentry/components/forms/fields/numberField';
+import {SelectField} from 'sentry/components/forms/fields/selectField';
+import {SentryMemberTeamSelectorField} from 'sentry/components/forms/fields/sentryMemberTeamSelectorField';
+import {SentryProjectSelectorField} from 'sentry/components/forms/fields/sentryProjectSelectorField';
+import {TextField} from 'sentry/components/forms/fields/textField';
 import type {FormProps} from 'sentry/components/forms/form';
-import Form from 'sentry/components/forms/form';
-import FormModel from 'sentry/components/forms/model';
-import List from 'sentry/components/list';
-import ListItem from 'sentry/components/list/listItem';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
+import {Form} from 'sentry/components/forms/form';
+import {FormModel} from 'sentry/components/forms/model';
+import {useFormEagerValidation} from 'sentry/components/forms/useFormEagerValidation';
+import {List} from 'sentry/components/list';
+import {ListItem} from 'sentry/components/list/listItem';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
 import {timezoneOptions} from 'sentry/data/timezones';
 import {t, tct, tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {SelectValue} from 'sentry/types/core';
 import {isActiveSuperuser} from 'sentry/utils/isActiveSuperuser';
-import slugify from 'sentry/utils/slugify';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
+import {slugify} from 'sentry/utils/slugify';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
 import {makeAlertsPathname} from 'sentry/views/alerts/pathnames';
 import type {
   IntervalConfig,
@@ -169,7 +169,7 @@ export function mapMonitorFormErrors(responseJson?: any) {
   return {...responseRest, ...configErrors};
 }
 
-function MonitorForm({
+export function MonitorForm({
   monitor,
   submitLabel,
   apiEndpoint,
@@ -181,9 +181,10 @@ function MonitorForm({
   const form = useRef(
     new FormModel({
       transformData: transformMonitorFormData,
-      mapFormErrors: mapMonitorFormErrors,
     })
   );
+  const {onFieldChange} = useFormEagerValidation(form.current);
+
   const {projects} = useProjects();
   const {selection} = usePageFilters();
 
@@ -238,6 +239,7 @@ function MonitorForm({
       apiEndpoint={apiEndpoint}
       apiMethod={apiMethod}
       model={form.current}
+      onFieldChange={onFieldChange}
       initialData={
         monitor
           ? {
@@ -255,11 +257,12 @@ function MonitorForm({
       }
       onSubmitSuccess={onSubmitSuccess}
       submitLabel={submitLabel}
+      mapFormErrors={mapMonitorFormErrors}
     >
       <StyledList symbol="colored-numeric">
         {monitor?.isUpserting && (
           <Alert.Container>
-            <Alert type="warning">
+            <Alert variant="warning">
               {t(
                 'This monitor is managed in code and updates automatically with each check-in. Changes made here may be overwritten!'
               )}
@@ -320,20 +323,12 @@ function MonitorForm({
           })}
         </ListItemSubText>
         <InputGroup noPadding>
-          {monitor !== undefined && (
-            <Alert type="info" showIcon={false}>
-              {t(
-                'Any changes you make to the execution schedule will only be applied after the next expected check-in.'
-              )}
-            </Alert>
-          )}
           <SelectField
             name="config.scheduleType"
             label={t('Schedule Type')}
             hideLabel
             options={SCHEDULE_OPTIONS}
             defaultValue={ScheduleType.CRONTAB}
-            orientInline
             required
             stacked
             inline={false}
@@ -358,9 +353,14 @@ function MonitorForm({
                       hideLabel
                       placeholder="* * * * *"
                       defaultValue={DEFAULT_CRONTAB}
+                      transformInput={(value: string) =>
+                        // Remove non-ASCII characters from crontab schedule
+                        // eslint-disable-next-line no-control-regex
+                        value.replace(/[^\x00-\x7F]/g, '')
+                      }
                       css={css`
                         input {
-                          font-family: ${theme.text.familyMono};
+                          font-family: ${theme.font.family.mono};
                         }
                       `}
                       required
@@ -492,7 +492,6 @@ function MonitorForm({
                 name="owner"
                 label={t('Owner')}
                 help={t('Automatically assign issues to a team or user.')}
-                menuPlacement="auto"
               />
             </PanelBody>
           </Panel>
@@ -504,7 +503,7 @@ function MonitorForm({
         <InputGroup>
           {monitor?.config.alert_rule_id && (
             <AlertLink
-              type="muted"
+              variant="muted"
               to={makeAlertsPathname({
                 path: `/rules/${monitor.project.slug}/${monitor.config.alert_rule_id}/`,
                 organization,
@@ -527,7 +526,6 @@ function MonitorForm({
                       name="alertRule.targets"
                       memberOfProjectSlugs={projectSlug ? [projectSlug] : undefined}
                       multiple
-                      menuPlacement="auto"
                     />
                   );
                 }}
@@ -547,7 +545,6 @@ function MonitorForm({
                       name="alertRule.environment"
                       options={alertRuleEnvs}
                       disabled={disabled}
-                      menuPlacement="auto"
                       defaultValue=""
                       disabledReason={t(
                         'Please select which teams or members to notify first.'
@@ -564,51 +561,49 @@ function MonitorForm({
   );
 }
 
-export default MonitorForm;
-
 const StyledList = styled(List)`
   width: 800px;
 `;
 
 const StyledListItem = styled(ListItem)`
-  font-size: ${p => p.theme.fontSize.xl};
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-size: ${p => p.theme.font.size.xl};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   line-height: 1.3;
 `;
 
 const LabelText = styled(Text)`
-  font-weight: ${p => p.theme.fontWeight.bold};
-  color: ${p => p.theme.subText};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const ListItemSubText = styled(Text)`
-  padding-left: ${space(4)};
-  color: ${p => p.theme.subText};
+  padding-left: ${p => p.theme.space['3xl']};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const InputGroup = styled('div')<{noPadding?: boolean}>`
-  padding-left: ${space(4)};
-  margin-top: ${space(1)};
-  margin-bottom: ${space(4)};
+  padding-left: ${p => p.theme.space['3xl']};
+  margin-top: ${p => p.theme.space.md};
+  margin-bottom: ${p => p.theme.space['3xl']};
   display: flex;
   flex-direction: column;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
 
   ${FieldWrapper} {
-    ${p => p.noPadding && `padding: 0;`};
+    ${p => p.noPadding && 'padding: 0;'};
   }
 `;
 
 const MultiColumnInput = styled('div')<{columns?: string}>`
   display: grid;
   align-items: center;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   grid-template-columns: ${p => p.columns};
 `;
 
 const CronstrueText = styled(LabelText)`
-  font-weight: ${p => p.theme.fontWeight.normal};
-  font-size: ${p => p.theme.fontSize.xs};
-  font-family: ${p => p.theme.text.familyMono};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
+  font-size: ${p => p.theme.font.size.xs};
+  font-family: ${p => p.theme.font.family.mono};
   grid-column: auto / span 2;
 `;

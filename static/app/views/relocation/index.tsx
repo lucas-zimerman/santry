@@ -1,29 +1,27 @@
+import {Alert} from '@sentry/scraps/alert';
+import {Stack} from '@sentry/scraps/layout';
+
 import Feature from 'sentry/components/acl/feature';
-import {Alert} from 'sentry/components/core/alert';
-import * as Layout from 'sentry/components/layouts/thirds';
 import {t} from 'sentry/locale';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
 
-import RelocationOnboarding from './relocation';
+import {RelocationOnboarding} from './relocation';
 
-type Props = RouteComponentProps<{step: string}>;
-
-export default function RelocationOnboardingContainer(props: Props) {
+export default function RelocationOnboardingContainer() {
   return (
     <Feature
       features={['relocation:enabled']}
       organizationAllowNull
       renderDisabled={() => (
-        <Layout.Page withPadding>
+        <Stack flex={1} padding="2xl 3xl">
           <Alert.Container>
-            <Alert type="warning" showIcon={false}>
+            <Alert variant="warning" showIcon={false}>
               {t("You don't have access to this feature")}
             </Alert>
           </Alert.Container>
-        </Layout.Page>
+        </Stack>
       )}
     >
-      <RelocationOnboarding {...props} />
+      <RelocationOnboarding />
     </Feature>
   );
 }

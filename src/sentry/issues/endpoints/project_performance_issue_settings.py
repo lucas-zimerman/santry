@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Any
 
 from rest_framework import serializers, status
 from rest_framework.request import Request
@@ -7,10 +8,17 @@ from rest_framework.response import Response
 from sentry import audit_log, features, projectoptions
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectSettingPermission
 from sentry.auth.superuser import superuser_has_permission
+from sentry.issue_detection.performance_detection import (
+    SETTINGS_PROJECT_OPTION_KEY,
+    get_merged_settings,
+    reset_performance_settings,
+    update_performance_settings,
+)
 from sentry.issues.grouptype import (
+    AIDetectedGeneralGroupType,
     GroupType,
     PerformanceConsecutiveDBQueriesGroupType,
     PerformanceConsecutiveHTTPQueriesGroupType,
@@ -26,13 +34,13 @@ from sentry.issues.grouptype import (
     PerformanceUncompressedAssetsGroupType,
     ProfileFunctionRegressionType,
     QueryInjectionVulnerabilityGroupType,
+    WebVitalsGroup,
 )
-from sentry.performance_issues.performance_detection import get_merged_settings
+from sentry.models.project import Project
 
 MAX_VALUE = 2147483647
 TEN_SECONDS = 10000  # ten seconds in milliseconds
 TEN_MB = 10000000  # ten MB in bytes
-SETTINGS_PROJECT_OPTION_KEY = "sentry:performance_issue_settings"
 
 
 class InternalProjectOptions(Enum):
@@ -57,6 +65,7 @@ class ConfigurableThresholds(Enum):
     UNCOMPRESSED_ASSET_SIZE = "uncompressed_asset_size_threshold"
     LARGE_HTTP_PAYLOAD = "large_http_payload_detection_enabled"
     LARGE_HTTP_PAYLOAD_SIZE = "large_http_payload_size_threshold"
+    LARGE_HTTP_PAYLOAD_FILTERED_PATHS = "large_http_payload_filtered_paths"
     DB_ON_MAIN_THREAD = "db_on_main_thread_detection_enabled"
     DB_ON_MAIN_THREAD_DURATION = "db_on_main_thread_duration_threshold"
     FILE_IO_MAIN_THREAD = "file_io_on_main_thread_detection_enabled"
@@ -75,6 +84,15 @@ class ConfigurableThresholds(Enum):
     HTTP_OVERHEAD_REQUEST_DELAY = "http_request_delay_threshold"
     DB_QUERY_INJECTION = "db_query_injection_detection_enabled"
     SQL_INJECTION_QUERY_VALUE_LENGTH = "sql_injection_query_value_length_threshold"
+    WEB_VITALS = "web_vitals_detection_enabled"
+    WEB_VITALS_COUNT = "web_vitals_count"
+    AI_ISSUE_DETECTION = "ai_issue_detection_enabled"
+    AI_DETECTED_HTTP = "ai_detected_http_enabled"
+    AI_DETECTED_DB = "ai_detected_db_enabled"
+    AI_DETECTED_RUNTIME_PERFORMANCE = "ai_detected_runtime_performance_enabled"
+    AI_DETECTED_SECURITY = "ai_detected_security_enabled"
+    AI_DETECTED_CODE_HEALTH = "ai_detected_code_health_enabled"
+    AI_DETECTED_GENERAL = "ai_detected_general_enabled"
 
 
 project_settings_to_group_map: dict[str, type[GroupType]] = {
@@ -92,6 +110,8 @@ project_settings_to_group_map: dict[str, type[GroupType]] = {
     InternalProjectOptions.TRANSACTION_DURATION_REGRESSION.value: PerformanceP95EndpointRegressionGroupType,
     InternalProjectOptions.FUNCTION_DURATION_REGRESSION.value: ProfileFunctionRegressionType,
     ConfigurableThresholds.DB_QUERY_INJECTION.value: QueryInjectionVulnerabilityGroupType,
+    ConfigurableThresholds.WEB_VITALS.value: WebVitalsGroup,
+    ConfigurableThresholds.AI_ISSUE_DETECTION.value: AIDetectedGeneralGroupType,
 }
 """
 A mapping of the management settings to the group type that the detector spawns.
@@ -103,6 +123,7 @@ thresholds_to_manage_map: dict[str, str] = {
     ConfigurableThresholds.UNCOMPRESSED_ASSET_DURATION.value: ConfigurableThresholds.UNCOMPRESSED_ASSET.value,
     ConfigurableThresholds.UNCOMPRESSED_ASSET_SIZE.value: ConfigurableThresholds.UNCOMPRESSED_ASSET.value,
     ConfigurableThresholds.LARGE_HTTP_PAYLOAD_SIZE.value: ConfigurableThresholds.LARGE_HTTP_PAYLOAD.value,
+    ConfigurableThresholds.LARGE_HTTP_PAYLOAD_FILTERED_PATHS.value: ConfigurableThresholds.LARGE_HTTP_PAYLOAD.value,
     ConfigurableThresholds.DB_ON_MAIN_THREAD_DURATION.value: ConfigurableThresholds.DB_ON_MAIN_THREAD.value,
     ConfigurableThresholds.FILE_IO_MAIN_THREAD_DURATION.value: ConfigurableThresholds.FILE_IO_MAIN_THREAD.value,
     ConfigurableThresholds.CONSECUTIVE_DB_QUERIES_MIN_TIME_SAVED.value: ConfigurableThresholds.CONSECUTIVE_DB_QUERIES.value,
@@ -112,6 +133,13 @@ thresholds_to_manage_map: dict[str, str] = {
     ConfigurableThresholds.CONSECUTIVE_HTTP_SPANS_MIN_TIME_SAVED.value: ConfigurableThresholds.CONSECUTIVE_HTTP_SPANS.value,
     ConfigurableThresholds.HTTP_OVERHEAD_REQUEST_DELAY.value: ConfigurableThresholds.HTTP_OVERHEAD.value,
     ConfigurableThresholds.SQL_INJECTION_QUERY_VALUE_LENGTH.value: ConfigurableThresholds.DB_QUERY_INJECTION.value,
+    ConfigurableThresholds.WEB_VITALS_COUNT.value: ConfigurableThresholds.WEB_VITALS.value,
+    ConfigurableThresholds.AI_DETECTED_HTTP.value: ConfigurableThresholds.AI_ISSUE_DETECTION.value,
+    ConfigurableThresholds.AI_DETECTED_DB.value: ConfigurableThresholds.AI_ISSUE_DETECTION.value,
+    ConfigurableThresholds.AI_DETECTED_RUNTIME_PERFORMANCE.value: ConfigurableThresholds.AI_ISSUE_DETECTION.value,
+    ConfigurableThresholds.AI_DETECTED_SECURITY.value: ConfigurableThresholds.AI_ISSUE_DETECTION.value,
+    ConfigurableThresholds.AI_DETECTED_CODE_HEALTH.value: ConfigurableThresholds.AI_ISSUE_DETECTION.value,
+    ConfigurableThresholds.AI_DETECTED_GENERAL.value: ConfigurableThresholds.AI_ISSUE_DETECTION.value,
 }
 """
 A mapping of threshold setting to the parent setting that manages it's detection.
@@ -133,6 +161,11 @@ class ProjectPerformanceIssueSettingsSerializer(serializers.Serializer):
     large_http_payload_size_threshold = serializers.IntegerField(
         required=False, min_value=100000, max_value=TEN_MB
     )
+    large_http_payload_filtered_paths = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=1000,
+    )
     db_on_main_thread_duration_threshold = serializers.IntegerField(
         required=False, min_value=10, max_value=50
     )
@@ -146,17 +179,26 @@ class ProjectPerformanceIssueSettingsSerializer(serializers.Serializer):
         required=False, min_value=100000, max_value=TEN_MB
     )
     consecutive_db_min_time_saved_threshold = serializers.IntegerField(
-        required=False, min_value=50, max_value=5000  # ms
+        required=False,
+        min_value=50,
+        max_value=5000,  # ms
     )
     n_plus_one_api_calls_total_duration_threshold = serializers.IntegerField(
-        required=False, min_value=100, max_value=TEN_SECONDS  # ms
+        required=False,
+        min_value=100,
+        max_value=TEN_SECONDS,  # ms
     )
     consecutive_http_spans_min_time_saved_threshold = serializers.IntegerField(
-        required=False, min_value=1000, max_value=TEN_SECONDS  # ms
+        required=False,
+        min_value=1000,
+        max_value=TEN_SECONDS,  # ms
     )
     http_request_delay_threshold = serializers.IntegerField(
-        required=False, min_value=200, max_value=TEN_SECONDS  # ms
+        required=False,
+        min_value=200,
+        max_value=TEN_SECONDS,  # ms
     )
+    web_vitals_count = serializers.IntegerField(required=False, min_value=5, max_value=100)
     uncompressed_assets_detection_enabled = serializers.BooleanField(required=False)
     consecutive_http_spans_detection_enabled = serializers.BooleanField(required=False)
     large_http_payload_detection_enabled = serializers.BooleanField(required=False)
@@ -171,6 +213,14 @@ class ProjectPerformanceIssueSettingsSerializer(serializers.Serializer):
     transaction_duration_regression_detection_enabled = serializers.BooleanField(required=False)
     function_duration_regression_detection_enabled = serializers.BooleanField(required=False)
     db_query_injection_detection_enabled = serializers.BooleanField(required=False)
+    web_vitals_detection_enabled = serializers.BooleanField(required=False)
+    ai_issue_detection_enabled = serializers.BooleanField(required=False)
+    ai_detected_http_enabled = serializers.BooleanField(required=False)
+    ai_detected_db_enabled = serializers.BooleanField(required=False)
+    ai_detected_runtime_performance_enabled = serializers.BooleanField(required=False)
+    ai_detected_security_enabled = serializers.BooleanField(required=False)
+    ai_detected_code_health_enabled = serializers.BooleanField(required=False)
+    ai_detected_general_enabled = serializers.BooleanField(required=False)
     sql_injection_query_value_length_threshold = serializers.IntegerField(
         required=False, min_value=3, max_value=10
     )
@@ -201,7 +251,25 @@ def get_disabled_threshold_options(payload, current_settings):
     return options
 
 
-@region_silo_endpoint
+def get_current_performance_settings(project: Project) -> dict[str, Any]:
+    """Return well-known defaults merged with project-level overrides."""
+    defaults: dict[str, Any] = projectoptions.get_well_known_default(
+        SETTINGS_PROJECT_OPTION_KEY,
+        project=project,
+    )
+    current: dict[str, Any] = project.get_option(SETTINGS_PROJECT_OPTION_KEY, default=defaults)
+    return {**defaults, **current}
+
+
+def payload_contains_disabled_threshold_setting(
+    data: dict[str, Any], current_settings: dict[str, Any]
+) -> bool:
+    """Check if the payload contains threshold settings whose detector is disabled."""
+    disabled_options = get_disabled_threshold_options(data, current_settings)
+    return any(option in disabled_options for option in data)
+
+
+@cell_silo_endpoint
 class ProjectPerformanceIssueSettingsEndpoint(ProjectEndpoint):
     owner = ApiOwner.ISSUE_DETECTION_BACKEND
     publish_status = {
@@ -234,7 +302,7 @@ class ProjectPerformanceIssueSettingsEndpoint(ProjectEndpoint):
 
         return Response(get_merged_settings(project))
 
-    def put(self, request: Request, project) -> Response:
+    def put(self, request: Request, project: Project) -> Response:
         if not self.has_feature(project, request):
             return self.respond(status=status.HTTP_404_NOT_FOUND)
 
@@ -273,31 +341,18 @@ class ProjectPerformanceIssueSettingsEndpoint(ProjectEndpoint):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        performance_issue_settings_default = projectoptions.get_well_known_default(
-            SETTINGS_PROJECT_OPTION_KEY,
-            project=project,
-        )
-
-        performance_issue_settings = project.get_option(
-            SETTINGS_PROJECT_OPTION_KEY, default=performance_issue_settings_default
-        )
-
-        current_settings = {**performance_issue_settings_default, **performance_issue_settings}
-
         data = serializer.validated_data
+        current_settings = get_current_performance_settings(project)
 
-        payload_contains_disabled_threshold_setting = any(
-            [option in get_disabled_threshold_options(data, current_settings) for option in data]
-        )
-        if payload_contains_disabled_threshold_setting:
+        if payload_contains_disabled_threshold_setting(data, current_settings):
             return Response(
                 {"detail": "Disabled options can not be modified"},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        project.update_option(
-            SETTINGS_PROJECT_OPTION_KEY,
-            {**performance_issue_settings_default, **performance_issue_settings, **data},
+        sync_detectors = features.has("projects:workflow-engine-performance-detectors", project)
+        update_performance_settings(
+            project, {**current_settings, **data}, sync_detectors=sync_detectors
         )
 
         if body_has_admin_options or body_has_management_options:
@@ -312,23 +367,29 @@ class ProjectPerformanceIssueSettingsEndpoint(ProjectEndpoint):
 
         return Response(data)
 
-    def delete(self, request: Request, project) -> Response:
+    def delete(self, request: Request, project: Project) -> Response:
         if not self.has_feature(project, request):
             return self.respond(status=status.HTTP_404_NOT_FOUND)
 
-        project_settings = project.get_option(SETTINGS_PROJECT_OPTION_KEY, default={})
+        # Use raw project overrides (not merged with defaults) to determine disabled options.
+        # This preserves existing behavior: if no explicit _enabled setting exists, we treat
+        # the detector as "unset" and preserve its thresholds, even if it's enabled by default.
+        project_overrides = project.get_option(SETTINGS_PROJECT_OPTION_KEY, default={})
         management_options = get_management_options()
         threshold_options = [setting.value for setting in ConfigurableThresholds]
-        disabled_options = get_disabled_threshold_options(threshold_options, project_settings)
+        disabled_options = get_disabled_threshold_options(threshold_options, project_overrides)
 
-        if project_settings:
-            unchanged_options = (
-                {  # Management settings and disabled threshold settings can not be reset
-                    option: project_settings[option]
-                    for option in project_settings
-                    if option in management_options or option in disabled_options
-                }
-            )
-            project.update_option(SETTINGS_PROJECT_OPTION_KEY, unchanged_options)
+        if project_overrides:
+            to_preserve: set[str] = set(management_options) | set(disabled_options)
+            # Use project_overrides directly (not get_current_performance_settings) to avoid
+            # writing default values to ProjectOption. DELETE should only preserve what the
+            # user explicitly set, allowing everything else to fall back to system defaults.
+            unchanged_options = {
+                option: value
+                for option, value in project_overrides.items()
+                if option in to_preserve
+            }
+            sync_detectors = features.has("projects:workflow-engine-performance-detectors", project)
+            reset_performance_settings(project, unchanged_options, sync_detectors=sync_detectors)
 
         return Response(status=status.HTTP_204_NO_CONTENT)

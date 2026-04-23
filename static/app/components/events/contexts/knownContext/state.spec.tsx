@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getStateContextData,
   type StateContext,
@@ -61,8 +61,8 @@ describe('StateContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'default'}
-        alias={'state'}
+        type="default"
+        alias="state"
         value={{...MOCK_STATE_CONTEXT, extra_data: ''}}
       />
     );

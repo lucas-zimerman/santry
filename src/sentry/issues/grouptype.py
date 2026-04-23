@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import sentry_sdk
 from django.apps import apps
+from django.db.models import Q
 from redis.client import StrictRedis
 from rediscluster import RedisCluster
 
@@ -66,6 +67,27 @@ class GroupCategory(IntEnum):
     FRONTEND = 14
     MOBILE = 15
 
+    AI_DETECTED = 16
+
+    """
+    Issues detected from analysis of uploaded artifacts. This covers
+    both issues detected in a single build (e.g. not 16kb page ready)
+    and those detected between builds (e.g. binary size regression).
+    """
+    PREPROD = 17
+
+    """
+    Issues detected by autopilot instrumentation analysis suggesting
+    improvements to product usage and observability coverage.
+    """
+    INSTRUMENTATION = 18
+
+    """
+    Issues detected from SDK/tooling configuration problems,
+    such as missing or broken source maps.
+    """
+    CONFIGURATION = 19
+
 
 GROUP_CATEGORIES_CUSTOM_EMAIL = (
     GroupCategory.ERROR,
@@ -108,20 +130,24 @@ class GroupTypeRegistry:
     ) -> list[type[GroupType]]:
         with sentry_sdk.start_span(op="GroupTypeRegistry.get_visible") as span:
             released = [gt for gt in self.all() if gt.released]
-            feature_to_grouptype = {
-                gt.build_visible_feature_name(): gt for gt in self.all() if not gt.released
-            }
+            feature_to_grouptype: dict[str, type[GroupType]] = {}
+            for gt in self.all():
+                if not gt.released:
+                    for fname in gt.build_visible_feature_name():
+                        feature_to_grouptype[fname] = gt
             batch_features = features.batch_has(
                 list(feature_to_grouptype.keys()), actor=actor, organization=organization
             )
-            enabled = []
+            enabled: list[type[GroupType]] = []
             if batch_features:
                 feature_results = batch_features.get(f"organization:{organization.id}", {})
-                enabled = [
-                    feature_to_grouptype[feature]
-                    for feature, active in feature_results.items()
-                    if active
-                ]
+                seen: set[int] = set()
+                for feature, active in feature_results.items():
+                    if active:
+                        gt = feature_to_grouptype[feature]
+                        if gt.type_id not in seen:
+                            seen.add(gt.type_id)
+                            enabled.append(gt)
             span.set_tag("organization_id", organization.id)
             span.set_tag("has_batch_features", batch_features is not None)
             span.set_tag("released", released)
@@ -144,6 +170,28 @@ class GroupTypeRegistry:
         if id_ not in self._registry:
             raise InvalidGroupTypeError(id_)
         return self._registry[id_]
+
+    def get_detector_type_filters(self) -> Q:
+        """
+        Build a Q object that combines all detector type-specific filters.
+
+        For detector types without filters, they're included by default via a NOT IN clause.
+        For detector types with filters, we apply the specific filter condition.
+
+        This optimizes the query since most detector types won't have filters.
+        """
+        types_with_filters = []
+        filtered_type_conditions = Q()
+
+        for group_type in self.all():
+            if group_type.detector_settings and group_type.detector_settings.filter is not None:
+                filter = group_type.detector_settings.filter
+                types_with_filters.append(group_type.slug)
+                filtered_type_conditions |= Q(type=group_type.slug) & filter
+
+        # Include all types that don't have filters (type NOT IN types_with_filters)
+        # OR match the specific filter conditions for types that do have filters
+        return ~Q(type__in=types_with_filters) | filtered_type_conditions
 
 
 registry = GroupTypeRegistry()
@@ -198,7 +246,8 @@ class GroupType:
     noise_config: NoiseConfig | None = None
     default_priority: int = PriorityLevel.MEDIUM
     # If True this group type should be released everywhere. If False, fall back to features to
-    # decide if this is released.
+    # decide if this is released. Add to HIDDEN_ISSUE_TYPES as well to prevent Events from this Group
+    # being displayed on frontend.
     released: bool = False
     # If False this group is excluded from default searches, when there are no filters on issue.category or issue.type.
     in_default_search: bool = True
@@ -219,7 +268,7 @@ class GroupType:
     enable_workflow_notifications = True
 
     # Controls whether users are able to manually update the group's priority.
-    enable_user_priority_changes = True
+    enable_user_status_and_priority_changes = True
 
     # Controls whether Seer automation is always triggered for this group type.
     always_trigger_seer_automation = False
@@ -229,9 +278,8 @@ class GroupType:
         registry.add(cls)
 
         if not cls.released:
-            features.add(
-                cls.build_visible_feature_name(), OrganizationFeature, True, api_expose=True
-            )
+            for fname in cls.build_visible_feature_name():
+                features.add(fname, OrganizationFeature, True, api_expose=True)
             features.add(cls.build_ingest_feature_name(), OrganizationFeature, True)
             features.add(cls.build_post_process_group_feature_name(), OrganizationFeature, True)
 
@@ -270,8 +318,8 @@ class GroupType:
         return f"organizations:issue-{cls.build_feature_name_slug()}"
 
     @classmethod
-    def build_visible_feature_name(cls) -> str:
-        return f"{cls.build_base_feature_name()}-visible"
+    def build_visible_feature_name(cls) -> list[str]:
+        return [f"{cls.build_base_feature_name()}-visible"]
 
     @classmethod
     def build_ingest_feature_name(cls) -> str:
@@ -302,17 +350,12 @@ def get_group_type_by_type_id(id: int) -> type[GroupType]:
     return registry.get_by_type_id(id)
 
 
-# used as an additional superclass for Performance GroupType defaults
-class PerformanceGroupTypeDefaults:
-    noise_config = NoiseConfig()
-
-
 class ReplayGroupTypeDefaults:
     notification_config = NotificationConfig(context=[])
 
 
 @dataclass(frozen=True)
-class PerformanceSlowDBQueryGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceSlowDBQueryGroupType(GroupType):
     type_id = 1001
     slug = "performance_slow_db_query"
     description = "Slow DB Query"
@@ -324,41 +367,44 @@ class PerformanceSlowDBQueryGroupType(PerformanceGroupTypeDefaults, GroupType):
 
 
 @dataclass(frozen=True)
-class PerformanceRenderBlockingAssetSpanGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceRenderBlockingAssetSpanGroupType(GroupType):
     type_id = 1004
     slug = "performance_render_blocking_asset_span"
     description = "Large Render Blocking Asset"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.FRONTEND.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
     use_flagpole_for_all_features = True
 
 
 @dataclass(frozen=True)
-class PerformanceNPlusOneGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceNPlusOneGroupType(GroupType):
     type_id = 1006
     slug = "performance_n_plus_one_db_queries"
     description = "N+1 Query"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.DB_QUERY.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
 
 
 @dataclass(frozen=True)
-class PerformanceNPlusOneExperimentalGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceNPlusOneExperimentalGroupType(GroupType):
     type_id = 1906
     slug = "performance_n_plus_one_db_queries_experimental"
     description = "N+1 Query (Experimental)"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.DB_QUERY.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = False
 
 
 @dataclass(frozen=True)
-class PerformanceConsecutiveDBQueriesGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceConsecutiveDBQueriesGroupType(GroupType):
     type_id = 1007
     slug = "performance_consecutive_db_queries"
     description = "Consecutive DB Queries"
@@ -370,18 +416,19 @@ class PerformanceConsecutiveDBQueriesGroupType(PerformanceGroupTypeDefaults, Gro
 
 
 @dataclass(frozen=True)
-class PerformanceFileIOMainThreadGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceFileIOMainThreadGroupType(GroupType):
     type_id = 1008
     slug = "performance_file_io_main_thread"
     description = "File IO on Main Thread"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.MOBILE.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
 
 
 @dataclass(frozen=True)
-class PerformanceConsecutiveHTTPQueriesGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceConsecutiveHTTPQueriesGroupType(GroupType):
     type_id = 1009
     slug = "performance_consecutive_http"
     description = "Consecutive HTTP"
@@ -399,23 +446,25 @@ class PerformanceNPlusOneAPICallsGroupType(GroupType):
     description = "N+1 API Call"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.HTTP_CLIENT.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
 
 
 @dataclass(frozen=True)
-class PerformanceNPlusOneAPICallsExperimentalGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceNPlusOneAPICallsExperimentalGroupType(GroupType):
     type_id = 1910
     slug = "performance_n_plus_one_api_calls_experimental"
     description = "N+1 API Call (Experimental)"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.HTTP_CLIENT.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = False
 
 
 @dataclass(frozen=True)
-class PerformanceMNPlusOneDBQueriesGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceMNPlusOneDBQueriesGroupType(GroupType):
     """
     This group type is only used for fingerprinting MN+1 DB Performance Issues.
     No field other than `type_id` are referenced, so changes will not have an affect.
@@ -427,23 +476,25 @@ class PerformanceMNPlusOneDBQueriesGroupType(PerformanceGroupTypeDefaults, Group
     description = "MN+1 Query"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.DB_QUERY.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
 
 
 @dataclass(frozen=True)
-class PerformanceMNPlusOneDBQueriesExperimentalGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceMNPlusOneDBQueriesExperimentalGroupType(GroupType):
     type_id = 1911
     slug = "performance_m_n_plus_one_db_queries_experimental"
     description = "MN+1 Query (Experimental)"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.DB_QUERY.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = False
 
 
 @dataclass(frozen=True)
-class PerformanceUncompressedAssetsGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceUncompressedAssetsGroupType(GroupType):
     type_id = 1012
     slug = "performance_uncompressed_assets"
     description = "Uncompressed Asset"
@@ -455,29 +506,31 @@ class PerformanceUncompressedAssetsGroupType(PerformanceGroupTypeDefaults, Group
 
 
 @dataclass(frozen=True)
-class PerformanceDBMainThreadGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceDBMainThreadGroupType(GroupType):
     type_id = 1013
     slug = "performance_db_main_thread"
     description = "DB on Main Thread"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.MOBILE.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
 
 
 @dataclass(frozen=True)
-class PerformanceLargeHTTPPayloadGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceLargeHTTPPayloadGroupType(GroupType):
     type_id = 1015
     slug = "performance_large_http_payload"
     description = "Large HTTP payload"
     category = GroupCategory.PERFORMANCE.value
     category_v2 = GroupCategory.HTTP_CLIENT.value
+    noise_config = NoiseConfig()
     default_priority = PriorityLevel.LOW
     released = True
 
 
 @dataclass(frozen=True)
-class PerformanceHTTPOverheadGroupType(PerformanceGroupTypeDefaults, GroupType):
+class PerformanceHTTPOverheadGroupType(GroupType):
     type_id = 1016
     slug = "performance_http_overhead"
     description = "HTTP/1.1 Overhead"
@@ -530,7 +583,7 @@ class DBQueryInjectionVulnerabilityGroupType(GroupType):
 
 
 @dataclass(frozen=True)
-class QueryInjectionVulnerabilityGroupType(PerformanceGroupTypeDefaults, GroupType):
+class QueryInjectionVulnerabilityGroupType(GroupType):
     type_id = 1021
     slug = "query_injection_vulnerability"
     description = "Potential Query Injection Vulnerability"
@@ -613,6 +666,110 @@ class ProfileFunctionRegressionType(GroupType):
 
 
 @dataclass(frozen=True)
+class LLMDetectedExperimentalGroupType(GroupType):
+    type_id = 3501
+    slug = "llm_detected_experimental"
+    description = "LLM Detected Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.AI_DETECTED.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class LLMDetectedExperimentalGroupTypeV2(GroupType):
+    type_id = 3502
+    slug = "llm_detected_experimental_v2"
+    description = "LLM Detected Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.AI_DETECTED.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class AIDetectedHTTPGroupType(GroupType):
+    type_id = 3503
+    slug = "ai_detected_http"
+    description = "AI Detected HTTP Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.HTTP_CLIENT.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class AIDetectedDBGroupType(GroupType):
+    type_id = 3504
+    slug = "ai_detected_db"
+    description = "AI Detected Database Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.DB_QUERY.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class AIDetectedRuntimePerformanceGroupType(GroupType):
+    type_id = 3505
+    slug = "ai_detected_runtime_performance"
+    description = "AI Detected Runtime Performance Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.AI_DETECTED.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class AIDetectedSecurityGroupType(GroupType):
+    type_id = 3506
+    slug = "ai_detected_security"
+    description = "AI Detected Security Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.AI_DETECTED.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class AIDetectedCodeHealthGroupType(GroupType):
+    type_id = 3507
+    slug = "ai_detected_code_health"
+    description = "AI Detected Code Health Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.CONFIGURATION.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
+class AIDetectedGeneralGroupType(GroupType):
+    type_id = 3508
+    slug = "ai_detected_general"
+    description = "AI Detected Issue"
+    category = GroupCategory.AI_DETECTED.value
+    category_v2 = GroupCategory.AI_DETECTED.value
+    default_priority = PriorityLevel.MEDIUM
+    released = False
+    enable_auto_resolve = False
+    enable_escalation_detection = False
+
+
+@dataclass(frozen=True)
 class ReplayRageClickType(ReplayGroupTypeDefaults, GroupType):
     type_id = 5002
     slug = "replay_click_rage"
@@ -653,21 +810,7 @@ class FeedbackGroup(GroupType):
 
 
 @dataclass(frozen=True)
-class MetricIssuePOC(GroupType):
-    # DEPRECATED, use metric_issue (8001) instead
-    type_id = 8002
-    slug = "metric_issue_poc"
-    description = "DEPRECATED Metric Issue POC"
-    category = GroupCategory.METRIC_ALERT.value
-    category_v2 = GroupCategory.METRIC.value
-    default_priority = PriorityLevel.HIGH
-    enable_auto_resolve = False
-    enable_escalation_detection = False
-    enable_status_change_workflow_notifications = False
-
-
-@dataclass(frozen=True)
-class WebVitalsGroup(GroupType):
+class WebVitalsGroup(GroupType):  # TODO: Rename to WebVitalsGroupType
     type_id = 10001
     slug = "web_vitals"
     description = "Web Vitals"
@@ -677,8 +820,9 @@ class WebVitalsGroup(GroupType):
     enable_escalation_detection = False
     enable_status_change_workflow_notifications = False
     enable_workflow_notifications = False
-    # Web Vital issues are always manually created by the user for the purpose of using autofix
+    # Web Vital issues are always triggered for the purpose of using autofix
     always_trigger_seer_automation = True
+    released = True
 
 
 def should_create_group(

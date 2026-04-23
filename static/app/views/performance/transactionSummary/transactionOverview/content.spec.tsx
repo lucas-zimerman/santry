@@ -5,7 +5,7 @@ import {initializeOrg} from 'sentry-test/initializeOrg';
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
 import type {InjectedRouter} from 'sentry/types/legacyReactRouter';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {SpanOperationBreakdownFilter} from 'sentry/views/performance/transactionSummary/filter';
 import SummaryContent from 'sentry/views/performance/transactionSummary/transactionOverview/content';
@@ -80,7 +80,7 @@ describe('Transaction Summary Content', () => {
       body: [],
     });
     MockApiClient.addMockResponse({
-      url: '/organizations/org-slug/issues/?limit=5&query=is%3Aunresolved%20transaction%3Aexample-transaction&sort=trends&statsPeriod=14d',
+      url: '/organizations/org-slug/issues/',
       body: [],
     });
     MockApiClient.addMockResponse({
@@ -122,7 +122,7 @@ describe('Transaction Summary Content', () => {
       ],
     });
     MockApiClient.addMockResponse({
-      url: `/projects/org-slug/project-slug/profiling/functions/`,
+      url: '/projects/org-slug/project-slug/profiling/functions/',
       body: {functions: []},
     });
     MockApiClient.addMockResponse({

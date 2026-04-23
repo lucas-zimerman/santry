@@ -1,5 +1,4 @@
 import * as Sentry from '@sentry/react';
-import merge from 'lodash/merge';
 import moment from 'moment-timezone';
 import type {LocationRange} from 'peggy';
 
@@ -11,7 +10,7 @@ import {
   measurementType,
 } from 'sentry/utils/discover/fields';
 
-import grammar from './grammar.pegjs';
+import {parse} from './grammar.pegjs';
 import {getKeyName} from './utils';
 
 type TextFn = () => string;
@@ -46,6 +45,7 @@ export enum Token {
   KEY_EXPLICIT_NUMBER_FLAG = 'keyExplicitNumberFlag',
   KEY_EXPLICIT_STRING_FLAG = 'keyExplicitStringFlag',
   KEY_EXPLICIT_TAG = 'keyExplicitTag',
+  KEY_EXPLICIT_BOOLEAN_TAG = 'keyExplicitBooleanTag',
   KEY_EXPLICIT_NUMBER_TAG = 'keyExplicitNumberTag',
   KEY_EXPLICIT_STRING_TAG = 'keyExplicitStringTag',
   KEY_AGGREGATE = 'keyAggregate',
@@ -76,6 +76,8 @@ export enum TermOperator {
   LESS_THAN = '<',
   EQUAL = '=',
   NOT_EQUAL = '!=',
+  // NOTE: These wildcard operators are internal implementation details and
+  // should not be included in product docs. Users should use `*` instead.
   CONTAINS = '\uf00dContains\uf00d',
   DOES_NOT_CONTAIN = '\uf00dDoesNotContain\uf00d',
   STARTS_WITH = '\uf00dStartsWith\uf00d',
@@ -130,8 +132,7 @@ export enum WildcardOperators {
   ENDS_WITH = '\uf00dEndsWith\uf00d',
 }
 
-export const basicOperators = [TermOperator.DEFAULT, TermOperator.NOT_EQUAL] as const;
-export type BasicOperator = (typeof basicOperators)[number];
+const basicOperators = [TermOperator.DEFAULT, TermOperator.NOT_EQUAL] as const;
 
 export const comparisonOperators = [
   TermOperator.GREATER_THAN_EQUAL,
@@ -140,7 +141,6 @@ export const comparisonOperators = [
   TermOperator.LESS_THAN,
   TermOperator.EQUAL,
 ] as const;
-export type ComparisonOperator = (typeof comparisonOperators)[number];
 
 export const wildcardOperators = [
   TermOperator.CONTAINS,
@@ -150,6 +150,7 @@ export const wildcardOperators = [
   TermOperator.ENDS_WITH,
   TermOperator.DOES_NOT_END_WITH,
 ] as const;
+
 export type WildcardOperator = (typeof wildcardOperators)[number];
 
 /**
@@ -592,6 +593,16 @@ export class TokenConverter {
     key,
   });
 
+  tokenKeyExplicitBooleanTag = (
+    prefix: string,
+    key: ReturnType<TokenConverter['tokenKeySimple']>
+  ) => ({
+    ...this.defaultTokenFields,
+    type: Token.KEY_EXPLICIT_BOOLEAN_TAG as const,
+    prefix,
+    key,
+  });
+
   tokenKeyAggregateParam = (value: string, quoted: boolean) => ({
     ...this.defaultTokenFields,
     type: Token.KEY_AGGREGATE_PARAMS as const,
@@ -875,12 +886,13 @@ export class TokenConverter {
   /**
    * Checks a filter against some non-grammar validation rules
    */
-  checkFilterWarning = <T extends FilterType>(key: FilterMap[T]['key']) => {
+  checkFilterWarning = (key: FilterMap[FilterType]['key']) => {
     if (
       ![
         Token.KEY_SIMPLE,
         Token.KEY_EXPLICIT_TAG,
         Token.KEY_AGGREGATE,
+        Token.KEY_EXPLICIT_BOOLEAN_TAG,
         Token.KEY_EXPLICIT_NUMBER_TAG,
         Token.KEY_EXPLICIT_STRING_TAG,
         Token.KEY_EXPLICIT_FLAG,
@@ -891,18 +903,7 @@ export class TokenConverter {
       return null;
     }
 
-    const keyName = getKeyName(
-      key as TokenResult<
-        | Token.KEY_SIMPLE
-        | Token.KEY_EXPLICIT_TAG
-        | Token.KEY_EXPLICIT_FLAG
-        | Token.KEY_AGGREGATE
-        | Token.KEY_EXPLICIT_NUMBER_TAG
-        | Token.KEY_EXPLICIT_NUMBER_FLAG
-        | Token.KEY_EXPLICIT_STRING_TAG
-        | Token.KEY_EXPLICIT_STRING_FLAG
-      >
-    );
+    const keyName = getKeyName(key);
     return this.config.getFilterTokenWarning?.(keyName) ?? null;
   };
 
@@ -1500,12 +1501,9 @@ export const defaultConfig: SearchConfig = {
   },
 };
 
-function tryParseSearch<T extends {config: SearchConfig}>(
-  query: string,
-  config: T
-): ParseResult | null {
+function tryParseSearch(...args: Parameters<typeof parse>): ParseResult | null {
   try {
-    return grammar.parse(query, config);
+    return parse(...args);
   } catch (e: any) {
     Sentry.logger.error('Search syntax parse error', {
       message: e.message?.slice(-100),
@@ -1525,7 +1523,7 @@ export function parseSearch(
   additionalConfig?: Partial<SearchConfig>
 ): ParseResult | null {
   const config = additionalConfig
-    ? merge({...defaultConfig}, additionalConfig)
+    ? mergeSearchConfigWithDefaults(defaultConfig, additionalConfig)
     : defaultConfig;
 
   return tryParseSearch(query, {
@@ -1534,6 +1532,28 @@ export function parseSearch(
     TermOperator,
     FilterType,
   });
+}
+
+/**
+ * Applies a partial search configuration onto the default config. This is very
+ * similar to a simple `{...a, ...b}`, but it ignores any `undefined` values of
+ * `b`. This is important because `{...{key: false}, ...{key: undefined}}`
+ * results in `{key: undefined}`, which is not what we want. We want the values
+ * of the search config to override the default _only_ if they're actually
+ * defined.
+ */
+function mergeSearchConfigWithDefaults(
+  a: SearchConfig,
+  b: Partial<SearchConfig>
+): SearchConfig {
+  const newConfig: SearchConfig = {
+    ...a,
+    ...Object.fromEntries(
+      Object.entries(b).filter(([_key, value]) => value !== undefined)
+    ),
+  };
+
+  return newConfig;
 }
 
 /**

@@ -1,24 +1,33 @@
 import styled from '@emotion/styled';
 
-import {Link, type LinkProps} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import {t} from 'sentry/locale';
-import useReplayExists from 'sentry/utils/replayCount/useReplayExists';
+import {Link, type LinkProps} from '@sentry/scraps/link';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
-function ViewReplayLink({
+import {t} from 'sentry/locale';
+import {useReplayExists} from 'sentry/utils/replayCount/useReplayExists';
+
+export function ViewReplayLink({
   children,
   replayId,
   to,
+  start,
+  end,
 }: {
   children: React.ReactNode;
   replayId: number | string;
   to: LinkProps['to'];
+  end?: string;
+  start?: string;
 }) {
-  const {replayExists} = useReplayExists();
+  const {replayExists} = useReplayExists({start, end});
 
   if (!replayId || !replayExists(String(replayId))) {
     return (
-      <Tooltip title={t('This replay may have been rate limited or deleted.')}>
+      <Tooltip
+        title={t(
+          'This replay may been rate-limited, deleted, or not stored due to the error-based replay sampling rate.'
+        )}
+      >
         <EmptyValueContainer>{t('(missing)')}</EmptyValueContainer>
       </Tooltip>
     );
@@ -37,7 +46,5 @@ const StyledLink = styled(Link)`
 `;
 
 const EmptyValueContainer = styled('span')`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
-
-export default ViewReplayLink;

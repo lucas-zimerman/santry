@@ -5,7 +5,9 @@ from django.db import router, transaction
 from django.utils.functional import cached_property
 
 from sentry import analytics
-from sentry.hybridcloud.models.outbox import OutboxDatabaseError
+from sentry.analytics.events.sentry_app_token_exchanged import SentryAppTokenExchangedEvent
+from sentry.hybridcloud.models.outbox import OutboxDatabaseError, OutboxFlushError
+from sentry.locks import locks
 from sentry.models.apiapplication import ApiApplication
 from sentry.models.apitoken import ApiToken
 from sentry.sentry_apps.metrics import (
@@ -19,6 +21,7 @@ from sentry.sentry_apps.token_exchange.util import SENSITIVE_CHARACTER_LIMIT, to
 from sentry.sentry_apps.token_exchange.validator import Validator
 from sentry.sentry_apps.utils.errors import SentryAppIntegratorError, SentryAppSentryError
 from sentry.users.models.user import User
+from sentry.utils.locking import UnableToAcquireLock
 
 logger = logging.getLogger("sentry.token-exchange")
 
@@ -47,19 +50,48 @@ class Refresher:
             lifecycle.add_extras(context)
 
             try:
+                lock = locks.get(
+                    ApiToken.get_lock_key(self.token.id),
+                    duration=10,
+                    name="api_token_refresh",
+                )
+
+                try:
+                    lock_context = lock.acquire()
+                except UnableToAcquireLock:
+                    raise SentryAppIntegratorError(
+                        message="Token refresh already in progress",
+                        status_code=409,
+                        webhook_context=context,
+                    )
+
                 token = None
-                with transaction.atomic(router.db_for_write(ApiToken)):
+                with lock_context, transaction.atomic(router.db_for_write(ApiToken)):
+                    # Verify token still exists inside lock to prevent race condition
+                    try:
+                        self.token.refresh_from_db()
+                    except ApiToken.DoesNotExist:
+                        raise SentryAppIntegratorError(
+                            message="Token no longer exists",
+                            status_code=401,
+                            webhook_context=context,
+                        )
+
                     self._validate()
                     self.token.delete()
 
                     self._record_analytics()
                     token = self._create_new_token()
                     return token
-            except OutboxDatabaseError as e:
+            except (OutboxDatabaseError, OutboxFlushError) as e:
                 if token is not None:
                     logger.warning(
                         "refresher.outbox-failure",
-                        extra=context,
+                        extra={
+                            **context,
+                            "token_id": token.id,
+                            "last_characters": token.token_last_characters,
+                        },
                         exc_info=e,
                     )
                     return token
@@ -75,9 +107,10 @@ class Refresher:
 
     def _record_analytics(self) -> None:
         analytics.record(
-            "sentry_app.token_exchanged",
-            sentry_app_installation_id=self.install.id,
-            exchange_type="refresh",
+            SentryAppTokenExchangedEvent(
+                sentry_app_installation_id=self.install.id,
+                exchange_type="refresh",
+            )
         )
 
     def _validate(self) -> None:

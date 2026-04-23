@@ -1,7 +1,8 @@
-import ConfigStore from 'sentry/stores/configStore';
+import {useQuery} from '@tanstack/react-query';
+
+import {ConfigStore} from 'sentry/stores/configStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
 import type {StatusPageComponent, StatuspageIncident} from 'sentry/types/system';
-import {useQuery} from 'sentry/utils/queryClient';
 
 interface UseServiceIncidentsOptions {
   /**
@@ -66,8 +67,14 @@ export function useServiceIncidents({
       }
       if (componentFilter) {
         filteredIncidents =
-          incidents?.filter(inc =>
-            inc.components.some(comp => componentFilter.includes(comp.id))
+          incidents?.filter(
+            inc =>
+              // Find incidents that include any of the componentFilter
+              inc.components.some(c => componentFilter.includes(c.id)) ||
+              // Find any incident with an update that includes any of the componentFilter.
+              inc.incident_updates.some(update =>
+                update.affected_components?.some(c => componentFilter.includes(c.code))
+              )
           ) ?? null;
       }
 

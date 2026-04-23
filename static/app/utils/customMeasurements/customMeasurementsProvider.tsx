@@ -1,17 +1,16 @@
 import {useEffect, useState} from 'react';
-import type {Query} from 'history';
 
 import {addErrorMessage} from 'sentry/actionCreators/indicator';
 import type {Client} from 'sentry/api';
 import {getFieldTypeFromUnit} from 'sentry/components/events/eventCustomPerformanceMetrics';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
+import {normalizeDateTimeParams} from 'sentry/components/pageFilters/parse';
 import {t} from 'sentry/locale';
 import type {PageFilters} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import type {CustomMeasurementCollection} from 'sentry/utils/customMeasurements/customMeasurements';
 import {handleXhrErrorResponse} from 'sentry/utils/handleXhrErrorResponse';
-import type RequestError from 'sentry/utils/requestError/requestError';
-import useApi from 'sentry/utils/useApi';
+import type {RequestError} from 'sentry/utils/requestError/requestError';
+import {useApi} from 'sentry/utils/useApi';
 
 import type {CustomMeasurementsContextValue} from './customMeasurementsContext';
 import {CustomMeasurementsContext} from './customMeasurementsContext';
@@ -23,7 +22,7 @@ function fetchCustomMeasurements(
   organization: Organization,
   selection?: PageFilters
 ): Promise<MeasurementsMetaResponse> {
-  const query: Query = selection?.datetime
+  const query = selection?.datetime
     ? {...normalizeDateTimeParams(selection.datetime)}
     : {};
 
@@ -37,19 +36,34 @@ function fetchCustomMeasurements(
   });
 }
 
+type CustomMeasurementsConfig = {
+  organization: Organization;
+  selection?: PageFilters;
+};
+
 type CustomMeasurementsProviderProps = {
   children:
     | React.ReactNode
     | ((props: CustomMeasurementsContextValue) => React.ReactNode);
-  organization: Organization;
-  selection?: PageFilters;
-};
+} & CustomMeasurementsConfig;
 
 export function CustomMeasurementsProvider({
   children,
   organization,
   selection,
 }: CustomMeasurementsProviderProps) {
+  const state = useCustomMeasurementsConfig({organization, selection});
+  return (
+    <CustomMeasurementsContext value={state}>
+      {typeof children === 'function' ? children(state) : children}
+    </CustomMeasurementsContext>
+  );
+}
+
+export function useCustomMeasurementsConfig({
+  organization,
+  selection,
+}: CustomMeasurementsConfig) {
   const api = useApi();
   const [state, setState] = useState({customMeasurements: {}});
 
@@ -91,9 +105,5 @@ export function CustomMeasurementsProvider({
     };
   }, [selection, api, organization]);
 
-  return (
-    <CustomMeasurementsContext value={state}>
-      {typeof children === 'function' ? children(state) : children}
-    </CustomMeasurementsContext>
-  );
+  return state;
 }

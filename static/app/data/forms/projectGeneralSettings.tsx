@@ -1,19 +1,20 @@
 import styled from '@emotion/styled';
 import {PlatformIcon} from 'platformicons';
 
+import {Button} from '@sentry/scraps/button';
+import {CodeBlock} from '@sentry/scraps/code';
+import {Flex} from '@sentry/scraps/layout';
+import {Link} from '@sentry/scraps/link';
+
 import {hasEveryAccess} from 'sentry/components/acl/access';
-import {CodeSnippet} from 'sentry/components/codeSnippet';
-import {Button} from 'sentry/components/core/button';
-import {Link} from 'sentry/components/core/link';
 import {createFilter} from 'sentry/components/forms/controls/reactSelectWrapper';
 import type {Field} from 'sentry/components/forms/types';
 import {Hovercard} from 'sentry/components/hovercard';
-import platforms from 'sentry/data/platforms';
+import {allPlatforms as platforms} from 'sentry/data/platforms';
 import {t, tct, tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {convertMultilineFieldValue, extractMultilineFields} from 'sentry/utils';
-import getDynamicText from 'sentry/utils/getDynamicText';
-import slugify from 'sentry/utils/slugify';
+import {getDynamicText} from 'sentry/utils/getDynamicText';
+import {slugify} from 'sentry/utils/slugify';
 
 // Export route to make these forms searchable by label/help
 export const route = '/settings/:orgId/projects/:projectId/';
@@ -44,37 +45,29 @@ const ORG_DISABLED_REASON = t(
   "This option is enforced by your organization's settings and cannot be customized per-project."
 );
 
-const PlatformWrapper = styled('div')`
-  display: flex;
-  align-items: center;
-`;
 const StyledPlatformIcon = styled(PlatformIcon)`
-  margin-right: ${space(1)};
+  margin-right: ${p => p.theme.space.md};
 `;
 
 export const fields = {
-  name: {
-    name: 'name',
+  slug: {
+    name: 'slug',
     type: 'string',
     required: true,
-    label: t('Name'),
-    placeholder: t('my-awesome-project'),
-    help: t('A name for this project'),
-    transformInput: slugify,
-    getData: (data: {name?: string}) => {
+    label: t('Slug'),
+    help: t('A unique ID used to identify this project'),
+    transformInput: slugify as (str: string) => string,
+    getData: (data: {slug?: string}) => {
       return {
-        name: data.name,
-        slug: data.name,
+        slug: data.slug,
       };
     },
-
     saveOnBlur: false,
-    saveMessageAlertType: 'warning',
+    saveMessageAlertVariant: 'warning',
     saveMessage: t(
-      "Changing a project's name will also change the project slug. This can break your build scripts! Please proceed carefully."
+      "Changing a project's slug can break your build scripts! Please proceed carefully."
     ),
   },
-
   platform: {
     name: 'platform',
     type: 'select',
@@ -82,10 +75,10 @@ export const fields = {
     options: platforms.map(({id, name}) => ({
       value: id,
       label: (
-        <PlatformWrapper key={id}>
+        <Flex key={id} align="center">
           <StyledPlatformIcon platform={id} />
           {name}
-        </PlatformWrapper>
+        </Flex>
       ),
     })),
     help: t('The primary platform for this project'),
@@ -133,7 +126,7 @@ export const fields = {
         strong: <strong />,
       }
     ),
-    saveMessageAlertType: 'warning',
+    saveMessageAlertVariant: 'warning',
   },
   allowedDomains: {
     name: 'allowedDomains',
@@ -148,9 +141,9 @@ export const fields = {
       examples: (
         <Hovercard
           body={
-            <CodeSnippet hideCopyButton>
-              {`https://example.com\n*.example.com\n*:80\n*`}
-            </CodeSnippet>
+            <CodeBlock hideCopyButton>
+              {'https://example.com\n*.example.com\n*:80\n*'}
+            </CodeBlock>
           }
         >
           <Button priority="link" size="xs">
@@ -159,8 +152,8 @@ export const fields = {
         </Hovercard>
       ),
     }),
-    getValue: val => extractMultilineFields(val),
-    setValue: val => convertMultilineFieldValue(val),
+    getValue: extractMultilineFields,
+    setValue: convertMultilineFieldValue,
   },
   scrapeJavaScript: {
     name: 'scrapeJavaScript',
@@ -173,6 +166,20 @@ export const fields = {
     setValue: (val, props) => props.organization?.[props.name] && val,
     label: t('Enable JavaScript source fetching'),
     help: t('Allow Sentry to scrape missing JavaScript source context when possible'),
+  },
+  scmSourceContextEnabled: {
+    name: 'scmSourceContextEnabled',
+    type: 'boolean',
+    label: t('Enable SCM Source Context'),
+    help: t(
+      "Fetch source code from your connected SCM integration (e.g. GitHub, GitLab) to display in stack traces. When enabled, any project member can view source code for files matched by this project's code mappings."
+    ),
+    visible: ({features}) => features.has('scm-source-context'),
+    confirm: {
+      true: t(
+        'Enabling this will allow all members with access to this project to view source code from the connected SCM integration via code mappings. Are you sure you want to enable this?'
+      ),
+    },
   },
   securityToken: {
     name: 'securityToken',
@@ -211,7 +218,12 @@ export const fields = {
         'Role required to download debug information files, proguard mappings and source maps. Overrides [organizationSettingsLink: organization settings].',
         {
           organizationSettingsLink: (
-            <Link to={`/settings/${organization.slug}/#debugFilesRole`} />
+            <Link
+              to={{
+                pathname: `/settings/${organization.slug}/`,
+                hash: 'debugFilesRole',
+              }}
+            />
           ),
         }
       ),

@@ -1,23 +1,25 @@
 import {Fragment, useMemo} from 'react';
 import styled from '@emotion/styled';
 
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+
 import Feature from 'sentry/components/acl/feature';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import {Tooltip} from 'sentry/components/core/tooltip';
 import {DropdownMenu, type MenuItemProps} from 'sentry/components/dropdownMenu';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {IconClock, IconEllipsis, IconGraph} from 'sentry/icons';
 import {t} from 'sentry/locale';
 import type {NewQuery} from 'sentry/types/organization';
 import {defined} from 'sentry/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {DiscoverDatasets} from 'sentry/utils/discover/types';
+import {useChartInterval} from 'sentry/utils/useChartInterval';
+import {useIsShortViewport} from 'sentry/utils/useIsShortViewport';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
-import useRouter from 'sentry/utils/useRouter';
-import {Dataset} from 'sentry/views/alerts/rules/metric/types';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
+import {Dataset, EventTypes} from 'sentry/views/alerts/rules/metric/types';
 import {determineSeriesSampleCountAndIsSampled} from 'sentry/views/alerts/rules/metric/utils/determineSeriesSampleCount';
 import {
   DashboardWidgetSource,
@@ -28,18 +30,16 @@ import {
 import {Widget} from 'sentry/views/dashboards/widgets/widget/widget';
 import {handleAddQueryToDashboard} from 'sentry/views/discover/utils';
 import {ChartVisualization} from 'sentry/views/explore/components/chart/chartVisualization';
-import {useLogsSearch} from 'sentry/views/explore/contexts/logs/logsPageParams';
+import type {ChartInfo} from 'sentry/views/explore/components/chart/types';
+import {useLogsPageDataQueryResult} from 'sentry/views/explore/contexts/logs/logsPageData';
 import {formatSort} from 'sentry/views/explore/contexts/pageParamsContext/sortBys';
-import {
-  ChartIntervalUnspecifiedStrategy,
-  useChartInterval,
-} from 'sentry/views/explore/hooks/useChartInterval';
-import {TOP_EVENTS_LIMIT} from 'sentry/views/explore/hooks/useTopEvents';
 import {ConfidenceFooter} from 'sentry/views/explore/logs/confidenceFooter';
 import {
   useQueryParamsAggregateFields,
   useQueryParamsAggregateSortBys,
   useQueryParamsMode,
+  useQueryParamsQuery,
+  useQueryParamsSearch,
   useQueryParamsTopEventsLimit,
   useQueryParamsVisualizes,
   useSetQueryParamsVisualizes,
@@ -48,6 +48,7 @@ import {isGroupBy} from 'sentry/views/explore/queryParams/groupBy';
 import {Mode} from 'sentry/views/explore/queryParams/mode';
 import {isVisualize, type Visualize} from 'sentry/views/explore/queryParams/visualize';
 import {EXPLORE_CHART_TYPE_OPTIONS} from 'sentry/views/explore/spans/charts';
+import type {RawCounts} from 'sentry/views/explore/useRawCounts';
 import {
   combineConfidenceForSeries,
   prettifyAggregation,
@@ -57,10 +58,11 @@ import type {useSortedTimeSeries} from 'sentry/views/insights/common/queries/use
 import {getAlertsUrl} from 'sentry/views/insights/common/utils/getAlertsUrl';
 
 interface LogsGraphProps {
+  rawLogCounts: RawCounts;
   timeseriesResult: ReturnType<typeof useSortedTimeSeries>;
 }
 
-export function LogsGraph({timeseriesResult}: LogsGraphProps) {
+export function LogsGraph({rawLogCounts, timeseriesResult}: LogsGraphProps) {
   const visualizes = useQueryParamsVisualizes();
   const setVisualizes = useSetQueryParamsVisualizes();
 
@@ -91,6 +93,7 @@ export function LogsGraph({timeseriesResult}: LogsGraphProps) {
           <Graph
             key={index}
             visualize={visualize}
+            rawLogCounts={rawLogCounts}
             timeseriesResult={timeseriesResult}
             onChartTypeChange={chartType => handleChartTypeChange(index, chartType)}
             onChartVisibilityChange={visible =>
@@ -112,33 +115,52 @@ interface GraphProps extends LogsGraphProps {
 function Graph({
   onChartTypeChange,
   onChartVisibilityChange,
+  rawLogCounts,
   timeseriesResult,
   visualize,
 }: GraphProps) {
+  const isShortViewport = useIsShortViewport();
+  const {isEmpty: tableIsEmpty, isPending: tableIsPending} = useLogsPageDataQueryResult();
+
   const aggregate = visualize.yAxis;
+  const userQuery = useQueryParamsQuery();
   const topEventsLimit = useQueryParamsTopEventsLimit();
 
-  const [interval, setInterval, intervalOptions] = useChartInterval({
-    unspecifiedStrategy: ChartIntervalUnspecifiedStrategy.USE_SMALLEST,
-  });
+  const [interval, setInterval, intervalOptions] = useChartInterval();
 
-  const chartInfo = useMemo(() => {
-    const series = timeseriesResult.data[aggregate] ?? [];
+  const chartInfo: ChartInfo = useMemo(() => {
+    // If the table is empty or pending, we want to withhold the chart data.
+    // This is to avoid a state where there is data in the chart but not in
+    // the table which is very weird. By withholding the chart data, we create
+    // the illusion the 2 are being queries in sync.
+    const withholdData = tableIsEmpty || tableIsPending;
+
+    const series = withholdData ? [] : (timeseriesResult.data[aggregate] ?? []);
     const isTopEvents = defined(topEventsLimit);
     const samplingMeta = determineSeriesSampleCountAndIsSampled(series, isTopEvents);
     return {
       chartType: visualize.chartType,
       series,
-      timeseriesResult,
+      timeseriesResult: {
+        ...timeseriesResult,
+        isPending: timeseriesResult.isPending || tableIsPending,
+      } as ChartInfo['timeseriesResult'],
       yAxis: aggregate,
       confidence: combineConfidenceForSeries(series),
       dataScanned: samplingMeta.dataScanned,
       isSampled: samplingMeta.isSampled,
       sampleCount: samplingMeta.sampleCount,
       samplingMode: undefined,
-      topEvents: isTopEvents ? TOP_EVENTS_LIMIT : undefined,
+      topEvents: isTopEvents ? series.filter(s => !s.meta.isOther).length : undefined,
     };
-  }, [visualize.chartType, timeseriesResult, aggregate, topEventsLimit]);
+  }, [
+    visualize.chartType,
+    timeseriesResult,
+    aggregate,
+    topEventsLimit,
+    tableIsEmpty,
+    tableIsPending,
+  ]);
 
   const Title = (
     <Widget.WidgetTitle title={prettifyAggregation(aggregate) ?? aggregate} />
@@ -153,34 +175,42 @@ function Graph({
 
   const Actions = (
     <Fragment>
-      <Tooltip title={t('Type of chart displayed in this visualization (ex. line)')}>
-        <CompactSelect
-          triggerProps={{
-            icon: <IconGraph type={chartIcon} />,
-            borderless: true,
-            showChevron: false,
-            size: 'xs',
-          }}
-          value={visualize.chartType}
-          menuTitle="Type"
-          options={EXPLORE_CHART_TYPE_OPTIONS}
-          onChange={option => onChartTypeChange(option.value)}
-        />
-      </Tooltip>
-      <Tooltip title={t('Time interval displayed in this visualization (ex. 5m)')}>
-        <CompactSelect
-          value={interval}
-          onChange={({value}) => setInterval(value)}
-          triggerProps={{
-            icon: <IconClock />,
-            borderless: true,
-            showChevron: false,
-            size: 'xs',
-          }}
-          menuTitle="Interval"
-          options={intervalOptions}
-        />
-      </Tooltip>
+      <CompactSelect
+        trigger={triggerProps => (
+          <OverlayTrigger.Button
+            {...triggerProps}
+            tooltipProps={{
+              title: t('Type of chart displayed in this visualization (ex. line)'),
+            }}
+            icon={<IconGraph type={chartIcon} />}
+            priority="transparent"
+            showChevron={false}
+            size="xs"
+          />
+        )}
+        value={visualize.chartType}
+        menuTitle="Type"
+        options={EXPLORE_CHART_TYPE_OPTIONS}
+        onChange={option => onChartTypeChange(option.value)}
+      />
+      <CompactSelect
+        value={interval}
+        onChange={({value}) => setInterval(value)}
+        trigger={triggerProps => (
+          <OverlayTrigger.Button
+            {...triggerProps}
+            tooltipProps={{
+              title: t('Time interval displayed in this visualization (ex. 5m)'),
+            }}
+            icon={<IconClock />}
+            priority="transparent"
+            showChevron={false}
+            size="xs"
+          />
+        )}
+        menuTitle="Interval"
+        options={intervalOptions}
+      />
       <ContextMenu
         interval={interval}
         visualize={visualize}
@@ -194,16 +224,22 @@ function Graph({
     <Widget
       Title={Title}
       Actions={Actions}
-      Visualization={visualize.visible && <ChartVisualization chartInfo={chartInfo} />}
+      Visualization={
+        visualize.visible && <ChartVisualization chartInfo={chartInfo} notMerge={false} />
+      }
       Footer={
         visualize.visible && (
           <ConfidenceFooter
             chartInfo={chartInfo}
-            isLoading={timeseriesResult.isLoading}
+            // hold off on showing the chart while the table is loading
+            isLoading={timeseriesResult.isLoading || tableIsPending}
+            rawLogCounts={rawLogCounts}
+            hasUserQuery={!!userQuery}
+            disabled={tableIsPending ? false : tableIsEmpty}
           />
         )
       }
-      height={visualize.visible ? 200 : 50}
+      height={visualize.visible ? (isShortViewport ? 175 : 200) : 50}
       revealActions="always"
     />
   );
@@ -221,13 +257,12 @@ function ContextMenu({
   visualize: Visualize;
 }) {
   const location = useLocation();
-  const router = useRouter();
   const organization = useOrganization();
   const {projects} = useProjects();
   const pageFilters = usePageFilters();
 
   const mode = useQueryParamsMode();
-  const search = useLogsSearch();
+  const search = useQueryParamsSearch();
   const aggregateFields = useQueryParamsAggregateFields();
   const aggregateSortBys = useQueryParamsAggregateSortBys();
 
@@ -251,7 +286,7 @@ function ContextMenu({
         organization,
         dataset: Dataset.EVENTS_ANALYTICS_PLATFORM,
         interval,
-        eventTypes: 'trace_item_log',
+        eventTypes: [EventTypes.TRACE_ITEM_LOG],
       }),
       onAction: () => {
         trackAnalytics('logs.save_as', {
@@ -323,7 +358,6 @@ function ContextMenu({
           organization,
           location,
           eventView,
-          router,
           yAxis: visualize.yAxis,
           widgetType: WidgetType.LOGS,
           source: DashboardWidgetSource.LOGS,
@@ -357,7 +391,6 @@ function ContextMenu({
     organization,
     pageFilters,
     projects,
-    router,
     search,
     setVisible,
     visible,
@@ -372,7 +405,7 @@ function ContextMenu({
     <DropdownMenu
       triggerProps={{
         size: 'xs',
-        borderless: true,
+        priority: 'transparent',
         showChevron: false,
         icon: <IconEllipsis />,
       }}
@@ -383,5 +416,5 @@ function ContextMenu({
 }
 
 const DisabledText = styled('span')`
-  color: ${p => p.theme.disabled};
+  color: ${p => p.theme.tokens.content.disabled};
 `;

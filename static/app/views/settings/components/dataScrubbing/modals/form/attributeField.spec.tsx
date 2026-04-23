@@ -4,12 +4,21 @@ import {mockTraceItemAttributeKeysApi} from 'sentry-fixture/traceItemAttributeKe
 import {initializeOrg} from 'sentry-test/initializeOrg';
 import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import PageFiltersStore from 'sentry/stores/pageFiltersStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
 import type {Tag} from 'sentry/types/group';
 import {FieldKind} from 'sentry/utils/fields';
 import {useLocation} from 'sentry/utils/useLocation';
-import AttributeField from 'sentry/views/settings/components/dataScrubbing/modals/form/attributeField';
+import {AttributeField} from 'sentry/views/settings/components/dataScrubbing/modals/form/attributeField';
 import {AllowedDataScrubbingDatasets} from 'sentry/views/settings/components/dataScrubbing/types';
+
+const defaultFieldProps = {
+  'aria-describedby': 'source-hint',
+  'aria-invalid': false,
+  disabled: false,
+  id: 'source',
+  name: 'source',
+  onBlur: jest.fn(),
+};
 
 jest.mock('sentry/utils/useLocation');
 const mockedUseLocation = jest.mocked(useLocation);
@@ -51,19 +60,16 @@ describe('AttributeField', () => {
 
     // Setup the PageFilters store with default values
     PageFiltersStore.init();
-    PageFiltersStore.onInitializeUrlState(
-      {
-        projects: [1],
-        environments: [],
-        datetime: {
-          period: '14d',
-          start: null,
-          end: null,
-          utc: false,
-        },
+    PageFiltersStore.onInitializeUrlState({
+      projects: [1],
+      environments: [],
+      datetime: {
+        period: '14d',
+        start: null,
+        end: null,
+        utc: false,
       },
-      new Set()
-    );
+    });
   });
 
   it('default render', async () => {
@@ -72,6 +78,7 @@ describe('AttributeField', () => {
     const value = 'user.email';
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         value={value}
@@ -90,6 +97,7 @@ describe('AttributeField', () => {
     const value = '';
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         value={value}
@@ -118,6 +126,7 @@ describe('AttributeField', () => {
     const value = 'user';
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         value={value}
@@ -149,6 +158,7 @@ describe('AttributeField', () => {
     const value = '';
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={handleOnChange}
         value={value}
@@ -179,6 +189,7 @@ describe('AttributeField', () => {
 
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={handleOnChange}
         value={value}
@@ -208,6 +219,7 @@ describe('AttributeField', () => {
 
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={handleOnChange}
         value={value}
@@ -235,6 +247,7 @@ describe('AttributeField', () => {
     const value = '';
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         value={value}
@@ -265,6 +278,7 @@ describe('AttributeField', () => {
 
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         onBlur={handleOnBlur}
@@ -290,6 +304,7 @@ describe('AttributeField', () => {
 
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={handleOnChange}
         value={value}
@@ -327,6 +342,7 @@ describe('AttributeField', () => {
 
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         value={value}
@@ -386,6 +402,7 @@ describe('AttributeField', () => {
 
     render(
       <AttributeField
+        fieldProps={defaultFieldProps}
         dataset={AllowedDataScrubbingDatasets.LOGS}
         onChange={jest.fn()}
         value={value}

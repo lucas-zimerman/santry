@@ -1,22 +1,22 @@
 import {Fragment} from 'react';
-import styled from '@emotion/styled';
 
-import LoadingError from 'sentry/components/loadingError';
-import Pagination from 'sentry/components/pagination';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import Placeholder from 'sentry/components/placeholder';
+import {Container} from '@sentry/scraps/layout';
+
+import {LoadingError} from 'sentry/components/loadingError';
+import {Pagination} from 'sentry/components/pagination';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
+import {Placeholder} from 'sentry/components/placeholder';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Repository} from 'sentry/types/integrations';
 import type {Project} from 'sentry/types/project';
 import {decodeScalar} from 'sentry/utils/queryString';
-import useLocationQuery from 'sentry/utils/url/useLocationQuery';
+import {useLocationQuery} from 'sentry/utils/url/useLocationQuery';
 import {useNavigate} from 'sentry/utils/useNavigate';
 import {EmptyState} from 'sentry/views/releases/detail/commitsAndFiles/emptyState';
 import {ReleaseCommit} from 'sentry/views/releases/detail/commitsAndFiles/releaseCommit';
-import RepositorySwitcher from 'sentry/views/releases/detail/commitsAndFiles/repositorySwitcher';
+import {RepositorySwitcher} from 'sentry/views/releases/detail/commitsAndFiles/repositorySwitcher';
 import {
   getCommitsByRepository,
   getReposToRender,
@@ -45,33 +45,31 @@ export function CommitsList({release, releaseRepos, projectSlug}: CommitsProps) 
     releaseRepos.find(repo => repo.name === rdActiveRepo) ?? releaseRepos[0];
 
   const {
-    data: commitList = [],
+    data,
     isPending: isLoadingCommitList,
     error: commitListError,
     refetch,
-    getResponseHeader,
   } = useReleaseCommits({
     release,
     projectSlug,
     activeRepository: activeReleaseRepo,
     cursor: rdCiCursor,
   });
+  const commitList = data?.json ?? [];
 
   const commitsByRepository = getCommitsByRepository(commitList);
   const reposToRender = getReposToRender(Object.keys(commitsByRepository));
-  const activeRepoName: string | undefined = activeReleaseRepo
-    ? activeReleaseRepo.name
-    : reposToRender[0];
+  const activeRepoName = activeReleaseRepo ? activeReleaseRepo.name : reposToRender[0];
 
   return (
     <Fragment>
       {releaseRepos.length > 1 && (
-        <Actions>
+        <Container marginBottom="xl">
           <RepositorySwitcher
             repositories={releaseRepos}
             activeRepository={activeReleaseRepo}
           />
-        </Actions>
+        </Container>
       )}
       {commitListError && <LoadingError onRetry={refetch} />}
       {isLoadingCommitList ? (
@@ -87,7 +85,7 @@ export function CommitsList({release, releaseRepos, projectSlug}: CommitsProps) 
             </PanelBody>
           </Panel>
           <Pagination
-            pageLinks={getResponseHeader?.('Link')}
+            pageLinks={data?.headers.Link}
             onCursor={(cursor, path, searchQuery) => {
               navigate({
                 pathname: path,
@@ -109,7 +107,3 @@ export function CommitsList({release, releaseRepos, projectSlug}: CommitsProps) 
     </Fragment>
   );
 }
-
-const Actions = styled('div')`
-  margin-bottom: ${space(2)};
-`;

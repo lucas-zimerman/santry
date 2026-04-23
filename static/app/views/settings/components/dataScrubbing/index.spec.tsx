@@ -1,12 +1,13 @@
 import {Fragment} from 'react';
 import {DataScrubbingRelayPiiConfigFixture} from 'sentry-fixture/dataScrubbingRelayPiiConfig';
 import {OrganizationFixture} from 'sentry-fixture/organization';
+import {ProjectFixture} from 'sentry-fixture/project';
+import {createMockTraceItemAttributesResponse} from 'sentry-fixture/traceItemAttributeKeys';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
-import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
+import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 import {textWithMarkupMatcher} from 'sentry-test/utils';
 
-import GlobalModal from 'sentry/components/globalModal';
+import {GlobalModal} from 'sentry/components/globalModal';
 import {OrganizationContext} from 'sentry/views/organizationContext';
 import {DataScrubbing} from 'sentry/views/settings/components/dataScrubbing';
 
@@ -14,7 +15,7 @@ const relayPiiConfig = JSON.stringify(DataScrubbingRelayPiiConfigFixture());
 
 describe('Data Scrubbing', () => {
   describe('Organization level', () => {
-    const {organization} = initializeOrg();
+    const organization = OrganizationFixture();
     const additionalContext = 'These rules can be configured for each project.';
     const endpoint = `organization/${organization.slug}/`;
 
@@ -28,7 +29,7 @@ describe('Data Scrubbing', () => {
           onSubmitSuccess={jest.fn()}
         />,
         {
-          deprecatedRouterMocks: true,
+          organization,
         }
       );
 
@@ -48,7 +49,7 @@ describe('Data Scrubbing', () => {
         screen.getByRole('link', {name: 'full documentation on data scrubbing'})
       ).toHaveAttribute(
         'href',
-        `https://docs.sentry.io/product/data-management-settings/scrubbing/advanced-datascrubbing/`
+        'https://docs.sentry.io/product/data-management-settings/scrubbing/advanced-datascrubbing/'
       );
 
       // Body
@@ -57,7 +58,7 @@ describe('Data Scrubbing', () => {
       // Actions
       expect(screen.getByRole('button', {name: 'Read Docs'})).toHaveAttribute(
         'href',
-        `https://docs.sentry.io/product/data-management-settings/scrubbing/advanced-datascrubbing/`
+        'https://docs.sentry.io/product/data-management-settings/scrubbing/advanced-datascrubbing/'
       );
       expect(screen.getByRole('button', {name: 'Add Rule'})).toBeEnabled();
     });
@@ -71,7 +72,7 @@ describe('Data Scrubbing', () => {
           onSubmitSuccess={jest.fn()}
         />,
         {
-          deprecatedRouterMocks: true,
+          organization,
         }
       );
 
@@ -89,7 +90,7 @@ describe('Data Scrubbing', () => {
           disabled
         />,
         {
-          deprecatedRouterMocks: true,
+          organization,
         }
       );
 
@@ -111,33 +112,8 @@ describe('Data Scrubbing', () => {
 
   describe('Project level', () => {
     it('default render', () => {
-      const {organization, project} = initializeOrg();
-
-      render(
-        <DataScrubbing
-          endpoint={`/projects/${organization.slug}/foo/`}
-          relayPiiConfig={relayPiiConfig}
-          organization={organization}
-          onSubmitSuccess={jest.fn()}
-          project={project}
-        />,
-        {
-          deprecatedRouterMocks: true,
-        }
-      );
-
-      // Header
-      expect(
-        screen.getByText('There are no data scrubbing rules at the organization level')
-      ).toBeInTheDocument();
-    });
-
-    it('OrganizationRules has content', () => {
-      const {organization, project} = initializeOrg({
-        organization: {
-          relayPiiConfig,
-        },
-      });
+      const organization = OrganizationFixture();
+      const project = ProjectFixture();
 
       render(
         <DataScrubbing
@@ -149,16 +125,41 @@ describe('Data Scrubbing', () => {
         />,
         {
           organization,
-          deprecatedRouterMocks: true,
+        }
+      );
+
+      // Header
+      expect(
+        screen.getByText('There are no data scrubbing rules at the organization level')
+      ).toBeInTheDocument();
+    });
+
+    it('OrganizationRules has content', async () => {
+      const organization = OrganizationFixture({
+        relayPiiConfig,
+      });
+      const project = ProjectFixture();
+
+      render(
+        <DataScrubbing
+          endpoint={`/projects/${organization.slug}/foo/`}
+          relayPiiConfig={relayPiiConfig}
+          organization={organization}
+          onSubmitSuccess={jest.fn()}
+          project={project}
+        />,
+        {
+          organization,
         }
       );
 
       // Organization Rules
-      expect(screen.getByText('Organization Rules')).toBeInTheDocument();
+      expect(await screen.findByText('Organization Rules')).toBeInTheDocument();
     });
 
     it('Delete rule successfully', async () => {
-      const {organization, project} = initializeOrg();
+      const organization = OrganizationFixture();
+      const project = ProjectFixture();
 
       render(
         <Fragment>
@@ -173,7 +174,7 @@ describe('Data Scrubbing', () => {
           />
         </Fragment>,
         {
-          deprecatedRouterMocks: true,
+          organization,
         }
       );
 
@@ -185,7 +186,8 @@ describe('Data Scrubbing', () => {
     });
 
     it('Open Add Rule Modal', async () => {
-      const {organization, project} = initializeOrg();
+      const organization = OrganizationFixture();
+      const project = ProjectFixture();
 
       render(
         <Fragment>
@@ -200,7 +202,7 @@ describe('Data Scrubbing', () => {
           />
         </Fragment>,
         {
-          deprecatedRouterMocks: true,
+          organization,
         }
       );
 
@@ -212,9 +214,10 @@ describe('Data Scrubbing', () => {
     });
 
     it('Open Edit Rule Modal', async () => {
-      const {organization, router, project} = initializeOrg();
+      const organization = OrganizationFixture();
+      const project = ProjectFixture();
 
-      render(
+      const {router} = render(
         <Fragment>
           <GlobalModal />
           <DataScrubbing
@@ -227,19 +230,24 @@ describe('Data Scrubbing', () => {
           />
         </Fragment>,
         {
-          router,
-          deprecatedRouterMocks: true,
+          organization,
+          initialRouterConfig: {
+            location: {
+              pathname: `/settings/${organization.slug}/projects/${project.slug}/security-and-privacy/`,
+            },
+            route: '/settings/:orgId/projects/:projectId/security-and-privacy/',
+          },
         }
       );
 
       await userEvent.click(screen.getAllByRole('button', {name: 'Edit Rule'})[0]!);
 
       // Verify the router to open the modal was called
-      expect(router.push).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pathname: `/settings/${organization.slug}/projects/${project.slug}/security-and-privacy/advanced-data-scrubbing/0/`,
-        })
-      );
+      await waitFor(() => {
+        expect(router.location.pathname).toBe(
+          `/settings/${organization.slug}/projects/${project.slug}/security-and-privacy/advanced-data-scrubbing/0/`
+        );
+      });
     });
   });
 
@@ -253,18 +261,12 @@ describe('Data Scrubbing', () => {
       MockApiClient.addMockResponse({
         url: `/organizations/${organization.slug}/trace-items/attributes/`,
         method: 'GET',
-        body: [
-          {key: 'user.email', name: 'user.email', kind: 'tag'},
-          {key: 'user.id', name: 'user.id', kind: 'tag'},
-          {key: 'custom.field', name: 'custom.field', kind: 'tag'},
-          {key: 'request.method', name: 'request.method', kind: 'tag'},
-          {key: 'response.status', name: 'response.status', kind: 'tag'},
-        ],
+        body: createMockTraceItemAttributesResponse(),
       });
     });
 
     it('passes attributeResults to modals when ourlogs-enabled', async () => {
-      const {project} = initializeOrg({organization});
+      const project = ProjectFixture();
 
       render(
         <OrganizationContext.Provider value={organization}>
@@ -281,7 +283,7 @@ describe('Data Scrubbing', () => {
           </Fragment>
         </OrganizationContext.Provider>,
         {
-          deprecatedRouterMocks: true,
+          organization,
         }
       );
 

@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import time
-from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
-from openai.types.chat.chat_completion import ChatCompletion, Choice
-from openai.types.chat.chat_completion_message import ChatCompletionMessage
 
 from sentry.feedback.lib.utils import FeedbackCreationSource
 from sentry.feedback.usecases.ingest.create_feedback import (
@@ -23,7 +19,6 @@ from sentry.feedback.usecases.label_generation import (
 )
 from sentry.models.group import Group, GroupStatus
 from sentry.signals import first_feedback_received, first_new_feedback_received
-from sentry.testutils.helpers import Feature
 from sentry.testutils.pytest.fixtures import django_db_all
 from sentry.types.group import GroupSubStatus
 from sentry.utils import json
@@ -41,52 +36,6 @@ def mock_has_seer_access():
         return_value=False,
     ) as mck:
         yield mck
-
-
-@pytest.fixture(autouse=True)
-def llm_settings(
-    set_sentry_option: Callable[[str, dict[str, dict[str, Any]]], Any],
-) -> Generator[None]:
-    with (
-        set_sentry_option(
-            "llm.provider.options",
-            {"openai": {"models": ["gpt-4-turbo-1.0"], "options": {"api_key": "fake_api_key"}}},
-        ),
-        set_sentry_option(
-            "llm.usecases.options",
-            {"spamdetection": {"provider": "openai", "options": {"model": "gpt-4-turbo-1.0"}}},
-        ),
-    ):
-        yield
-
-
-def create_dummy_openai_response(*args: object, **kwargs: Any) -> ChatCompletion:
-    message = kwargs["messages"][0]["content"]
-
-    if "error" in message:
-        raise Exception("Error checking if message is spam")
-
-    return ChatCompletion(
-        id="test",
-        choices=[
-            Choice(
-                index=0,
-                message=ChatCompletionMessage(
-                    content=(
-                        "spam"
-                        if "this is definitely spam"
-                        in message  # assume make_input_prompt lower-cases the msg
-                        else "not spam"
-                    ),
-                    role="assistant",
-                ),
-                finish_reason="stop",
-            )
-        ],
-        created=int(time.time()),
-        model="gpt3.5-turbo",
-        object="chat.completion",
-    )
 
 
 def test_fix_for_issue_platform() -> None:
@@ -506,7 +455,7 @@ def test_create_feedback_filters_no_contexts_or_message(
 
 @django_db_all
 @pytest.mark.parametrize(
-    "input_message, feature_flag, expected_result, expected_evidence_display",
+    "input_message, enabled, expected_result, expected_evidence_display",
     [
         ("This is definitely spam", True, True, "True"),
         ("Valid feedback message", True, False, "False"),
@@ -516,131 +465,67 @@ def test_create_feedback_filters_no_contexts_or_message(
         ("error", False, None, None),
     ],
 )
-def test_create_feedback_spam_detection_produce_to_kafka(
+@patch("sentry.feedback.usecases.ingest.create_feedback.spam_detection_enabled")
+@patch("sentry.feedback.usecases.ingest.create_feedback.is_spam_seer")
+def test_create_feedback_spam_detection_kafka_and_evidence(
+    mock_is_spam_seer,
+    mock_spam_detection_enabled,
     default_project,
     mock_produce_occurrence_to_kafka,
     input_message,
-    feature_flag,
+    enabled,
     expected_result,
     expected_evidence_display,
 ):
-    with Feature({"organizations:user-feedback-spam-ingest": feature_flag}):
-        event = mock_feedback_event(default_project.id, message=input_message)
+    mock_spam_detection_enabled.return_value = enabled
+    if enabled:
+        mock_is_spam_seer.return_value = expected_result
 
-        mock_openai = Mock()
-        mock_openai().chat.completions.create = create_dummy_openai_response
+    event = mock_feedback_event(default_project.id, message=input_message)
 
-        with patch("sentry.llm.providers.openai.OpenAI", mock_openai):
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
+    create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        # Check status change kafka message.
-        if expected_result:
-            assert (
-                mock_produce_occurrence_to_kafka.call_args_list[1]
-                .kwargs["status_change"]
-                .new_status
-                == GroupStatus.IGNORED
-            )
-        else:
-            assert mock_produce_occurrence_to_kafka.call_count == 1
+    if not enabled:
+        mock_is_spam_seer.assert_not_called()
 
-        # Check is_spam evidence
-        occurrence = mock_produce_occurrence_to_kafka.call_args_list[0].kwargs["occurrence"]
-        assert occurrence.evidence_data["is_spam"] == expected_result
-        is_spam_displays = [e.value for e in occurrence.evidence_display if e.name == "is_spam"]
-        is_spam_display = is_spam_displays[0] if is_spam_displays else None
-        assert is_spam_display == expected_evidence_display
-
-        # Check spam_detection_enabled evidence (=feature_flag)
-        assert occurrence.evidence_data["spam_detection_enabled"] == feature_flag
-        enabled_displays = [
-            e.value for e in occurrence.evidence_display if e.name == "spam_detection_enabled"
-        ]
-        enabled_display = enabled_displays[0] if enabled_displays else None
-        assert enabled_display == str(feature_flag)
-
-
-@django_db_all
-def test_create_feedback_spam_detection_project_option_false(
-    default_project,
-    mock_produce_occurrence_to_kafka,
-):
-    default_project.update_option("sentry:feedback_ai_spam_detection", False)
-
-    with Feature({"organizations:user-feedback-spam-ingest": True}):
-        event = mock_feedback_event(default_project.id, message="This is definitely spam")
-
-        mock_openai = Mock()
-        mock_openai().chat.completions.create = create_dummy_openai_response
-
-        with patch("sentry.llm.providers.openai.OpenAI", mock_openai):
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
-
-        assert mock_produce_occurrence_to_kafka.call_count == 1
+    # Check status change kafka message.
+    if expected_result is True:
         assert (
-            mock_produce_occurrence_to_kafka.call_args_list[0]
-            .kwargs["occurrence"]
-            .evidence_data["is_spam"]
-            is None
+            mock_produce_occurrence_to_kafka.call_args_list[1].kwargs["status_change"].new_status
+            == GroupStatus.IGNORED
         )
+    else:
+        assert mock_produce_occurrence_to_kafka.call_count == 1
+
+    # Check is_spam evidence
+    occurrence = mock_produce_occurrence_to_kafka.call_args_list[0].kwargs["occurrence"]
+    assert occurrence.evidence_data["is_spam"] == expected_result
+    is_spam_displays = [e.value for e in occurrence.evidence_display if e.name == "is_spam"]
+    is_spam_display = is_spam_displays[0] if is_spam_displays else None
+    assert is_spam_display == expected_evidence_display
+
+    # Check spam_detection_enabled evidence (=enabled)
+    assert occurrence.evidence_data["spam_detection_enabled"] == enabled
+    enabled_displays = [
+        e.value for e in occurrence.evidence_display if e.name == "spam_detection_enabled"
+    ]
+    enabled_display = enabled_displays[0] if enabled_displays else None
+    assert enabled_display == str(enabled)
 
 
 @django_db_all
-def test_create_feedback_spam_detection_set_status_ignored(default_project) -> None:
-    with Feature(
-        {
-            "organizations:user-feedback-spam-filter-actions": True,
-            "organizations:user-feedback-spam-ingest": True,
-        }
-    ):
-        event = {
-            "project_id": default_project.id,
-            "request": {
-                "url": "https://sentry.sentry.io/feedback/?statsPeriod=14d",
-                "headers": {
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
-                },
-            },
-            "event_id": "56b08cf7852c42cbb95e4a6998c66ad6",
-            "timestamp": 1698255009.574,
-            "received": "2021-10-24T22:23:29.574000+00:00",
-            "environment": "prod",
-            "release": "frontend@daf1316f209d961443664cd6eb4231ca154db502",
-            "user": {
-                "ip_address": "72.164.175.154",
-                "email": "josh.ferge@sentry.io",
-                "id": 880461,
-                "isStaff": False,
-                "name": "Josh Ferge",
-            },
-            "contexts": {
-                "feedback": {
-                    "contact_email": "josh.ferge@sentry.io",
-                    "name": "Josh Ferge",
-                    "message": "This is definitely spam",
-                    "replay_id": "3d621c61593c4ff9b43f8490a78ae18e",
-                    "url": "https://sentry.sentry.io/feedback/?statsPeriod=14d",
-                },
-            },
-            "breadcrumbs": [],
-            "platform": "javascript",
-        }
+@patch("sentry.feedback.usecases.ingest.create_feedback.spam_detection_enabled", return_value=True)
+@patch("sentry.feedback.usecases.ingest.create_feedback.is_spam_seer", return_value=True)
+def test_create_feedback_spam_detection_set_status_ignored(
+    mock_is_spam_seer, mock_spam_detection_enabled, default_project
+) -> None:
+    event = mock_feedback_event(default_project.id, message="This is definitely spam")
 
-        mock_openai = Mock()
-        mock_openai().chat.completions.create = create_dummy_openai_response
+    create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        with patch("sentry.llm.providers.openai.OpenAI", mock_openai):
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
-
-        group = Group.objects.get()
-        assert group.status == GroupStatus.IGNORED
-        assert group.substatus == GroupSubStatus.FOREVER
+    group = Group.objects.get()
+    assert group.status == GroupStatus.IGNORED
+    assert group.substatus == GroupSubStatus.FOREVER
 
 
 @django_db_all
@@ -804,29 +689,26 @@ def test_create_feedback_tags_skips_email_if_empty(
 
 @django_db_all
 @pytest.mark.parametrize("spam_enabled", (True, False))
+@patch("sentry.feedback.usecases.ingest.create_feedback.spam_detection_enabled")
+@patch("sentry.feedback.usecases.ingest.create_feedback.is_spam_seer", return_value=False)
 def test_create_feedback_filters_large_message(
-    default_project, mock_produce_occurrence_to_kafka, set_sentry_option, spam_enabled
+    mock_is_spam_seer,
+    mock_spam_detection_enabled,
+    default_project,
+    mock_produce_occurrence_to_kafka,
+    spam_enabled,
+    set_sentry_option,
 ):
     """Large messages are filtered before spam detection and producing to kafka."""
-    features = (
-        {
-            "organizations:user-feedback-spam-ingest": True,
-        }
-        if spam_enabled
-        else {}
-    )
+    mock_spam_detection_enabled.return_value = spam_enabled
 
-    with (
-        patch("sentry.llm.usecases.complete_prompt") as mock_complete_prompt,
-        Feature(features),
-        set_sentry_option("feedback.message.max-size", 4096),
-    ):
+    with set_sentry_option("feedback.message.max-size", 5000):
         event = mock_feedback_event(default_project.id)
         event["contexts"]["feedback"]["message"] = "a" * 7007
         create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-    assert mock_complete_prompt.call_count == 0
-    assert mock_produce_occurrence_to_kafka.call_count == 0
+        assert mock_is_spam_seer.call_count == 0
+        assert mock_produce_occurrence_to_kafka.call_count == 0
 
 
 @django_db_all
@@ -884,33 +766,35 @@ def test_create_feedback_issue_title(
     default_project,
     mock_produce_occurrence_to_kafka,
 ) -> None:
-    """Test that create_feedback_issue uses the formatted feedback message title when AI titles are disabled."""
+    """Test that create_feedback_issue uses the formatted feedback message title when seer access is disabled."""
     long_message = "This is a very long feedback message that describes multiple issues with the application including performance problems, UI bugs, and various other concerns that users are experiencing"
 
-    with Feature({"organizations:user-feedback-ai-titles": False}):
-        event = mock_feedback_event(default_project.id)
-        event["contexts"]["feedback"]["message"] = long_message
+    event = mock_feedback_event(default_project.id)
+    event["contexts"]["feedback"]["message"] = long_message
 
-        mock_get_feedback_title.return_value = (
-            "This is a very long feedback message that describes multiple..."
-        )
+    mock_get_feedback_title.return_value = (
+        "This is a very long feedback message that describes multiple..."
+    )
 
-        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
+    create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        mock_get_feedback_title.assert_called_once_with(
-            long_message, default_project.organization_id, False
-        )
-        assert mock_produce_occurrence_to_kafka.call_count == 1
-        call_args = mock_produce_occurrence_to_kafka.call_args
-        occurrence = call_args[1]["occurrence"]
-        assert (
-            occurrence.issue_title
-            == "User Feedback: This is a very long feedback message that describes multiple..."
-        )
-        assert (
-            occurrence.evidence_data["summary"]
-            == "This is a very long feedback message that describes multiple..."
-        )
+    mock_get_feedback_title.assert_called_once_with(
+        long_message,
+        default_project.organization_id,
+        False,
+        viewer_context={"organization_id": default_project.organization_id},
+    )
+    assert mock_produce_occurrence_to_kafka.call_count == 1
+    call_args = mock_produce_occurrence_to_kafka.call_args
+    occurrence = call_args[1]["occurrence"]
+    assert (
+        occurrence.issue_title
+        == "User Feedback: This is a very long feedback message that describes multiple..."
+    )
+    assert (
+        occurrence.evidence_data["summary"]
+        == "This is a very long feedback message that describes multiple..."
+    )
 
 
 @django_db_all
@@ -923,26 +807,28 @@ def test_create_feedback_issue_title_from_seer(
 ) -> None:
     """Test that create_feedback_issue uses the generated title from Seer."""
     mock_has_seer_access.return_value = True
-    with Feature({"organizations:user-feedback-ai-titles": True}):
-        event = mock_feedback_event(default_project.id)
-        event["contexts"]["feedback"]["message"] = "The login button is broken and the UI is slow"
+    event = mock_feedback_event(default_project.id)
+    event["contexts"]["feedback"]["message"] = "The login button is broken and the UI is slow"
 
-        mock_get_feedback_title.return_value = "Login Button Issue"
+    mock_get_feedback_title.return_value = "Login Button Issue"
 
-        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
+    create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        mock_get_feedback_title.assert_called_once_with(
-            "The login button is broken and the UI is slow", default_project.organization_id, True
-        )
+    mock_get_feedback_title.assert_called_once_with(
+        "The login button is broken and the UI is slow",
+        default_project.organization_id,
+        True,
+        viewer_context={"organization_id": default_project.organization_id},
+    )
 
-        assert mock_produce_occurrence_to_kafka.call_count == 1
-        occurrence = mock_produce_occurrence_to_kafka.call_args.kwargs["occurrence"]
-        assert occurrence.issue_title == "User Feedback: Login Button Issue"
-        assert occurrence.evidence_data["summary"] == "Login Button Issue"
+    assert mock_produce_occurrence_to_kafka.call_count == 1
+    occurrence = mock_produce_occurrence_to_kafka.call_args.kwargs["occurrence"]
+    assert occurrence.issue_title == "User Feedback: Login Button Issue"
+    assert occurrence.evidence_data["summary"] == "Login Button Issue"
 
 
 @django_db_all
-@patch("sentry.feedback.usecases.title_generation.make_signed_seer_api_request")
+@patch("sentry.feedback.usecases.title_generation.make_title_generation_request")
 def test_create_feedback_issue_title_does_not_throw(
     mock_make_signed_seer_api_request,
     default_project,
@@ -951,20 +837,15 @@ def test_create_feedback_issue_title_does_not_throw(
 ) -> None:
     """Test that the title falls back to message-based title if Seer call fails with network error."""
     mock_has_seer_access.return_value = True
-    with Feature(
-        {
-            "organizations:user-feedback-ai-titles": True,
-        }
-    ):
-        event = mock_feedback_event(default_project.id)
-        event["contexts"]["feedback"]["message"] = "The login button is broken and the UI is slow"
+    event = mock_feedback_event(default_project.id)
+    event["contexts"]["feedback"]["message"] = "The login button is broken and the UI is slow"
 
-        mock_make_signed_seer_api_request.side_effect = Exception("Network Error")
-        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
+    mock_make_signed_seer_api_request.side_effect = Exception("Network Error")
+    create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
 
 @django_db_all
-@patch("sentry.feedback.usecases.title_generation.make_signed_seer_api_request")
+@patch("sentry.feedback.usecases.title_generation.make_title_generation_request")
 def test_create_feedback_issue_title_from_seer_skips_if_spam(
     mock_make_signed_seer_api_request,
     default_project,
@@ -974,16 +855,11 @@ def test_create_feedback_issue_title_from_seer_skips_if_spam(
     """Test title generation endpoint is not called if marked as spam."""
     mock_has_seer_access.return_value = True
     with (
-        patch("sentry.feedback.usecases.ingest.create_feedback.is_spam", return_value=True),
+        patch("sentry.feedback.usecases.ingest.create_feedback.is_spam_seer", return_value=True),
         # XXX: this is not ideal to mock, we should refactor spam and AI processors to their own unit testable function.
         patch(
             "sentry.feedback.usecases.ingest.create_feedback.spam_detection_enabled",
             return_value=True,
-        ),
-        Feature(
-            {
-                "organizations:user-feedback-ai-titles": True,
-            }
         ),
     ):
         event = mock_feedback_event(default_project.id)
@@ -997,40 +873,32 @@ def test_create_feedback_adds_ai_labels(
 ) -> None:
     """Test that create_feedback_issue adds AI labels to tags when label generation succeeds."""
     mock_has_seer_access.return_value = True
-    with Feature(
-        {
-            "organizations:user-feedback-ai-categorization": True,
-        }
+    event = mock_feedback_event(default_project.id)
+    event["contexts"]["feedback"]["message"] = "The login button is broken and the UI is slow"
+
+    # This assumes that the maximum number of labels allowed is greater than 3
+    def mock_generate_labels(*args, **kwargs):
+        return ["User Interface", "Authentication", "Performance"]
+
+    with patch(
+        "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
+        mock_generate_labels,
     ):
-        event = mock_feedback_event(default_project.id)
-        event["contexts"]["feedback"]["message"] = "The login button is broken and the UI is slow"
+        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        # This assumes that the maximum number of labels allowed is greater than 3
-        def mock_generate_labels(*args, **kwargs):
-            return ["User Interface", "Authentication", "Performance"]
+    assert mock_produce_occurrence_to_kafka.call_count == 1
+    produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
+    tags = produced_event["tags"]
 
-        with patch(
-            "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
-            mock_generate_labels,
-        ):
+    ai_labels = [
+        value for key, value in tags.items() if key.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")
+    ]
 
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
+    expected_labels = ["Authentication", "Performance", "User Interface"]
 
-        assert mock_produce_occurrence_to_kafka.call_count == 1
-        produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
-        tags = produced_event["tags"]
-
-        ai_labels = [
-            value for key, value in tags.items() if key.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")
-        ]
-
-        expected_labels = ["Authentication", "Performance", "User Interface"]
-
-        assert len(ai_labels) == 3
-        assert set(ai_labels) == set(expected_labels)
-        assert tags[f"{AI_LABEL_TAG_PREFIX}.labels"] == json.dumps(expected_labels)
+    assert len(ai_labels) == 3
+    assert set(ai_labels) == set(expected_labels)
+    assert tags[f"{AI_LABEL_TAG_PREFIX}.labels"] == json.dumps(expected_labels)
 
 
 @django_db_all
@@ -1039,36 +907,29 @@ def test_create_feedback_handles_label_generation_errors(
 ) -> None:
     """Test that create_feedback_issue continues to work even when generate_labels raises an error."""
     mock_has_seer_access.return_value = True
-    with Feature(
-        {
-            "organizations:user-feedback-ai-categorization": True,
-        }
+    event = mock_feedback_event(default_project.id)
+    event["contexts"]["feedback"]["message"] = "This is a valid feedback message"
+
+    # Mock generate_labels to raise an exception
+    def mock_generate_labels(*args, **kwargs):
+        raise Exception("Label generation failed")
+
+    with patch(
+        "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
+        mock_generate_labels,
     ):
-        event = mock_feedback_event(default_project.id)
-        event["contexts"]["feedback"]["message"] = "This is a valid feedback message"
+        # This should not raise an exception and should still create the feedback
+        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        # Mock generate_labels to raise an exception
-        def mock_generate_labels(*args, **kwargs):
-            raise Exception("Label generation failed")
+    # Verify that the feedback was still created successfully
+    assert mock_produce_occurrence_to_kafka.call_count == 1
 
-        with patch(
-            "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
-            mock_generate_labels,
-        ):
-            # This should not raise an exception and should still create the feedback
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
+    produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
+    tags = produced_event["tags"]
 
-        # Verify that the feedback was still created successfully
-        assert mock_produce_occurrence_to_kafka.call_count == 1
-
-        produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
-        tags = produced_event["tags"]
-
-        ai_labels = [tag for tag in tags.keys() if tag.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")]
-        assert len(ai_labels) == 0
-        assert f"{AI_LABEL_TAG_PREFIX}.labels" not in tags
+    ai_labels = [tag for tag in tags.keys() if tag.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")]
+    assert len(ai_labels) == 0
+    assert f"{AI_LABEL_TAG_PREFIX}.labels" not in tags
 
 
 @django_db_all
@@ -1077,60 +938,49 @@ def test_create_feedback_truncates_ai_labels_max_list_length(
 ) -> None:
     """Test that create_feedback_issue truncates AI labels when more than MAX_AI_LABELS are returned. If the list of labels is longer than MAX_AI_LABELS_JSON_LENGTH characters, the list is truncated in this test to match the intended behaviour."""
     mock_has_seer_access.return_value = True
-    with Feature(
-        {
-            "organizations:user-feedback-ai-categorization": True,
-        }
+    event = mock_feedback_event(default_project.id)
+    event["contexts"]["feedback"]["message"] = "This is a very complex feedback with many issues"
+
+    alphabet = "abcdefghijklmnopqrstuvwxyz"
+
+    # Mock generate_labels to return more than MAX_AI_LABELS labels
+    # The labels should be sorted alphabetically, so don't store numbers, instead use letters
+    def mock_generate_labels(*args, **kwargs):
+        return [f"{alphabet[i]}" for i in range(MAX_AI_LABELS + 5)]
+
+    with patch(
+        "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
+        mock_generate_labels,
     ):
-        event = mock_feedback_event(default_project.id)
-        event["contexts"]["feedback"][
-            "message"
-        ] = "This is a very complex feedback with many issues"
+        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        alphabet = "abcdefghijklmnopqrstuvwxyz"
+    assert mock_produce_occurrence_to_kafka.call_count == 1
 
-        # Mock generate_labels to return more than MAX_AI_LABELS labels
-        # The labels should be sorted alphabetically, so don't store numbers, instead use letters
-        def mock_generate_labels(*args, **kwargs):
-            return [f"{alphabet[i]}" for i in range(MAX_AI_LABELS + 5)]
+    # Don't use ai_labels since we don't rely on dict order
+    expected_labels = [f"{alphabet[i]}" for i in range(MAX_AI_LABELS)]
 
-        with patch(
-            "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
-            mock_generate_labels,
-        ):
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
+    # Truncate the labels so the serialized list is within the allowed length
+    while len(json.dumps(expected_labels)) > MAX_AI_LABELS_JSON_LENGTH:
+        expected_labels.pop()
 
-        assert mock_produce_occurrence_to_kafka.call_count == 1
+    labels_list_length = min(len(expected_labels), MAX_AI_LABELS)
 
-        # Don't use ai_labels since we don't rely on dict order
-        expected_labels = [f"{alphabet[i]}" for i in range(MAX_AI_LABELS)]
+    produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
+    tags = produced_event["tags"]
 
-        # Truncate the labels so the serialized list is within the allowed length
-        while len(json.dumps(expected_labels)) > MAX_AI_LABELS_JSON_LENGTH:
-            expected_labels.pop()
+    ai_labels = [
+        value for key, value in tags.items() if key.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")
+    ]
+    assert len(ai_labels) == labels_list_length, "Should be truncated to exactly labels_list_length"
 
-        labels_list_length = min(len(expected_labels), MAX_AI_LABELS)
+    for i in range(labels_list_length):
+        assert tags[f"{AI_LABEL_TAG_PREFIX}.label.{i}"] == expected_labels[i]
 
-        produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
-        tags = produced_event["tags"]
+    assert tags[f"{AI_LABEL_TAG_PREFIX}.labels"] == json.dumps(expected_labels)
 
-        ai_labels = [
-            value for key, value in tags.items() if key.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")
-        ]
-        assert (
-            len(ai_labels) == labels_list_length
-        ), "Should be truncated to exactly labels_list_length"
-
-        for i in range(labels_list_length):
-            assert tags[f"{AI_LABEL_TAG_PREFIX}.label.{i}"] == expected_labels[i]
-
-        assert tags[f"{AI_LABEL_TAG_PREFIX}.labels"] == json.dumps(expected_labels)
-
-        # Verify that labels beyond labels_list_length are not present
-        for i in range(labels_list_length, labels_list_length + 5):
-            assert f"{AI_LABEL_TAG_PREFIX}.label.{i}" not in tags
+    # Verify that labels beyond labels_list_length are not present
+    for i in range(labels_list_length, labels_list_length + 5):
+        assert f"{AI_LABEL_TAG_PREFIX}.label.{i}" not in tags
 
 
 @django_db_all
@@ -1139,40 +989,31 @@ def test_create_feedback_truncates_ai_labels_max_json_length(
 ) -> None:
     """Test that create_feedback_issue truncates AI labels when the serialized list of labels is longer than MAX_AI_LABELS_JSON_LENGTH characters."""
     mock_has_seer_access.return_value = True
-    with Feature(
-        {
-            "organizations:user-feedback-ai-categorization": True,
-        }
+    event = mock_feedback_event(default_project.id)
+
+    event["contexts"]["feedback"]["message"] = "This is a very complex feedback with many issues"
+
+    # The serialized list of labels should be longer than MAX_AI_LABELS_JSON_LENGTH characters, so we should only take the first item
+    def mock_generate_labels(*args, **kwargs):
+        return ["a" * (MAX_AI_LABELS_JSON_LENGTH - 50)] * 100
+
+    with patch(
+        "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
+        mock_generate_labels,
     ):
-        event = mock_feedback_event(default_project.id)
+        create_feedback_issue(event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE)
 
-        event["contexts"]["feedback"][
-            "message"
-        ] = "This is a very complex feedback with many issues"
+    assert mock_produce_occurrence_to_kafka.call_count == 1
 
-        # The serialized list of labels should be longer than MAX_AI_LABELS_JSON_LENGTH characters, so we should only take the first item
-        def mock_generate_labels(*args, **kwargs):
-            return ["a" * (MAX_AI_LABELS_JSON_LENGTH - 50)] * 100
+    produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
+    tags = produced_event["tags"]
 
-        with patch(
-            "sentry.feedback.usecases.ingest.create_feedback.generate_labels",
-            mock_generate_labels,
-        ):
-            create_feedback_issue(
-                event, default_project, FeedbackCreationSource.NEW_FEEDBACK_ENVELOPE
-            )
+    ai_labels = [
+        value for key, value in tags.items() if key.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")
+    ]
 
-        assert mock_produce_occurrence_to_kafka.call_count == 1
-
-        produced_event = mock_produce_occurrence_to_kafka.call_args.kwargs["event_data"]
-        tags = produced_event["tags"]
-
-        ai_labels = [
-            value for key, value in tags.items() if key.startswith(f"{AI_LABEL_TAG_PREFIX}.label.")
-        ]
-
-        assert len(ai_labels) == 1
-        assert tags[f"{AI_LABEL_TAG_PREFIX}.label.0"] == "a" * (MAX_AI_LABELS_JSON_LENGTH - 50)
-        assert tags[f"{AI_LABEL_TAG_PREFIX}.labels"] == json.dumps(
-            ["a" * (MAX_AI_LABELS_JSON_LENGTH - 50)]
-        )
+    assert len(ai_labels) == 1
+    assert tags[f"{AI_LABEL_TAG_PREFIX}.label.0"] == "a" * (MAX_AI_LABELS_JSON_LENGTH - 50)
+    assert tags[f"{AI_LABEL_TAG_PREFIX}.labels"] == json.dumps(
+        ["a" * (MAX_AI_LABELS_JSON_LENGTH - 50)]
+    )

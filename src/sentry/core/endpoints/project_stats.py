@@ -1,31 +1,35 @@
+from rest_framework.exceptions import ValidationError
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import tsdb
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import StatsMixin, region_silo_endpoint
+from sentry.api.base import StatsMixin, cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.helpers.environments import get_environment_id
 from sentry.ingest.inbound_filters import FILTER_STAT_KEYS_TO_VALUES
 from sentry.models.environment import Environment
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.tsdb.base import TSDBModel
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectStatsEndpoint(ProjectEndpoint, StatsMixin):
     publish_status = {
         "GET": ApiPublishStatus.UNKNOWN,
     }
 
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=5, window=1),
-            RateLimitCategory.USER: RateLimit(limit=5, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=5, window=1),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=5, window=1),
+                RateLimitCategory.USER: RateLimit(limit=5, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=5, window=1),
+            }
         },
-    }
+    )
 
     def get(self, request: Request, project) -> Response:
         """
@@ -69,13 +73,11 @@ class ProjectStatsEndpoint(ProjectEndpoint, StatsMixin):
                 )
             except Environment.DoesNotExist:
                 raise ResourceDoesNotExist
-        elif stat == "forwarded":
-            stat_model = TSDBModel.project_total_forwarded
         else:
             try:
                 stat_model = FILTER_STAT_KEYS_TO_VALUES[stat]
             except KeyError:
-                raise ValueError("Invalid stat: %s" % stat)
+                raise ValidationError("Invalid stat: %s" % stat)
 
         data = tsdb.backend.get_range(
             model=stat_model,

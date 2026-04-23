@@ -1,62 +1,63 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {render, screen, waitForElementToBeRemoved} from 'sentry-test/reactTestingLibrary';
 
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {DurationUnit} from 'sentry/utils/discover/fields';
 import {MessageSpanSamplesPanel} from 'sentry/views/insights/queues/components/messageSpanSamplesPanel';
-
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/usePageFilters');
 
 describe('messageSpanSamplesPanel', () => {
   const organization = OrganizationFixture();
 
   let eventsRequestMock: jest.Mock;
-  let eventsStatsRequestMock: jest.Mock;
+  let eventsTimeseriesRequestMock: jest.Mock;
   let samplesRequestMock: jest.Mock;
   let traceItemAttributesMock: jest.Mock;
 
-  jest.mocked(usePageFilters).mockReturnValue(
-    PageFilterStateFixture({
-      selection: {
-        datetime: {
-          period: '10d',
-          start: null,
-          end: null,
-          utc: false,
-        },
-        environments: [],
-        projects: [],
-      },
-    })
-  );
+  const basePath = `/organizations/${organization.slug}/insights/queues/`;
+  const baseRoute = '/organizations/:orgId/insights/queues/';
 
-  jest.mocked(useLocation).mockReturnValue({
-    pathname: '',
-    search: '',
-    query: {transaction: 'sentry.tasks.store.save_event', destination: 'event-queue'},
-    hash: '',
-    state: undefined,
-    action: 'PUSH',
-    key: '',
-  });
+  const baseRouterConfig = {
+    location: {
+      pathname: basePath,
+      query: {transaction: 'sentry.tasks.store.save_event', destination: 'event-queue'},
+    },
+    route: baseRoute,
+  };
 
   beforeEach(() => {
-    eventsStatsRequestMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+    PageFiltersStore.onInitializeUrlState({
+      projects: [],
+      environments: [],
+      datetime: {
+        period: '10d',
+        start: null,
+        end: null,
+        utc: false,
+      },
+    });
+
+    eventsTimeseriesRequestMock = MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       method: 'GET',
       body: {
-        data: [[1699907700, [{count: 7810}]]],
-        meta: {
-          fields: {
-            count: 'number',
-          },
-          units: {
-            count: 'millisecond',
-          },
-        },
+        timeSeries: [
+          TimeSeriesFixture({
+            yAxis: 'avg(span.duration)',
+            values: [
+              {
+                timestamp: 1699907700000,
+                value: 7810,
+              },
+            ],
+            meta: {
+              valueType: 'duration',
+              valueUnit: DurationUnit.MILLISECOND,
+              interval: 1_800_000,
+            },
+          }),
+        ],
       },
     });
 
@@ -105,7 +106,7 @@ describe('messageSpanSamplesPanel', () => {
     });
 
     samplesRequestMock = MockApiClient.addMockResponse({
-      url: `/api/0/organizations/${organization.slug}/spans-samples/`,
+      url: `/organizations/${organization.slug}/spans-samples/`,
       method: 'GET',
       body: {
         data: [
@@ -155,22 +156,22 @@ describe('messageSpanSamplesPanel', () => {
   });
 
   it('renders consumer panel', async () => {
-    jest.mocked(useLocation).mockReturnValue({
-      pathname: '',
-      search: '',
-      query: {
-        transaction: 'sentry.tasks.store.save_event',
-        destination: 'event-queue',
-        'span.op': 'queue.process',
+    render(<MessageSpanSamplesPanel />, {
+      organization,
+      initialRouterConfig: {
+        ...baseRouterConfig,
+        location: {
+          ...baseRouterConfig.location,
+          query: {
+            transaction: 'sentry.tasks.store.save_event',
+            destination: 'event-queue',
+            'span.op': 'queue.process',
+          },
+        },
       },
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
     });
-    render(<MessageSpanSamplesPanel />, {organization});
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
-    expect(eventsStatsRequestMock).toHaveBeenCalled();
+    expect(eventsTimeseriesRequestMock).toHaveBeenCalled();
     expect(eventsRequestMock).toHaveBeenCalledWith(
       `/organizations/${organization.slug}/events/`,
       expect.objectContaining({
@@ -198,7 +199,7 @@ describe('messageSpanSamplesPanel', () => {
       })
     );
     expect(samplesRequestMock).toHaveBeenCalledWith(
-      `/api/0/organizations/${organization.slug}/spans-samples/`,
+      `/organizations/${organization.slug}/spans-samples/`,
       expect.objectContaining({
         query: expect.objectContaining({
           additionalFields: [
@@ -225,32 +226,16 @@ describe('messageSpanSamplesPanel', () => {
         }),
       })
     );
-    expect(traceItemAttributesMock).toHaveBeenNthCalledWith(
-      1,
+    expect(traceItemAttributesMock).toHaveBeenCalledWith(
       `/organizations/${organization.slug}/trace-items/attributes/`,
       expect.objectContaining({
         method: 'GET',
-        query: {
-          attributeType: 'number',
+        query: expect.objectContaining({
+          attributeType: ['string', 'number', 'boolean'],
           itemType: 'spans',
           project: [],
           statsPeriod: '10d',
-          substringMatch: undefined,
-        },
-      })
-    );
-    expect(traceItemAttributesMock).toHaveBeenNthCalledWith(
-      2,
-      `/organizations/${organization.slug}/trace-items/attributes/`,
-      expect.objectContaining({
-        method: 'GET',
-        query: {
-          attributeType: 'string',
-          itemType: 'spans',
-          project: [],
-          statsPeriod: '10d',
-          substringMatch: undefined,
-        },
+        }),
       })
     );
     expect(screen.getByRole('table', {name: 'Span Samples'})).toBeInTheDocument();
@@ -267,22 +252,22 @@ describe('messageSpanSamplesPanel', () => {
   });
 
   it('renders producer panel', async () => {
-    jest.mocked(useLocation).mockReturnValue({
-      pathname: '',
-      search: '',
-      query: {
-        transaction: 'sentry.tasks.store.save_event',
-        destination: 'event-queue',
-        'span.op': 'queue.publish',
+    render(<MessageSpanSamplesPanel />, {
+      organization,
+      initialRouterConfig: {
+        ...baseRouterConfig,
+        location: {
+          ...baseRouterConfig.location,
+          query: {
+            transaction: 'sentry.tasks.store.save_event',
+            destination: 'event-queue',
+            'span.op': 'queue.publish',
+          },
+        },
       },
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
     });
-    render(<MessageSpanSamplesPanel />, {organization});
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
-    expect(eventsStatsRequestMock).toHaveBeenCalled();
+    expect(eventsTimeseriesRequestMock).toHaveBeenCalled();
     expect(eventsRequestMock).toHaveBeenCalledWith(
       `/organizations/${organization.slug}/events/`,
       expect.objectContaining({
@@ -310,7 +295,7 @@ describe('messageSpanSamplesPanel', () => {
       })
     );
     expect(samplesRequestMock).toHaveBeenCalledWith(
-      `/api/0/organizations/${organization.slug}/spans-samples/`,
+      `/organizations/${organization.slug}/spans-samples/`,
       expect.objectContaining({
         query: expect.objectContaining({
           additionalFields: [
@@ -337,32 +322,16 @@ describe('messageSpanSamplesPanel', () => {
         }),
       })
     );
-    expect(traceItemAttributesMock).toHaveBeenNthCalledWith(
-      1,
+    expect(traceItemAttributesMock).toHaveBeenCalledWith(
       `/organizations/${organization.slug}/trace-items/attributes/`,
       expect.objectContaining({
         method: 'GET',
-        query: {
-          attributeType: 'number',
+        query: expect.objectContaining({
+          attributeType: ['string', 'number', 'boolean'],
           itemType: 'spans',
           project: [],
           statsPeriod: '10d',
-          substringMatch: undefined,
-        },
-      })
-    );
-    expect(traceItemAttributesMock).toHaveBeenNthCalledWith(
-      2,
-      `/organizations/${organization.slug}/trace-items/attributes/`,
-      expect.objectContaining({
-        method: 'GET',
-        query: {
-          attributeType: 'string',
-          itemType: 'spans',
-          project: [],
-          statsPeriod: '10d',
-          substringMatch: undefined,
-        },
+        }),
       })
     );
     expect(screen.getByRole('table', {name: 'Span Samples'})).toBeInTheDocument();

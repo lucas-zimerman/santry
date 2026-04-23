@@ -2,35 +2,41 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sentry.integrations.source_code_management.repo_trees import get_extension
 
-from .constants import SECOND_LEVEL_TLDS, STACK_ROOT_MAX_LEVEL
+from .constants import STACK_ROOT_MAX_LEVEL
 from .errors import (
     DoesNotFollowJavaPackageNamingConvention,
     MissingModuleOrAbsPath,
     NeedsExtension,
     UnsupportedFrameInfo,
 )
-from .utils.platform import PlatformConfig
+from .utils.platform import (
+    PlatformConfig,
+    SourceRootsResolver,
+    noop_source_roots_resolver,
+    supported_platform,
+)
 
 NOT_FOUND = -1
 
-# Regex patterns for unsupported frame paths
+# Regex pattern for unsupported frame paths
 UNSUPPORTED_FRAME_PATH_PATTERN = re.compile(r"^[\[<]|https?://", re.IGNORECASE)
-UNSUPPORTED_NORMALIZED_PATH_PATTERN = re.compile(r"^[^/]*$")
 
 
 def create_frame_info(frame: Mapping[str, Any], platform: str | None = None) -> FrameInfo:
     """Factory function to create the appropriate FrameInfo instance."""
-    if platform:
+    source_roots_resolver: SourceRootsResolver = noop_source_roots_resolver
+    if platform and supported_platform(platform):
         platform_config = PlatformConfig(platform)
+        source_roots_resolver = platform_config.get_source_roots_resolver()
         if platform_config.extracts_filename_from_module():
-            return ModuleBasedFrameInfo(frame)
+            return ModuleBasedFrameInfo(frame, source_roots_resolver)
 
-    return PathBasedFrameInfo(frame)
+    return PathBasedFrameInfo(frame, source_roots_resolver)
 
 
 class FrameInfo(ABC):
@@ -38,11 +44,16 @@ class FrameInfo(ABC):
     normalized_path: str
     stack_root: str
 
-    def __init__(self, frame: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        frame: Mapping[str, Any],
+        source_roots_resolver: SourceRootsResolver = noop_source_roots_resolver,
+    ) -> None:
+        self._source_roots_resolver = source_roots_resolver
         self.process_frame(frame)
 
     def __repr__(self) -> str:
-        return f"FrameInfo: {self.raw_path}"
+        return f"FrameInfo: {self.raw_path} stack_root: {self.stack_root}"
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, FrameInfo):
@@ -53,6 +64,24 @@ class FrameInfo(ABC):
     def process_frame(self, frame: Mapping[str, Any]) -> None:
         """Process the frame and set the necessary attributes."""
         raise NotImplementedError("Subclasses must implement process_frame")
+
+    def has_source_roots_override(self, source_path: str, repo_files: Sequence[str] | None) -> bool:
+        return self._source_roots_resolver(source_path, repo_files) is not None
+
+    def resolve_source_roots(
+        self,
+        source_path: str,
+        source_prefix: str,
+        stack_root_prefix: str = "",
+        repo_files: Sequence[str] | None = None,
+    ) -> tuple[str, str]:
+        if source_roots_override := self._source_roots_resolver(source_path, repo_files):
+            return source_roots_override
+
+        return (
+            f"{stack_root_prefix}{self.stack_root}/".replace("//", "/"),
+            f"{source_prefix}{self.stack_root}/".replace("//", "/"),
+        )
 
 
 class ModuleBasedFrameInfo(FrameInfo):
@@ -76,11 +105,7 @@ class PathBasedFrameInfo(FrameInfo):
         # the straight path prefix and drive letter
         self.normalized_path, removed_prefix = remove_prefixes(frame_file_path)
 
-        if (
-            not frame_file_path
-            or UNSUPPORTED_FRAME_PATH_PATTERN.search(frame_file_path)
-            or UNSUPPORTED_NORMALIZED_PATH_PATTERN.search(self.normalized_path)
-        ):
+        if not frame_file_path or UNSUPPORTED_FRAME_PATH_PATTERN.search(frame_file_path):
             raise UnsupportedFrameInfo("This path is not supported.")
 
         if not get_extension(frame_file_path):
@@ -148,21 +173,27 @@ def get_path_from_module(module: str, abs_path: str) -> tuple[str, str]:
     # Gets rid of the class name
     parts = module.rsplit(".", 1)[0].split(".")
     dirpath = "/".join(parts)
-    # a.Bar, Bar.kt -> stack_root: a/, file_path:  a/Bar.kt
-    granularity = 1
-
-    if len(parts) > 1:
-        # com.example.foo.bar.Baz$InnerClass, Baz.kt ->
-        #    stack_root: com/example/foo/
-        #    file_path:  com/example/foo/bar/Baz.kt
-        granularity = STACK_ROOT_MAX_LEVEL - 1
-
-        if parts[1] in SECOND_LEVEL_TLDS:
-            # uk.co.example.foo.bar.Baz$InnerClass, Baz.kt ->
-            #    stack_root: uk/co/example/foo/
-            #    file_path:  uk/co/example/foo/bar/Baz.kt
-            granularity = STACK_ROOT_MAX_LEVEL
+    granularity = get_granularity(parts)
 
     stack_root = "/".join(parts[:granularity]) + "/"
     file_path = f"{dirpath}/{abs_path}"
     return stack_root, file_path
+
+
+def get_granularity(parts: Sequence[str]) -> int:
+    # a.Bar, Bar.kt -> stack_root: a/, file_path: a/Bar.kt
+    granularity = 1
+
+    if len(parts) > 1:
+        # com.example.foo.bar.Baz$InnerClass, Baz.kt ->
+        #    stack_root: com/example/foo/bar/
+        #    file_path:  com/example/foo/bar/Baz.kt
+        # uk.co.example.foo.bar.Baz$InnerClass, Baz.kt ->
+        #    stack_root: uk/co/example/foo/
+        #    file_path:  uk/co/example/foo/bar/Baz.kt
+        # com.example.multi.foo.bar.Baz$InnerClass, Baz.kt ->
+        #    stack_root: com/example/multi/foo/
+        #    file_path:  com/example/multi/foo/bar/Baz.kt
+        granularity = STACK_ROOT_MAX_LEVEL
+
+    return granularity

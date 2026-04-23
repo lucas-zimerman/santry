@@ -2,24 +2,22 @@ import {Fragment, useMemo} from 'react';
 import {useTheme} from '@emotion/react';
 import moment from 'moment-timezone';
 
-import Count from 'sentry/components/count';
+import {Count} from 'sentry/components/count';
 import {EmptyStreamWrapper} from 'sentry/components/emptyStateWarning';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import PerformanceDuration from 'sentry/components/performanceDuration';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {PerformanceDuration} from 'sentry/components/performanceDuration';
 import {IconWarning} from 'sentry/icons/iconWarning';
 import {t, tct} from 'sentry/locale';
 import type {NewQuery, Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {getUtcDateString} from 'sentry/utils/dates';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import {
-  useExploreDataset,
-  useExploreQuery,
-} from 'sentry/views/explore/contexts/pageParamsContext';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useQueryParamsQuery} from 'sentry/views/explore//queryParams/context';
 import type {TraceResult} from 'sentry/views/explore/hooks/useTraces';
+import {useSpansDataset} from 'sentry/views/explore/spans/spansQueryParams';
 import {FIELDS, SORTS, type Field} from 'sentry/views/explore/tables/tracesTable/data';
 import {
   SpanBreakdownSliceRenderer,
@@ -49,7 +47,7 @@ const ONE_MINUTE = 60 * 1000; // in milliseconds
 export function SpanTable({trace}: {trace: TraceResult}) {
   const organization = useOrganization();
 
-  const query = useExploreQuery();
+  const query = useQueryParamsQuery();
 
   const {data, isPending, isError} = useSpans({
     query,
@@ -70,17 +68,17 @@ export function SpanTable({trace}: {trace: TraceResult}) {
     <SpanTablePanelItem span={6} overflow>
       <StyledPanel>
         <SpanPanelContent>
-          <StyledPanelHeader align="left" lightText>
+          <StyledPanelHeader justify="start" lightText>
             {t('Span ID')}
           </StyledPanelHeader>
-          <StyledPanelHeader align="left" lightText>
+          <StyledPanelHeader justify="start" lightText>
             {t('Span Description')}
           </StyledPanelHeader>
-          <StyledPanelHeader align="right" lightText />
-          <StyledPanelHeader align="right" lightText>
+          <StyledPanelHeader justify="end" lightText />
+          <StyledPanelHeader justify="end" lightText>
             {t('Span Duration')}
           </StyledPanelHeader>
-          <StyledPanelHeader align="right" lightText>
+          <StyledPanelHeader justify="end" lightText>
             {t('Timestamp')}
           </StyledPanelHeader>
           {isPending && (
@@ -91,7 +89,7 @@ export function SpanTable({trace}: {trace: TraceResult}) {
           {isError && ( // TODO: need an error state
             <StyledPanelItem span={5} overflow>
               <EmptyStreamWrapper>
-                <IconWarning color="gray300" size="lg" />
+                <IconWarning variant="muted" size="lg" />
               </EmptyStreamWrapper>
             </StyledPanelItem>
           )}
@@ -125,7 +123,6 @@ function SpanRow({
 }: {
   organization: Organization;
   span: SpanResult<Field>;
-
   trace: TraceResult;
 }) {
   const theme = useTheme();
@@ -136,6 +133,9 @@ function SpanRow({
           transactionId={span['transaction.id']}
           spanId={span.id}
           traceId={trace.trace}
+          spanDescription={span['span.description']}
+          spanOp={span['span.op']}
+          spanProject={span.project}
           timestamp={span.timestamp}
           onClick={() =>
             trackAnalytics('trace_explorer.open_trace_span', {
@@ -185,7 +185,7 @@ function useSpans({query, trace}: UseSpansOptions): {
   isPending: boolean;
 } {
   const {selection} = usePageFilters();
-  const dataset = useExploreDataset();
+  const dataset = useSpansDataset();
 
   const eventView = useMemo(() => {
     const fields = [

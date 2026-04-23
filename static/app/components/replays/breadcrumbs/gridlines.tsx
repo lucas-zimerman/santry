@@ -6,7 +6,8 @@ import {countColumns} from 'sentry/components/replays/utils';
 type LineStyle = 'dotted' | 'solid' | 'none';
 
 const DarkerLine = styled(Timeline.Col)<{lineStyle: LineStyle}>`
-  border-right: 1px ${p => p.lineStyle} ${p => p.theme.gray200};
+  border-right: 1px ${p => p.lineStyle}
+    ${p => p.theme.tokens.border.transparent.neutral.muted};
   text-align: right;
   line-height: 14px;
 `;
@@ -24,7 +25,7 @@ function Gridlines({
 }) {
   return (
     <Timeline.Columns totalColumns={cols} remainder={remaining}>
-      {[...new Array(cols)].map((_, i) => (
+      {[...Array.from({length: cols})].map((_, i) => (
         <DarkerLine key={i} lineStyle={lineStyle}>
           {children ? children(i) : null}
         </DarkerLine>

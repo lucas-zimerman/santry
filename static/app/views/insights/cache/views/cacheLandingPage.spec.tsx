@@ -1,6 +1,6 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
 import {ProjectFixture} from 'sentry-fixture/project';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {
   render,
@@ -9,22 +9,20 @@ import {
   waitForElementToBeRemoved,
 } from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import type {Organization} from 'sentry/types/organization';
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
 import {useReleaseStats} from 'sentry/utils/useReleaseStats';
 import {SAMPLING_MODE} from 'sentry/views/explore/hooks/useProgressiveQuery';
 import {CacheLandingPage} from 'sentry/views/insights/cache/views/cacheLandingPage';
 
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/usePageFilters');
 jest.mock('sentry/utils/useReleaseStats');
 
 const requestMocks = {
   missRateChart: jest.fn(),
   cacheSamplesMissRateChart: jest.fn(),
   throughputChart: jest.fn(),
+  cacheMissRateError: jest.fn(),
   spanTransactionList: jest.fn(),
   transactionDurations: jest.fn(),
   spanFields: jest.fn(),
@@ -33,30 +31,13 @@ const requestMocks = {
 describe('CacheLandingPage', () => {
   const organization = OrganizationFixture({features: ['insight-modules']});
 
-  jest.mocked(usePageFilters).mockReturnValue(
-    PageFilterStateFixture({
-      selection: {
-        datetime: {
-          period: '10d',
-          start: null,
-          end: null,
-          utc: false,
-        },
-        environments: [],
-        projects: [],
-      },
-    })
-  );
-
-  jest.mocked(useLocation).mockReturnValue({
-    pathname: '',
-    search: '',
-    query: {statsPeriod: '10d', project: '1'},
-    hash: '',
-    state: undefined,
-    action: 'PUSH',
-    key: '',
-  });
+  const initialRouterConfig = {
+    location: {
+      pathname: `/organizations/${organization.slug}/insights/backend/caches/`,
+      query: {statsPeriod: '10d', project: '1'},
+    },
+    route: '/organizations/:orgId/insights/backend/caches/',
+  };
 
   ProjectsStore.loadInitialData([
     ProjectFixture({
@@ -78,41 +59,43 @@ describe('CacheLandingPage', () => {
   });
 
   beforeEach(() => {
+    PageFiltersStore.init();
+    PageFiltersStore.onInitializeUrlState({
+      projects: [],
+      environments: [],
+      datetime: {period: '10d', start: null, end: null, utc: false},
+    });
+
     jest.clearAllMocks();
     setRequestMocks(organization);
   });
 
-  afterAll(() => {
-    jest.resetAllMocks();
-  });
-
   it('fetches module data', async () => {
-    render(<CacheLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<CacheLandingPage />, {
+      organization,
+      initialRouterConfig,
+    });
 
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 
     expect(requestMocks.throughputChart).toHaveBeenCalledWith(
-      `/organizations/${organization.slug}/events-stats/`,
+      `/organizations/${organization.slug}/events-timeseries/`,
       expect.objectContaining({
         method: 'GET',
         query: {
-          cursor: undefined,
           dataset: 'spans',
           sampling: SAMPLING_MODE.NORMAL,
           environment: [],
           excludeOther: 0,
-          field: [],
+          groupBy: undefined,
           interval: '30m',
-          orderby: undefined,
           partial: 1,
-          per_page: 50,
           project: [],
           query: 'span.op:[cache.get_item,cache.get]',
           referrer: 'api.insights.cache.landing-cache-throughput-chart',
           statsPeriod: '10d',
-          topEvents: undefined,
-          yAxis: 'epm()',
-          transformAliasToInputFormat: '1',
+          yAxis: ['epm()'],
+          caseInsensitive: undefined,
         },
       })
     );
@@ -199,7 +182,10 @@ describe('CacheLandingPage', () => {
       },
     });
 
-    render(<CacheLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<CacheLandingPage />, {
+      organization,
+      initialRouterConfig,
+    });
 
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 
@@ -224,7 +210,10 @@ describe('CacheLandingPage', () => {
   });
 
   it('renders a list of transactions', async () => {
-    render(<CacheLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<CacheLandingPage />, {
+      organization,
+      initialRouterConfig,
+    });
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
     expect(screen.getByRole('columnheader', {name: 'Transaction'})).toBeInTheDocument();
     expect(screen.getByRole('cell', {name: 'my-transaction'})).toBeInTheDocument();
@@ -280,7 +269,10 @@ describe('CacheLandingPage', () => {
       }),
     ]);
 
-    render(<CacheLandingPage />, {organization, deprecatedRouterMocks: true});
+    render(<CacheLandingPage />, {
+      organization,
+      initialRouterConfig,
+    });
 
     await waitFor(() => {
       expect(
@@ -297,53 +289,29 @@ const setRequestMocks = (organization: Organization) => {
   });
 
   requestMocks.missRateChart = MockApiClient.addMockResponse({
-    url: `/organizations/${organization.slug}/events-stats/`,
+    url: `/organizations/${organization.slug}/events-timeseries/`,
     method: 'GET',
     match: [
       MockApiClient.matchQuery({
         referrer: 'api.insights.cache.landing-cache-hit-miss-chart',
+        yAxis: ['cache_miss_rate()'],
       }),
     ],
     body: {
-      data: [
-        [1716379200, [{count: 0.5}]],
-        [1716393600, [{count: 0.75}]],
+      timeSeries: [
+        TimeSeriesFixture({
+          yAxis: 'cache_miss_rate()',
+          values: [
+            {value: 0.5, timestamp: 1716379200000},
+            {value: 0.75, timestamp: 1716393600000},
+          ],
+        }),
       ],
-      meta: {
-        fields: {
-          time: 'date',
-          cache_miss_rate: 'percentage',
-        },
-        units: {},
-      },
-    },
-  });
-
-  requestMocks.missRateChart = MockApiClient.addMockResponse({
-    url: `/organizations/${organization.slug}/events-stats/`,
-    method: 'GET',
-    match: [
-      MockApiClient.matchQuery({
-        referrer: 'api.insights.cache.samples-cache-hit-miss-chart',
-      }),
-    ],
-    body: {
-      data: [
-        [1716379200, [{count: 0.5}]],
-        [1716393600, [{count: 0.75}]],
-      ],
-      meta: {
-        fields: {
-          time: 'date',
-          cache_miss_rate: 'percentage',
-        },
-        units: {},
-      },
     },
   });
 
   requestMocks.throughputChart = MockApiClient.addMockResponse({
-    url: `/organizations/${organization.slug}/events-stats/`,
+    url: `/organizations/${organization.slug}/events-timeseries/`,
     method: 'GET',
     match: [
       MockApiClient.matchQuery({
@@ -351,17 +319,15 @@ const setRequestMocks = (organization: Organization) => {
       }),
     ],
     body: {
-      data: [
-        [1716379200, [{count: 100}]],
-        [1716393600, [{count: 200}]],
+      timeSeries: [
+        TimeSeriesFixture({
+          yAxis: 'epm()',
+          values: [
+            {value: 100, timestamp: 1716379200000},
+            {value: 200, timestamp: 1716393600000},
+          ],
+        }),
       ],
-      meta: {
-        fields: {
-          time: 'date',
-          epm_14400: 'rate',
-        },
-        units: {},
-      },
     },
   });
 

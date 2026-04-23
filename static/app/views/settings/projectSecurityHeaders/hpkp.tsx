@@ -1,20 +1,24 @@
-import {ExternalLink} from 'sentry/components/core/link';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import PreviewFeature from 'sentry/components/previewFeature';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
+import {useQuery} from '@tanstack/react-query';
+
+import {ExternalLink} from '@sentry/scraps/link';
+
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
+import {PreviewFeature} from 'sentry/components/previewFeature';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t, tct} from 'sentry/locale';
 import type {ProjectKey} from 'sentry/types/project';
-import {useApiQuery} from 'sentry/utils/queryClient';
-import routeTitleGen from 'sentry/utils/routeTitle';
-import useOrganization from 'sentry/utils/useOrganization';
+import {projectKeysApiOptions} from 'sentry/utils/projectKeys';
+import {routeTitleGen} from 'sentry/utils/routeTitle';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
-import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
-import ReportUri, {
+import {SettingsPageHeader} from 'sentry/views/settings/components/settingsPageHeader';
+import {
   getSecurityDsn,
+  ReportUri,
 } from 'sentry/views/settings/projectSecurityHeaders/reportUri';
 
 function getInstructions(keyList: ProjectKey[]) {
@@ -24,7 +28,7 @@ function getInstructions(keyList: ProjectKey[]) {
     '        \'pin-sha256="cUPcTAZWKaASuYWhhneDttWpY3oBAkE3h2+soZS7sWs="; \' \\\n' +
     '        \'pin-sha256="M8HztCzM3elUxkcjR2S5P4hhyBNf6lHkmjAHKhpGPWE="; \' \\\n' +
     "        'max-age=5184000; includeSubDomains; ' \\\n" +
-    `        \'report-uri="${getSecurityDsn(keyList)}"\' \n` +
+    `        'report-uri="${getSecurityDsn(keyList)}"' \n` +
     '    return response\n'
   );
 }
@@ -36,23 +40,21 @@ function getReportOnlyInstructions(keyList: ProjectKey[]) {
     '        \'pin-sha256="cUPcTAZWKaASuYWhhneDttWpY3oBAkE3h2+soZS7sWs="; \' \\\n' +
     '        \'pin-sha256="M8HztCzM3elUxkcjR2S5P4hhyBNf6lHkmjAHKhpGPWE="; \' \\\n' +
     "        'max-age=5184000; includeSubDomains; ' \\\n" +
-    `        \'report-uri="${getSecurityDsn(keyList)}"\' \n` +
+    `        'report-uri="${getSecurityDsn(keyList)}"' \n` +
     '    return response\n'
   );
 }
 
 function ProjectHpkpReports() {
   const organization = useOrganization();
-  const {projectId} = useParams();
+  const {projectId} = useParams<{projectId: string}>();
 
   const {
     data: keyList,
     isPending,
     isError,
     refetch,
-  } = useApiQuery<ProjectKey[]>([`/projects/${organization.slug}/${projectId}/keys/`], {
-    staleTime: 0,
-  });
+  } = useQuery(projectKeysApiOptions({orgSlug: organization.slug, projSlug: projectId}));
 
   if (isPending) {
     return <LoadingIndicator />;
@@ -65,13 +67,13 @@ function ProjectHpkpReports() {
   return (
     <div>
       <SentryDocumentTitle
-        title={routeTitleGen(t('HTTP Public Key Pinning (HPKP)'), projectId!, false)}
+        title={routeTitleGen(t('HTTP Public Key Pinning (HPKP)'), projectId, false)}
       />
       <SettingsPageHeader title={t('HTTP Public Key Pinning')} />
 
       <PreviewFeature />
 
-      <ReportUri keyList={keyList} orgId={organization.slug} projectId={projectId!} />
+      <ReportUri keyList={keyList} orgId={organization.slug} projectId={projectId} />
 
       <Panel>
         <PanelHeader>{t('About')}</PanelHeader>

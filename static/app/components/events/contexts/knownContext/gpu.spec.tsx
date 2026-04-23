@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getGPUContextData,
   type GPUContext,
@@ -89,8 +89,8 @@ describe('GPUContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'gpu'}
-        alias={'gpu'}
+        type="gpu"
+        alias="gpu"
         value={{...MOCK_GPU_CONTEXT, api_type: ''}}
       />
     );

@@ -9,6 +9,8 @@ from typing import Any, Self
 
 import sentry_sdk
 
+from sentry import options
+from sentry.exceptions import RestrictedIPAddress
 from sentry.integrations.base import IntegrationDomain
 from sentry.integrations.types import EventLifecycleOutcome
 from sentry.utils import metrics
@@ -85,12 +87,28 @@ class IntegrationEventLifecycleMetric(EventLifecycleMetric, ABC):
         tokens = ("integrations", self.get_metrics_domain(), str(outcome))
         return ".".join(tokens)
 
+    def get_integration_id(self) -> int | None:
+        """Return the integration ID if available. Override in subclasses."""
+        return None
+
     def get_metric_tags(self) -> Mapping[str, str]:
-        return {
+        tags: dict[str, str] = {
             "integration_domain": str(self.get_integration_domain()),
             "integration_name": self.get_integration_name(),
             "interaction_type": self.get_interaction_type(),
         }
+        # TODO(telkins): Remove killswitch once we no longer need integration_id on SLO metrics
+        integration_id = self.get_integration_id()
+        if integration_id is not None and options.get(
+            "integrations.slo.integration-id-tag-enabled"
+        ):
+            tags["integration_id"] = str(integration_id)
+        return tags
+
+    def capture(
+        self, assume_success: bool = True, sample_log_rate: float = 1.0
+    ) -> "IntegrationEventLifecycle":
+        return IntegrationEventLifecycle(self, assume_success, sample_log_rate)
 
 
 class EventLifecycle:
@@ -190,11 +208,11 @@ class EventLifecycle:
                 if outcome == EventLifecycleOutcome.FAILURE:
                     logger.warning(key, **log_params)
                 elif outcome == EventLifecycleOutcome.HALTED:
-                    logger.info(key, **log_params)
+                    logger.warning(key, **log_params)
 
     @staticmethod
     def _report_flow_error(message) -> None:
-        logger.error("EventLifecycle flow error: %s", message)
+        logger.warning("EventLifecycle flow error: %s", message)
 
     def _terminate(
         self,
@@ -313,7 +331,6 @@ class EventLifecycle:
             # The context called record_success or record_failure being closing,
             # so we can just exit quietly.
             return
-
         if exc_value is not None:
             # We were forced to exit the context by a raised exception.
             # Default to creating a Sentry issue for unhandled exceptions
@@ -327,6 +344,25 @@ class EventLifecycle:
                 if self.assume_success
                 else EventLifecycleOutcome.HALTED
             )
+
+
+class IntegrationEventLifecycle(EventLifecycle):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType,
+    ) -> None:
+        if self._state != EventLifecycleOutcome.STARTED:
+            # The context called record_success or record_failure being closing,
+            # so we can just exit quietly.
+            return
+
+        if exc_value is not None and isinstance(exc_value.__cause__, RestrictedIPAddress):
+            # ApiHostError is raised from RestrictedIPAddress
+            self.record_halt(exc_value)
+            return
+        super().__exit__(exc_type, exc_value, traceback)
 
 
 class IntegrationPipelineViewType(StrEnum):
@@ -398,10 +434,26 @@ class IntegrationPipelineViewEvent(IntegrationEventLifecycleMetric):
 
 
 class IntegrationWebhookEventType(StrEnum):
-    INSTALLATION = "installation"
-    PUSH = "push"
-    PULL_REQUEST = "pull_request"
+    """
+    Provider-agnostic event types for integration webhooks used for metrics tracking.
+
+    Enum names use generic SCM terminology:
+    - "merge request" instead of "pull request" (GitHub) or "merge request" (GitLab)
+    - "CI check" for continuous integration checks (GitHub Check Runs, GitLab Pipelines, etc.)
+
+    String values preserve original GitHub naming for backward compatibility with existing metrics.
+    """
+
+    CI_CHECK = "ci_check"  # e.g. GitHub Check Runs
+    # This represents a webhook event for an inbound sync operation, such as syncing external resources or data into Sentry.
     INBOUND_SYNC = "inbound_sync"
+    INSTALLATION = "installation"
+    INSTALLATION_REPOSITORIES = "installation_repositories"
+    ISSUE_COMMENT = "issue_comment"
+    MERGE_REQUEST = "pull_request"
+    MERGE_REQUEST_REVIEW = "pull_request_review"
+    MERGE_REQUEST_REVIEW_COMMENT = "pull_request_review_comment"
+    PUSH = "push"
 
 
 @dataclass
@@ -423,3 +475,37 @@ class IntegrationWebhookEvent(IntegrationEventLifecycleMetric):
 
     def get_interaction_type(self) -> str:
         return str(self.interaction_type)
+
+
+class IntegrationProxyEventType(StrEnum):
+    """An instance to be recorded of a integration proxy event."""
+
+    SHOULD_PROXY = "should_proxy"
+    PROXY_REQUEST = "proxy_request"
+
+
+@dataclass
+class IntegrationProxyEvent(EventLifecycleMetric):
+    """An instance to be recorded of a integration proxy event."""
+
+    interaction_type: IntegrationProxyEventType
+
+    def get_metrics_domain(self) -> str:
+        return "integration_proxy"
+
+    def get_interaction_type(self) -> str:
+        return str(self.interaction_type)
+
+    def get_metric_key(self, outcome: EventLifecycleOutcome) -> str:
+        tokens = (self.get_metrics_domain(), self.interaction_type, str(outcome))
+        return ".".join(tokens)
+
+    def get_metric_tags(self) -> Mapping[str, str]:
+        return {
+            "interaction_type": self.interaction_type,
+        }
+
+    def get_extras(self) -> Mapping[str, Any]:
+        return {
+            "interaction_type": self.interaction_type,
+        }

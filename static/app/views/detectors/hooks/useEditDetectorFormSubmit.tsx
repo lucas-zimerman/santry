@@ -7,8 +7,10 @@ import type {
   BaseDetectorUpdatePayload,
   Detector,
 } from 'sentry/types/workflowEngine/detectors';
+import {trackAnalytics} from 'sentry/utils/analytics';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {getDetectorAnalyticsPayload} from 'sentry/views/detectors/components/forms/common/getDetectorAnalyticsPayload';
 import {useUpdateDetector} from 'sentry/views/detectors/hooks';
 import {makeMonitorDetailsPathname} from 'sentry/views/detectors/pathnames';
 
@@ -36,14 +38,20 @@ export function useEditDetectorFormSubmit<
   const {mutateAsync: updateDetector} = useUpdateDetector();
 
   return useCallback<OnSubmitCallback>(
-    async (data, onSubmitSuccess, onSubmitError, _, formModel) => {
+    async (_data, onSubmitSuccess, onSubmitError, _event, formModel) => {
       const isValid = formModel.validateForm();
       if (!isValid) {
         return;
       }
 
+      formModel.setFormSaving();
+
       try {
-        const payload = formDataToEndpointPayload(data as TFormData);
+        // Use getTransformedData() instead of raw data to apply field-level
+        // getValue transformations (e.g., assertion normalization)
+        const payload = formDataToEndpointPayload(
+          formModel.getTransformedData() as TFormData
+        );
 
         const updatedData = {
           detectorId: detector.id,
@@ -52,7 +60,12 @@ export function useEditDetectorFormSubmit<
 
         const resultDetector = await updateDetector(updatedData);
 
-        addSuccessMessage(t('Monitor updated successfully'));
+        trackAnalytics('monitor.updated', {
+          organization,
+          ...getDetectorAnalyticsPayload(resultDetector),
+        });
+
+        addSuccessMessage(t('Monitor updated'));
 
         if (onSuccess) {
           onSuccess(resultDetector as TDetector);
@@ -75,7 +88,7 @@ export function useEditDetectorFormSubmit<
       detector,
       formDataToEndpointPayload,
       updateDetector,
-      organization.slug,
+      organization,
       navigate,
       onSuccess,
       onError,

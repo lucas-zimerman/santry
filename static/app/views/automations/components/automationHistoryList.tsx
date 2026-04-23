@@ -1,19 +1,22 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 import {PlatformIcon} from 'platformicons';
 
-import {Flex} from 'sentry/components/core/layout';
-import {Link} from 'sentry/components/core/link';
+import {Flex} from '@sentry/scraps/layout';
+import {Link} from '@sentry/scraps/link';
+
 import {DateTime} from 'sentry/components/dateTime';
-import LoadingError from 'sentry/components/loadingError';
-import Pagination from 'sentry/components/pagination';
-import Placeholder from 'sentry/components/placeholder';
+import {LoadingError} from 'sentry/components/loadingError';
+import {getPaginationCaption, Pagination} from 'sentry/components/pagination';
+import {Placeholder} from 'sentry/components/placeholder';
 import {SimpleTable} from 'sentry/components/tables/simpleTable';
 import {t} from 'sentry/locale';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
-import {useAutomationFireHistoryQuery} from 'sentry/views/automations/hooks';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {automationFireHistoryApiOptions} from 'sentry/views/automations/hooks';
 import {makeMonitorDetailsPathname} from 'sentry/views/detectors/pathnames';
 
 const DEFAULT_HISTORY_PER_PAGE = 10;
@@ -48,7 +51,7 @@ function Skeletons() {
   );
 }
 
-export default function AutomationHistoryList({
+export function AutomationHistoryList({
   automationId,
   limit = DEFAULT_HISTORY_PER_PAGE,
   query,
@@ -61,17 +64,30 @@ export default function AutomationHistoryList({
   const cursor =
     typeof location.query.cursor === 'string' ? location.query.cursor : undefined;
 
-  const {
-    data: fireHistory = [],
-    isLoading,
-    isError,
-    getResponseHeader,
-  } = useAutomationFireHistoryQuery(
-    {automationId, limit, cursor, query},
-    {enabled: !!automationId}
-  );
+  const {data, isLoading, isError} = useQuery({
+    ...automationFireHistoryApiOptions({
+      organization: org,
+      automationId,
+      cursor,
+      limit,
+      query,
+    }),
+    select: selectJsonWithHeaders,
+  });
 
-  const pageLinks = getResponseHeader?.('Link');
+  const fireHistory = data?.json ?? [];
+  const pageLinks = data?.headers.Link;
+  const totalCountInt = data?.headers['X-Hits'] ?? 0;
+
+  const paginationCaption =
+    isLoading || !data?.json
+      ? undefined
+      : getPaginationCaption({
+          cursor,
+          limit,
+          pageLength: data.json.length,
+          total: totalCountInt,
+        });
 
   return (
     <Fragment>
@@ -98,13 +114,21 @@ export default function AutomationHistoryList({
                   <TruncatedText>{row.detector.name}</TruncatedText>
                 </StyledLink>
               ) : (
-                t('Unknown detector')
+                '—'
               )}
             </SimpleTable.RowCell>
             <SimpleTable.RowCell>
-              <StyledLink to={`/issues/${row.group.id}`}>
+              <StyledLink
+                to={{
+                  pathname: `/organizations/${org.slug}/issues/${row.group.id}/`,
+                  query: {project: row.group.project.id},
+                }}
+              >
                 <Flex gap="xs" align="center">
-                  <PlatformIcon platform={row.group.platform} size={16} />
+                  <PlatformIcon
+                    platform={row.group.project.platform ?? 'default'}
+                    size={16}
+                  />
                   <TruncatedText>
                     {row.group.title ? row.group.title : `#${row.group.id}`}
                   </TruncatedText>
@@ -126,6 +150,7 @@ export default function AutomationHistoryList({
           });
         }}
         pageLinks={pageLinks}
+        caption={paginationCaption}
       />
     </Fragment>
   );

@@ -1,155 +1,171 @@
-import {Component} from 'react';
+import {useCallback, useState} from 'react';
 import styled from '@emotion/styled';
-import isEqual from 'lodash/isEqual';
+import {useQueryClient} from '@tanstack/react-query';
 
-import {Input} from 'sentry/components/core/input';
-import FieldGroup from 'sentry/components/forms/fieldGroup';
+import {Input} from '@sentry/scraps/input';
+import {Flex} from '@sentry/scraps/layout';
+
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import {saveToSourceGroupData} from 'sentry/views/settings/components/dataScrubbing/modals/utils';
-import type {EventId} from 'sentry/views/settings/components/dataScrubbing/types';
+import {apiOptions} from 'sentry/utils/api/apiOptions';
+import {useSourceGroupData} from 'sentry/views/settings/components/dataScrubbing/modals/utils';
+import type {SourceSuggestion} from 'sentry/views/settings/components/dataScrubbing/types';
 import {EventIdStatus} from 'sentry/views/settings/components/dataScrubbing/types';
+import {valueSuggestions} from 'sentry/views/settings/components/dataScrubbing/utils';
 
-import EventIdFieldStatusIcon from './eventIdFieldStatusIcon';
+import {EventIdFieldStatusIcon} from './eventIdFieldStatusIcon';
+
+const suggestionOptions = (
+  orgSlug: string,
+  query: {eventId: string; projectId?: string}
+) =>
+  apiOptions.as<{suggestions: SourceSuggestion[]}>()(
+    '/organizations/$organizationIdOrSlug/data-scrubbing-selector-suggestions/',
+    {
+      path: {organizationIdOrSlug: orgSlug},
+      query,
+      staleTime: 0,
+    }
+  );
+
+type FieldProps = {
+  'aria-describedby': string;
+  'aria-invalid': boolean;
+  disabled: boolean;
+  id: string;
+  name: string;
+  onBlur: () => void;
+};
 
 type Props = {
-  eventId: EventId;
-  onUpdateEventId: (eventId: string) => void;
-  disabled?: boolean;
-};
-
-type State = {
-  status: EventIdStatus;
+  fieldProps: FieldProps;
+  onChange: (value: string) => void;
+  onErrorChange: (error: string | undefined) => void;
+  onSuggestionsLoaded: (suggestions: SourceSuggestion[]) => void;
+  orgSlug: string;
   value: string;
+  projectId?: string;
 };
 
-class EventIdField extends Component<Props, State> {
-  state: State = {...this.props.eventId};
+export function EventIdField({
+  fieldProps,
+  value,
+  onChange,
+  onSuggestionsLoaded,
+  onErrorChange,
+  orgSlug,
+  projectId,
+}: Props) {
+  const queryClient = useQueryClient();
+  const {sourceGroupData, saveToSourceGroupData} = useSourceGroupData();
+  const [status, setStatus] = useState<EventIdStatus>(() =>
+    sourceGroupData.eventId ? EventIdStatus.LOADED : EventIdStatus.UNDEFINED
+  );
 
-  componentDidUpdate(prevProps: Props) {
-    if (!isEqual(prevProps.eventId, this.props.eventId)) {
-      this.loadState();
-    }
-  }
-
-  loadState() {
-    this.setState({
-      ...this.props.eventId,
-    });
-  }
-
-  getErrorMessage(): string | undefined {
-    const {status} = this.state;
-
-    switch (status) {
-      case EventIdStatus.INVALID:
-        return t('This event ID is invalid');
-      case EventIdStatus.ERROR:
-        return t(
-          'An error occurred while fetching the suggestions based on this event ID'
-        );
-      case EventIdStatus.NOT_FOUND:
-        return t('The chosen event ID was not found in projects you have access to');
-      default:
-        return undefined;
-    }
-  }
-
-  isEventIdValid(): boolean {
-    const {value, status} = this.state;
-
-    if (value && value.length !== 32) {
-      if (status !== EventIdStatus.INVALID) {
-        saveToSourceGroupData({value, status});
-        this.setState({status: EventIdStatus.INVALID});
+  const handleUpdateEventId = useCallback(
+    async (eventId: string) => {
+      if (!eventId) {
+        setStatus(EventIdStatus.UNDEFINED);
+        onErrorChange(undefined);
+        onSuggestionsLoaded(valueSuggestions);
+        saveToSourceGroupData({value: '', status: EventIdStatus.UNDEFINED});
+        return;
       }
 
-      return false;
-    }
+      if (eventId.length !== 32) {
+        setStatus(EventIdStatus.INVALID);
+        onErrorChange(t('This event ID is invalid'));
+        return;
+      }
 
-    return true;
-  }
+      setStatus(EventIdStatus.LOADING);
+      onErrorChange(undefined);
 
-  handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const eventId = event.target.value.replace(/-/g, '').trim();
+      try {
+        const data = await queryClient.fetchQuery({
+          ...suggestionOptions(orgSlug, {
+            eventId,
+            ...(projectId ? {projectId} : {}),
+          }),
+          retry: false,
+        });
 
-    if (eventId !== this.state.value) {
-      this.setState({
-        value: eventId,
-        status: EventIdStatus.UNDEFINED,
-      });
-    }
-  };
+        const {suggestions} = data.json;
 
-  handleBlur = (event: React.FocusEvent<HTMLInputElement>) => {
-    event.preventDefault();
+        if (suggestions.length > 0) {
+          setStatus(EventIdStatus.LOADED);
+          onErrorChange(undefined);
+          onSuggestionsLoaded(suggestions);
+          saveToSourceGroupData(
+            {value: eventId, status: EventIdStatus.LOADED},
+            suggestions
+          );
+        } else {
+          setStatus(EventIdStatus.NOT_FOUND);
+          onErrorChange(
+            t('The chosen event ID was not found in projects you have access to')
+          );
+          onSuggestionsLoaded(valueSuggestions);
+          saveToSourceGroupData({value: '', status: EventIdStatus.UNDEFINED});
+        }
+      } catch {
+        setStatus(EventIdStatus.ERROR);
+        onErrorChange(
+          t('An error occurred while fetching the suggestions based on this event ID')
+        );
+        onSuggestionsLoaded(valueSuggestions);
+        saveToSourceGroupData({value: '', status: EventIdStatus.UNDEFINED});
+      }
+    },
+    [
+      queryClient,
+      orgSlug,
+      projectId,
+      onSuggestionsLoaded,
+      onErrorChange,
+      saveToSourceGroupData,
+    ]
+  );
 
-    if (this.isEventIdValid()) {
-      this.props.onUpdateEventId(this.state.value);
-    }
-  };
+  const handleBlur = useCallback(() => {
+    handleUpdateEventId(value);
+    fieldProps.onBlur();
+  }, [handleUpdateEventId, value, fieldProps]);
 
-  handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const {key} = event;
-
-    if (key === 'Enter' && this.isEventIdValid()) {
-      this.props.onUpdateEventId(this.state.value);
-    }
-  };
-
-  handleClickIconClose = () => {
-    this.setState({
-      value: '',
-      status: EventIdStatus.UNDEFINED,
-    });
-  };
-
-  render() {
-    const {disabled} = this.props;
-    const {value, status} = this.state;
-
-    return (
-      <FieldGroup
-        data-test-id="event-id-field"
-        label={t('Event ID (Optional)')}
-        help={t(
-          'Providing an event ID will automatically provide you a list of suggested sources'
-        )}
-        inline={false}
-        error={this.getErrorMessage()}
-        flexibleControlStateSize
-        stacked
-        showHelpInTooltip
-      >
-        <FieldWrapper>
-          <StyledInput
-            type="text"
-            name="eventId"
-            disabled={disabled}
-            value={value}
-            placeholder={t('XXXXXXXXXXXXXX')}
-            onChange={this.handleChange}
-            onKeyDown={this.handleKeyDown}
-            onBlur={this.handleBlur}
-          />
-          <Status>
-            <EventIdFieldStatusIcon
-              onClickIconClose={this.handleClickIconClose}
-              status={status}
-            />
-          </Status>
-        </FieldWrapper>
-      </FieldGroup>
-    );
-  }
+  return (
+    <Flex align="center" position="relative" flexGrow={1}>
+      <StyledInput
+        {...fieldProps}
+        type="text"
+        value={value}
+        placeholder={t('XXXXXXXXXXXXXX')}
+        onChange={event => {
+          const newValue = event.target.value.replace(/-/g, '').trim();
+          if (status !== EventIdStatus.UNDEFINED) {
+            setStatus(EventIdStatus.UNDEFINED);
+            onErrorChange(undefined);
+          }
+          onChange(newValue);
+        }}
+        onBlur={handleBlur}
+        onKeyDown={event => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            handleBlur();
+          }
+        }}
+      />
+      <Status>
+        <EventIdFieldStatusIcon status={status} />
+      </Status>
+    </Flex>
+  );
 }
-export default EventIdField;
 
 const StyledInput = styled(Input)`
   flex: 1;
-  font-weight: ${p => p.theme.fontWeight.normal};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
   input {
-    padding-right: ${space(1.5)};
+    padding-right: ${p => p.theme.space.lg};
   }
   margin-bottom: 0;
 `;
@@ -157,14 +173,8 @@ const StyledInput = styled(Input)`
 const Status = styled('div')`
   height: 100%;
   position: absolute;
-  right: ${space(1.5)};
+  right: ${p => p.theme.space.lg};
   top: 0;
-  display: flex;
-  align-items: center;
-`;
-
-const FieldWrapper = styled('div')`
-  position: relative;
   display: flex;
   align-items: center;
 `;

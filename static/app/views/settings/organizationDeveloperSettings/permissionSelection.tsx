@@ -1,8 +1,8 @@
 import {Component, Fragment} from 'react';
 
-import SelectField from 'sentry/components/forms/fields/selectField';
-import FormContext from 'sentry/components/forms/formContext';
-import {SENTRY_APP_PERMISSIONS} from 'sentry/constants';
+import {SelectField} from 'sentry/components/forms/fields/selectField';
+import {FormContext} from 'sentry/components/forms/formContext';
+import {SENTRY_APP_PERMISSIONS, type PermissionObj} from 'sentry/constants';
 import {t} from 'sentry/locale';
 import type {
   PermissionResource,
@@ -84,6 +84,12 @@ type Props = {
   appPublished: boolean;
   onChange: (permissions: Permissions) => void;
   permissions: Permissions;
+  /**
+   * Optional list of permissions to display in the selection.
+   * Defaults to SENTRY_APP_PERMISSIONS if not provided.
+   * Useful for limiting permissions available to personal tokens vs integration tokens.
+   */
+  displayedPermissions?: PermissionObj[];
 };
 
 type State = {
@@ -101,13 +107,13 @@ function findResource(r: PermissionResource) {
  *    ['org:read', 'org:write', ...]
  *
  */
-function permissionStateToList(permissions: Permissions) {
+export function permissionStateToList(permissions: Permissions) {
   return Object.entries(permissions).flatMap(
     ([r, p]) => findResource(r as PermissionResource)?.choices?.[p]?.scopes
   );
 }
 
-export default class PermissionSelection extends Component<Props, State> {
+export class PermissionSelection extends Component<Props, State> {
   state: State = {
     permissions: this.props.permissions,
   };
@@ -124,7 +130,10 @@ export default class PermissionSelection extends Component<Props, State> {
   save = (permissions: Permissions) => {
     this.setState({permissions});
     this.props.onChange(permissions);
-    this.context.form.setValue(
+    // When used inside a legacy FormModel-based form, sync the scopes field.
+    // When used outside that context (e.g. with useScrapsForm), the parent
+    // derives scopes from the onChange callback instead.
+    this.context.form?.setValue(
       'scopes',
       permissionStateToList(this.state.permissions) as string[]
     );
@@ -132,10 +141,11 @@ export default class PermissionSelection extends Component<Props, State> {
 
   render() {
     const {permissions} = this.state;
+    const {displayedPermissions = SENTRY_APP_PERMISSIONS} = this.props;
 
     return (
       <Fragment>
-        {SENTRY_APP_PERMISSIONS.map(config => {
+        {displayedPermissions.map(config => {
           const options = Object.entries(config.choices).map(([value, {label}]) => ({
             value,
             label,

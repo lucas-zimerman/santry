@@ -1,16 +1,16 @@
 import {Fragment} from 'react';
 import {useTheme} from '@emotion/react';
 
-import BaseChart from 'sentry/components/charts/baseChart';
+import {BaseChart} from 'sentry/components/charts/baseChart';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import {axisLabelFormatter} from 'sentry/utils/discover/charts';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
-import NoEvents from './noEvents';
+import {NoEvents} from './noEvents';
 
 type BaseChartProps = React.ComponentProps<typeof BaseChart>;
 
@@ -58,12 +58,12 @@ export function ProjectChart({
       xAxisIndex: 1,
       yAxisIndex: 1,
       itemStyle: {
-        color: theme.gray200,
+        color: theme.tokens.dataviz.semantic.neutral,
         opacity: 0.8,
       },
       emphasis: {
         itemStyle: {
-          color: theme.gray200,
+          color: theme.tokens.dataviz.semantic.neutral,
           opacity: 1.0,
         },
       },
@@ -84,12 +84,12 @@ export function ProjectChart({
       xAxisIndex: 0,
       yAxisIndex: 0,
       itemStyle: {
-        color: theme.purple300,
+        color: theme.tokens.dataviz.semantic.accent,
         opacity: 0.6,
       },
       emphasis: {
         itemStyle: {
-          color: theme.purple300,
+          color: theme.tokens.dataviz.semantic.accent,
           opacity: 0.8,
         },
       },
@@ -129,7 +129,7 @@ export function ProjectChart({
     tooltip: {
       trigger: 'axis' as const,
     },
-    xAxes: Array.from(new Array(series.length)).map((_i, index) => ({
+    xAxes: Array.from(Array.from({length: series.length})).map((_i, index) => ({
       gridIndex: index,
       axisLine: {
         show: false,
@@ -150,7 +150,7 @@ export function ProjectChart({
         },
       },
     })),
-    yAxes: Array.from(new Array(series.length)).map((_i, index) => ({
+    yAxes: Array.from(Array.from({length: series.length})).map((_i, index) => ({
       gridIndex: index,
       interval: Infinity,
       max(value: {max: number}) {
@@ -162,12 +162,12 @@ export function ProjectChart({
         margin: 2,
         showMaxLabel: true,
         showMinLabel: false,
-        color: theme.chartLabel,
-        fontFamily: theme.text.family,
+        color: theme.tokens.content.secondary,
+        fontFamily: theme.font.family.sans,
         inside: true,
         lineHeight: 12,
         formatter: (value: number) => axisLabelFormatter(value, 'number', true),
-        textBorderColor: theme.backgroundSecondary,
+        textBorderColor: theme.tokens.border.secondary,
         textBorderWidth: 1,
       },
       splitLine: {

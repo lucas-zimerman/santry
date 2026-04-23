@@ -1,8 +1,8 @@
 import {createContext} from 'react';
 
 import type {ReducerAction} from 'sentry/types/reducerAction';
+import {makeCombinedReducers} from 'sentry/utils/makeCombinedReducer';
 import {Rect} from 'sentry/utils/profiling/speedscope';
-import {makeCombinedReducers} from 'sentry/utils/useCombinedReducer';
 import type {
   UndoableReducer,
   UndoableReducerAction,
@@ -56,7 +56,7 @@ export const flamegraphStateReducer = makeCombinedReducers({
 type FlamegraphReducer = UndoableReducer<typeof flamegraphStateReducer>;
 
 export type FlamegraphState = React.ReducerState<FlamegraphReducer>['current'];
-export type FlamegraphStateValue = [
+export type FlamegraphStateValue = readonly [
   FlamegraphState,
   {
     nextState: FlamegraphState | undefined;

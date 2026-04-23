@@ -1,30 +1,28 @@
 import type {Location, LocationDescriptor} from 'history';
 
-import ConfigStore from 'sentry/stores/configStore';
+import {ConfigStore} from 'sentry/stores/configStore';
 
 // If you change this also update the patterns in sentry.api.utils
 const NORMALIZE_PATTERNS: Array<[pattern: RegExp, replacement: string]> = [
   // /organizations/slug/section, but not /organizations/new
-  [/\/organizations\/(?!new)[^\/]+\/(.*)/, '/$1'],
+  [/\/organizations\/(?!new)[^/]+\/(.*)/, '/$1'],
   // For /settings/:orgId/ -> /settings/organization/
   [
-    /\/settings\/(?!account\/|billing\/|projects\/|teams\/|stats\/)[^\/]+\/?$/,
+    /\/settings\/(?!account\/|billing\/|projects\/|teams\/|stats\/|seer\/)[^/]+\/?$/,
     '/settings/organization/',
   ],
   // Move /settings/:orgId/:section -> /settings/:section
   // but not /settings/organization or /settings/projects which is a new URL
   [
-    /^\/?settings\/(?!account\/|billing\/|projects\/|teams\/|stats\/)[^\/]+\/(.*)/,
+    /^\/?settings\/(?!account\/|billing\/|projects\/|teams\/|stats\/|seer\/)[^/]+\/(.*)/,
     '/settings/$1',
   ],
-  [/^\/?join-request\/[^\/]+\/?.*/, '/join-request/'],
-  [
-    /^\/?onboarding\/(?!setup-docs|select-platform|welcome)[^\/]+\/(.*)/,
-    '/onboarding/$1',
-  ],
+  [/^\/?join-request\/[^/]+\/?.*/, '/join-request/'],
+  [/^\/?onboarding\/(?!setup-docs|select-platform|welcome)[^/]+\/(.*)/, '/onboarding/$1'],
   // Handles /org-slug/project-slug/getting-started/platform/ -> /getting-started/project-slug/platform/
-  [/^\/?(?!settings)[^\/]+\/([^\/]+)\/getting-started\/(.*)/, '/getting-started/$1/$2'],
-  [/^\/?accept-terms\/[^\/]*\/?$/, '/accept-terms/'],
+  [/^\/?(?!settings)[^/]+\/([^/]+)\/getting-started\/(.*)/, '/getting-started/$1/$2'],
+  [/^\/?accept-terms\/[^/]*\/?$/, '/accept-terms/'],
+  [/^\/?checkout\/[^/]+\/(.*)/, '/checkout/$1'],
 ];
 
 type NormalizeUrlOptions = {
@@ -35,20 +33,20 @@ type NormalizeUrlOptions = {
  * Normalize a URL for customer domains based on the organization that was
  * present in the initial page load.
  */
-export default function normalizeUrl(path: string, options?: NormalizeUrlOptions): string;
+export function normalizeUrl(path: string, options?: NormalizeUrlOptions): string;
 
-export default function normalizeUrl(
+export function normalizeUrl(
   path: LocationDescriptor,
   options?: NormalizeUrlOptions
 ): LocationDescriptor;
 
-export default function normalizeUrl(
+export function normalizeUrl(
   path: LocationDescriptor,
   location?: Location,
   options?: NormalizeUrlOptions
 ): LocationDescriptor;
 
-export default function normalizeUrl(
+export function normalizeUrl(
   path: LocationDescriptor,
   location?: Location | NormalizeUrlOptions,
   options?: NormalizeUrlOptions

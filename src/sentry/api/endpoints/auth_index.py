@@ -14,7 +14,7 @@ from sentry import analytics
 from sentry.analytics.events.auth_v2 import AuthV2DeleteLogin
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.authentication import QuietBasicAuthentication
+from sentry.api.authentication import QuietBasicAuthentication, UserAuthTokenAuthentication
 from sentry.api.base import Endpoint, control_silo_endpoint
 from sentry.api.exceptions import SsoRequired
 from sentry.api.serializers import serialize
@@ -26,6 +26,7 @@ from sentry.auth.services.auth.impl import promote_request_rpc_user
 from sentry.auth.superuser import SUPERUSER_ORG_ID
 from sentry.demo_mode.utils import is_demo_user
 from sentry.organizations.services.organization import organization_service
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.users.api.serializers.user import DetailedSelfUserSerializer
 from sentry.users.models.authenticator import Authenticator
@@ -78,6 +79,7 @@ class BaseAuthIndexEndpoint(Endpoint):
 
     @staticmethod
     def _verify_user_via_inputs(validator: AuthVerifyValidator, request: Request) -> bool:
+        assert request.user.is_authenticated
         # See if we have a u2f challenge/response
         if "challenge" in validator.validated_data and "response" in validator.validated_data:
             try:
@@ -132,14 +134,27 @@ class AuthIndexEndpoint(BaseAuthIndexEndpoint):
     authentication methods from JS endpoints by relying on internal sessions
     and simple HTTP authentication.
     """
+
+    def initialize_request(self, request, *args, **kwargs):
+        rv = super().initialize_request(request, *args, **kwargs)
+        # Allow Bearer token authentication for GET (whoami) only.
+        # POST/PUT/DELETE are session-management operations where Bearer auth
+        # is inappropriate — the original restriction to QuietBasicAuthentication
+        # and SessionAuthentication is intentional for those methods.
+        if request.method == "GET":
+            rv.authenticators = [UserAuthTokenAuthentication(), *(rv.authenticators or [])]
+        return rv
+
     enforce_rate_limit = True
-    rate_limits = {
-        "PUT": {
-            RateLimitCategory.USER: RateLimit(
-                limit=5, window=60 * 60
-            ),  # 5 PUT requests per hour per user
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "PUT": {
+                RateLimitCategory.USER: RateLimit(
+                    limit=5, window=60 * 60
+                ),  # 5 PUT requests per hour per user
+            }
         }
-    }
+    )
 
     def _validate_superuser(
         self, validator: AuthVerifyValidator, request: Request, verify_authenticator: bool

@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {getMemoryInfoContext} from 'sentry/components/events/contexts/knownContext/memoryInfo';
 
 const MOCK_MEMORY_INFO_CONTEXT = {
@@ -91,8 +91,8 @@ describe('MemoryInfoContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'memory_info'}
-        alias={'memory_info'}
+        type="memory_info"
+        alias="memory_info"
         value={{...MOCK_MEMORY_INFO_CONTEXT, pinned_objects_count: ''}}
       />
     );

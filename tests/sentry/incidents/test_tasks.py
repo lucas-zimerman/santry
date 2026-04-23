@@ -1,123 +1,29 @@
-from functools import cached_property
-from unittest import mock
-from unittest.mock import Mock
+from unittest.mock import patch
 
-import pytest
-
-from sentry.incidents.logic import (
-    CRITICAL_TRIGGER_LABEL,
-    create_alert_rule_trigger,
-    create_alert_rule_trigger_action,
-    create_incident_activity,
-)
-from sentry.incidents.models.alert_rule import AlertRuleTriggerAction
-from sentry.incidents.models.incident import IncidentActivityType, IncidentStatus
-from sentry.incidents.tasks import handle_trigger_action
+from sentry.incidents.models.alert_rule import AlertRule, AlertRuleStatus
+from sentry.incidents.models.incident import IncidentStatus
+from sentry.incidents.tasks import auto_resolve_snapshot_incidents
 from sentry.testutils.cases import TestCase
-from sentry.testutils.helpers.alert_rule import TemporaryAlertRuleTriggerActionRegistry
-from sentry.testutils.helpers.features import with_feature
-from sentry.testutils.skips import requires_kafka, requires_snuba
-
-pytestmark = [pytest.mark.sentry_metrics, requires_snuba, requires_kafka]
 
 
-class HandleTriggerActionTest(TestCase):
-    @pytest.fixture(autouse=True)
-    def _setup_metric_patch(self):
-        with mock.patch("sentry.incidents.tasks.metrics") as self.metrics:
-            yield
+class AutoResolveSnapshotIncidentsTest(TestCase):
+    def test_resolves_open_incidents(self) -> None:
+        alert_rule = self.create_alert_rule()
+        AlertRule.objects.filter(id=alert_rule.id).update(status=AlertRuleStatus.SNAPSHOT.value)
+        incident = self.create_incident(alert_rule=alert_rule, status=IncidentStatus.OPEN.value)
 
-    @cached_property
-    def alert_rule(self):
-        return self.create_alert_rule()
+        auto_resolve_snapshot_incidents(alert_rule_id=alert_rule.id)
 
-    @cached_property
-    def trigger(self):
-        return create_alert_rule_trigger(self.alert_rule, CRITICAL_TRIGGER_LABEL, 100)
+        incident.refresh_from_db()
+        assert incident.status == IncidentStatus.CLOSED.value
 
-    @cached_property
-    def action(self):
-        return create_alert_rule_trigger_action(
-            self.trigger, AlertRuleTriggerAction.Type.EMAIL, AlertRuleTriggerAction.TargetType.USER
-        )
+    @patch("sentry.incidents.tasks.auto_resolve_snapshot_incidents.apply_async")
+    def test_reenqueues_when_more_than_batch_size(self, mock_apply_async):
+        alert_rule = self.create_alert_rule()
+        AlertRule.objects.filter(id=alert_rule.id).update(status=AlertRuleStatus.SNAPSHOT.value)
+        for _ in range(55):
+            self.create_incident(alert_rule=alert_rule, status=IncidentStatus.OPEN.value)
 
-    def test_missing_trigger_action(self) -> None:
-        with self.tasks():
-            handle_trigger_action.delay(
-                1000, 1001, self.project.id, "hello", IncidentStatus.CRITICAL.value
-            )
-        self.metrics.incr.assert_called_once_with(
-            "incidents.alert_rules.action.skipping_missing_action"
-        )
+        auto_resolve_snapshot_incidents(alert_rule_id=alert_rule.id)
 
-    def test_missing_incident(self) -> None:
-        with self.tasks():
-            handle_trigger_action.delay(
-                self.action.id, 1001, self.project.id, "hello", IncidentStatus.CRITICAL.value
-            )
-        self.metrics.incr.assert_called_once_with(
-            "incidents.alert_rules.action.skipping_missing_incident"
-        )
-
-    def test_missing_project(self) -> None:
-        incident = self.create_incident()
-        with self.tasks():
-            handle_trigger_action.delay(
-                self.action.id, incident.id, 1002, "hello", IncidentStatus.CRITICAL.value
-            )
-        self.metrics.incr.assert_called_once_with(
-            "incidents.alert_rules.action.skipping_missing_project"
-        )
-
-    def test(self) -> None:
-        with TemporaryAlertRuleTriggerActionRegistry.registry_patched():
-            mock_handler = Mock()
-            AlertRuleTriggerAction.register_type("email", AlertRuleTriggerAction.Type.EMAIL, [])(
-                mock_handler
-            )
-            incident = self.create_incident()
-            activity = create_incident_activity(
-                incident,
-                IncidentActivityType.STATUS_CHANGE,
-                value=IncidentStatus.CRITICAL.value,
-            )
-            metric_value = 1234
-            with self.tasks():
-                handle_trigger_action.delay(
-                    self.action.id,
-                    incident.id,
-                    self.project.id,
-                    "fire",
-                    IncidentStatus.CRITICAL.value,
-                    metric_value=metric_value,
-                )
-            mock_handler.assert_called_once_with()
-            mock_handler.return_value.fire.assert_called_once_with(
-                action=self.action,
-                incident=incident,
-                project=self.project,
-                new_status=IncidentStatus.CRITICAL,
-                metric_value=metric_value,
-                notification_uuid=str(activity.notification_uuid),
-            )
-
-    @with_feature("organizations:workflow-engine-single-process-metric-issues")
-    def test_when_workflow_engine_is_enabled(self) -> None:
-        with TemporaryAlertRuleTriggerActionRegistry.registry_patched():
-            mock_handler = Mock()
-            AlertRuleTriggerAction.register_type("email", AlertRuleTriggerAction.Type.EMAIL, [])(
-                mock_handler
-            )
-            incident = self.create_incident()
-            metric_value = 1234
-            with self.tasks():
-                handle_trigger_action.delay(
-                    self.action.id,
-                    incident.id,
-                    self.project.id,
-                    "fire",
-                    IncidentStatus.CRITICAL.value,
-                    metric_value=metric_value,
-                )
-            # We should not fire the action if the workflow engine is enabled
-            mock_handler.assert_not_called()
+        mock_apply_async.assert_called_once_with(kwargs={"alert_rule_id": alert_rule.id})

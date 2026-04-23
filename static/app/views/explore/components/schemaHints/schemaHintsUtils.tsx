@@ -34,7 +34,18 @@ const LOGS_HINT_KEYS = [
   OurLogKnownFieldKey.SERVER_ADDRESS,
 ];
 
+const CONVERSATIONS_HINT_KEYS = [
+  SpanFields.GEN_AI_CONVERSATION_ID,
+  SpanFields.GEN_AI_REQUEST_MODEL,
+  SpanFields.TRANSACTION,
+  SpanFields.RELEASE,
+];
+
 const SCHEMA_HINTS_LIST_ORDER_KEYS_LOGS = [...new Set([...LOGS_HINT_KEYS])];
+
+const SCHEMA_HINTS_LIST_ORDER_KEYS_CONVERSATIONS = [
+  ...new Set([...CONVERSATIONS_HINT_KEYS]),
+];
 
 const SCHEMA_HINTS_LIST_ORDER_KEYS_EXPLORE = [
   ...new Set([...FRONTEND_HINT_KEYS, ...MOBILE_HINT_KEYS, ...COMMON_HINT_KEYS]),
@@ -52,13 +63,24 @@ const SCHEMA_HINTS_HIDDEN_KEYS: string[] = [
 ];
 
 export enum SchemaHintsSources {
+  // TODO: change Explore to Spans because Explore is too broad and confusing here
   EXPLORE = 'explore',
   LOGS = 'logs',
+  CONVERSATIONS = 'conversations',
+  ERRORS = 'errors',
 }
 
 export const getSchemaHintsListOrder = (source: SchemaHintsSources) => {
   if (source === SchemaHintsSources.LOGS) {
     return SCHEMA_HINTS_LIST_ORDER_KEYS_LOGS;
+  }
+  if (source === SchemaHintsSources.CONVERSATIONS) {
+    return SCHEMA_HINTS_LIST_ORDER_KEYS_CONVERSATIONS;
+  }
+
+  if (source === SchemaHintsSources.ERRORS) {
+    // TODO: check to see which keys we want to display for errors
+    return [];
   }
 
   return SCHEMA_HINTS_LIST_ORDER_KEYS_EXPLORE;

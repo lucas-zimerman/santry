@@ -1,6 +1,8 @@
-import {Fragment, useEffect, useState} from 'react';
+import {Fragment, useEffect} from 'react';
+import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
+import {useQuery} from '@tanstack/react-query';
 
 import emptyStateImg from 'sentry-images/spot/performance-empty-state.svg';
 import emptyTraceImg from 'sentry-images/spot/performance-empty-trace.svg';
@@ -9,71 +11,72 @@ import tourCorrelate from 'sentry-images/spot/performance-tour-correlate.svg';
 import tourMetrics from 'sentry-images/spot/performance-tour-metrics.svg';
 import tourTrace from 'sentry-images/spot/performance-tour-trace.svg';
 
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {Grid, type GridProps} from '@sentry/scraps/layout';
+
 import {
   addErrorMessage,
   addLoadingMessage,
   clearIndicators,
 } from 'sentry/actionCreators/indicator';
 import type {Client} from 'sentry/api';
-import UnsupportedAlert from 'sentry/components/alerts/unsupportedAlert';
-import {Button} from 'sentry/components/core/button';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
+import {UnsupportedAlert} from 'sentry/components/alerts/unsupportedAlert';
 import {GuidedSteps} from 'sentry/components/guidedSteps/guidedSteps';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import type {TourStep} from 'sentry/components/modals/featureTourModal';
-import FeatureTourModal, {
+import {
+  FeatureTourModal,
   TourImage,
   TourText,
 } from 'sentry/components/modals/featureTourModal';
 import {AuthTokenGeneratorProvider} from 'sentry/components/onboarding/gettingStartedDoc/authTokenGenerator';
 import {ContentBlocksRenderer} from 'sentry/components/onboarding/gettingStartedDoc/contentBlocks/renderer';
 import {
-  OnboardingCodeSnippet,
-  TabbedCodeSnippet,
-} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCodeSnippet';
-import type {
-  Configuration,
-  ContentBlock,
-  DocsParams,
-} from 'sentry/components/onboarding/gettingStartedDoc/types';
+  OnboardingCopyMarkdownButton,
+  useCopySetupInstructionsEnabled,
+} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCopyMarkdownButton';
+import {
+  StepIndexProvider,
+  TabSelectionScope,
+} from 'sentry/components/onboarding/gettingStartedDoc/selectedCodeTabContext';
+import type {DocsParams} from 'sentry/components/onboarding/gettingStartedDoc/types';
 import {
   ProductSolution,
   StepType,
 } from 'sentry/components/onboarding/gettingStartedDoc/types';
 import {useSourcePackageRegistries} from 'sentry/components/onboarding/gettingStartedDoc/useSourcePackageRegistries';
 import {useLoadGettingStarted} from 'sentry/components/onboarding/gettingStartedDoc/utils/useLoadGettingStarted';
-import LegacyOnboardingPanel from 'sentry/components/onboardingPanel';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
+import {OnboardingPanel as LegacyOnboardingPanel} from 'sentry/components/onboardingPanel';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
 import {filterProjects} from 'sentry/components/performanceOnboarding/utils';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
 import {BodyTitle, SetupTitle} from 'sentry/components/updatedEmptyState';
 import {
   withoutPerformanceSupport,
   withPerformanceOnboarding,
 } from 'sentry/data/platformCategories';
-import platforms, {otherPlatform} from 'sentry/data/platforms';
+import {otherPlatform, allPlatforms as platforms} from 'sentry/data/platforms';
 import {t, tct} from 'sentry/locale';
-import ConfigStore from 'sentry/stores/configStore';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
+import {ConfigStore} from 'sentry/stores/configStore';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import pulsingIndicatorStyles from 'sentry/styles/pulsingIndicator';
-import {space} from 'sentry/styles/space';
+import {pulsingIndicatorStyles} from 'sentry/styles/pulsingIndicator';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import {browserHistory} from 'sentry/utils/browserHistory';
 import {generateLinkToEventInTraceView} from 'sentry/utils/discover/urls';
-import EventWaiter from 'sentry/utils/eventWaiter';
 import {decodeInteger} from 'sentry/utils/queryString';
 import {testableWindowLocation} from 'sentry/utils/testableWindowLocation';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
+import {useEventWaiter} from 'sentry/utils/useEventWaiter';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useProjects from 'sentry/utils/useProjects';
+import {useProjects} from 'sentry/utils/useProjects';
 import {Tab} from 'sentry/views/explore/hooks/useTab';
-import {useTraces} from 'sentry/views/explore/hooks/useTraces';
+import {useTracesApiOptions} from 'sentry/views/explore/hooks/useTraces';
 
 import {traceAnalytics} from './newTraceDetails/traceAnalytics';
 
@@ -154,6 +157,7 @@ function SampleButton({
   api,
 }: SampleButtonProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   return (
     <Button
       data-test-id="create-sample-transaction-btn"
@@ -170,7 +174,7 @@ function SampleButton({
           const eventData = await api.requestPromise(url, {method: 'POST'});
           const traceSlug = eventData.contexts?.trace?.trace_id ?? '';
 
-          browserHistory.push(
+          navigate(
             generateLinkToEventInTraceView({
               eventId: eventData.eventID,
               location,
@@ -209,19 +213,14 @@ export function LegacyOnboarding({organization, project}: OnboardingProps) {
 
   const {projectsForOnboarding} = filterProjects(projects);
 
-  const showOnboardingChecklist = organization.features.includes(
-    'performance-onboarding-checklist'
-  );
-
   useEffect(() => {
     if (
-      showOnboardingChecklist &&
       location.hash === '#performance-sidequest' &&
       projectsForOnboarding.some(p => p.id === project.id)
     ) {
-      SidebarPanelStore.activatePanel(SidebarPanelKey.PERFORMANCE_ONBOARDING);
+      OnboardingDrawerStore.open(OnboardingDrawerKey.PERFORMANCE_ONBOARDING);
     }
-  }, [location.hash, projectsForOnboarding, project.id, showOnboardingChecklist]);
+  }, [location.hash, projectsForOnboarding, project.id]);
 
   function handleAdvance(step: number, duration: number) {
     trackAnalytics('performance_views.tour.advance', {
@@ -256,14 +255,14 @@ export function LegacyOnboarding({organization, project}: OnboardingProps) {
     </LinkButton>
   );
 
-  if (hasPerformanceOnboarding && showOnboardingChecklist) {
+  if (hasPerformanceOnboarding) {
     setupButton = (
       <Button
         priority="primary"
         onClick={event => {
           event.preventDefault();
           window.location.hash = 'performance-sidequest';
-          SidebarPanelStore.activatePanel(SidebarPanelKey.PERFORMANCE_ONBOARDING);
+          OnboardingDrawerStore.open(OnboardingDrawerKey.PERFORMANCE_ONBOARDING);
         }}
       >
         {t('Set Up Tracing')}
@@ -343,49 +342,12 @@ const PerfImage = styled('img')`
   }
 `;
 
-const ButtonList = styled(ButtonBar)`
+const ButtonList = styled((props: GridProps) => (
+  <Grid flow="column" align="center" gap="md" {...props} />
+))`
   grid-template-columns: repeat(auto-fit, minmax(130px, max-content));
   margin-bottom: 16px;
 `;
-
-function ConfigurationRenderer({configuration}: {configuration: Configuration}) {
-  const subConfigurations = configuration.configurations ?? [];
-  return (
-    <ConfigurationWrapper>
-      {configuration.description && (
-        <DescriptionWrapper>{configuration.description}</DescriptionWrapper>
-      )}
-      {configuration.code ? (
-        Array.isArray(configuration.code) ? (
-          <TabbedCodeSnippet tabs={configuration.code} />
-        ) : (
-          <OnboardingCodeSnippet language={configuration.language}>
-            {configuration.code}
-          </OnboardingCodeSnippet>
-        )
-      ) : null}
-      {subConfigurations.map((subConfiguration, index) => (
-        <ConfigurationRenderer key={index} configuration={subConfiguration} />
-      ))}
-      {configuration.additionalInfo && (
-        <AdditionalInfo>{configuration.additionalInfo}</AdditionalInfo>
-      )}
-    </ConfigurationWrapper>
-  );
-}
-
-function RenderBlocksOrFallback({
-  contentBlocks,
-  children,
-}: {
-  children: React.ReactNode;
-  contentBlocks?: ContentBlock[];
-}) {
-  if (contentBlocks && contentBlocks.length > 0) {
-    return <ContentBlocksRenderer spacing={space(1)} contentBlocks={contentBlocks} />;
-  }
-  return children;
-}
 
 function OnboardingPanel({
   project,
@@ -398,48 +360,50 @@ function OnboardingPanel({
     <Panel>
       <PanelBody>
         <AuthTokenGeneratorProvider projectSlug={project?.slug}>
-          <div>
-            <HeaderWrapper>
-              <HeaderText>
-                <Title>{t('Query for Traces, Get Answers')}</Title>
-                <SubTitle>
-                  {t(
-                    'You can query and aggregate spans to create metrics that help you debug busted API calls, slow image loads, or any other metrics you’d like to track.'
-                  )}
-                </SubTitle>
-                <BulletList>
-                  <li>
+          <TabSelectionScope>
+            <div>
+              <HeaderWrapper>
+                <HeaderText>
+                  <Title>{t('Query for Traces, Get Answers')}</Title>
+                  <SubTitle>
                     {t(
-                      'Find traces tied to a user complaint and pinpoint exactly what broke'
+                      'You can query and aggregate spans to create metrics that help you debug busted API calls, slow image loads, or any other metrics you’d like to track.'
                     )}
-                  </li>
-                  <li>
-                    {t(
-                      'Debug persistent issues by investigating API payloads, cache sizes, user tokens, and more'
-                    )}
-                  </li>
-                  <li>
-                    {t(
-                      'Track any span attribute as a metric to catch slowdowns before they escalate'
-                    )}
-                  </li>
-                </BulletList>
-              </HeaderText>
-              <Image src={emptyTraceImg} />
-            </HeaderWrapper>
-            <Divider />
-            <Body>
-              <Setup>{children}</Setup>
-              <Preview>
-                <BodyTitle>{t('Preview a Sentry Trace')}</BodyTitle>
-                <Arcade
-                  src="https://demo.arcade.software/BPVB65UiYCxixEw8bnmj?embed"
-                  loading="lazy"
-                  allowFullScreen
-                />
-              </Preview>
-            </Body>
-          </div>
+                  </SubTitle>
+                  <BulletList>
+                    <li>
+                      {t(
+                        'Find traces tied to a user complaint and pinpoint exactly what broke'
+                      )}
+                    </li>
+                    <li>
+                      {t(
+                        'Debug persistent issues by investigating API payloads, cache sizes, user tokens, and more'
+                      )}
+                    </li>
+                    <li>
+                      {t(
+                        'Track any span attribute as a metric to catch slowdowns before they escalate'
+                      )}
+                    </li>
+                  </BulletList>
+                </HeaderText>
+                <Image src={emptyTraceImg} />
+              </HeaderWrapper>
+              <Divider />
+              <Body>
+                <Setup>{children}</Setup>
+                <Preview>
+                  <BodyTitle>{t('Preview a Sentry Trace')}</BodyTitle>
+                  <Arcade
+                    src="https://demo.arcade.software/BPVB65UiYCxixEw8bnmj?embed"
+                    loading="lazy"
+                    allowFullScreen
+                  />
+                </Preview>
+              </Body>
+            </div>
+          </TabSelectionScope>
         </AuthTokenGeneratorProvider>
       </PanelBody>
     </Panel>
@@ -453,19 +417,34 @@ const STEP_TITLES: Record<StepType, string> = {
 };
 
 export function Onboarding({organization, project}: OnboardingProps) {
+  const theme = useTheme();
   const api = useApi();
   const location = useLocation();
   const navigate = useNavigate();
   const {isSelfHosted, urlPrefix} = useLegacyStore(ConfigStore);
-  const [received, setReceived] = useState<boolean>(false);
-  const showNewUi = organization.features.includes('tracing-onboarding-new-ui');
+  const copyEnabled = useCopySetupInstructionsEnabled();
+
+  const doesNotSupportPerformance = project.platform
+    ? withoutPerformanceSupport.has(project.platform)
+    : false;
+
+  const firstIssue = useEventWaiter({
+    eventType: 'transaction',
+    organization,
+    project,
+    disabled: doesNotSupportPerformance,
+  });
+  const received = !!firstIssue;
+
   const isEAPTraceEnabled = organization.features.includes('trace-spans-format');
-  const tracesQuery = useTraces({
+  const tracesQuery = useQuery({
+    ...useTracesApiOptions({
+      limit: 1,
+      sort: 'timestamp',
+    }),
     enabled: received,
-    limit: 1,
-    sort: 'timestamp',
     refetchInterval: query => {
-      const trace = query.state.data?.[0]?.data?.[0]?.trace;
+      const trace = query.state.data?.json?.data?.[0]?.trace;
       return trace ? false : 5000; // 5s
     },
   });
@@ -484,10 +463,6 @@ export function Onboarding({organization, project}: OnboardingProps) {
 
   const {isPending: isLoadingRegistry, data: registryData} =
     useSourcePackageRegistries(organization);
-
-  const doesNotSupportPerformance = project.platform
-    ? withoutPerformanceSupport.has(project.platform)
-    : false;
 
   useEffect(() => {
     if (isLoading || !currentPlatform || !dsn || !projectKeyId) {
@@ -508,10 +483,6 @@ export function Onboarding({organization, project}: OnboardingProps) {
     organization,
     doesNotSupportPerformance,
   ]);
-
-  if (!showNewUi) {
-    return <LegacyOnboarding organization={organization} project={project} />;
-  }
 
   const performanceDocs = docs?.performanceOnboarding;
 
@@ -586,6 +557,7 @@ export function Onboarding({organization, project}: OnboardingProps) {
     project,
     isLogsSelected: false,
     isFeedbackSelected: false,
+    isMetricsSelected: false,
     isPerformanceSelected: true,
     isProfilingSelected: false,
     isReplaySelected: false,
@@ -606,20 +578,10 @@ export function Onboarding({organization, project}: OnboardingProps) {
 
   const steps = [...installSteps, ...configureSteps, ...verifySteps];
 
-  const eventWaitingIndicator = (
-    <EventWaiter
-      api={api}
-      organization={organization}
-      project={project}
-      eventType="transaction"
-      onIssueReceived={() => {
-        setReceived(true);
-      }}
-    >
-      {({firstIssue}) =>
-        firstIssue ? <EventReceivedIndicator /> : <EventWaitingIndicator />
-      }
-    </EventWaiter>
+  const eventWaitingIndicator = received ? (
+    <EventReceivedIndicator />
+  ) : (
+    <EventWaitingIndicator />
   );
 
   return (
@@ -640,10 +602,26 @@ export function Onboarding({organization, project}: OnboardingProps) {
         {steps.map((step, index) => {
           const title = step.title ?? STEP_TITLES[step.type];
           return (
-            <GuidedSteps.Step key={title} stepKey={title} title={title}>
-              <RenderBlocksOrFallback contentBlocks={step.content}>
-                <ConfigurationRenderer configuration={step} />
-              </RenderBlocksOrFallback>
+            <GuidedSteps.Step
+              key={title}
+              stepKey={title}
+              title={title}
+              trailingItems={
+                index === 0 && copyEnabled ? (
+                  <OnboardingCopyMarkdownButton
+                    borderless
+                    steps={steps}
+                    source="performance_onboarding"
+                  />
+                ) : undefined
+              }
+            >
+              <StepIndexProvider index={index}>
+                <ContentBlocksRenderer
+                  spacing={theme.space.md}
+                  contentBlocks={step.content}
+                />
+              </StepIndexProvider>
               {index === steps.length - 1 ? (
                 <Fragment>
                   {eventWaitingIndicator}
@@ -653,7 +631,9 @@ export function Onboarding({organization, project}: OnboardingProps) {
                       <Button
                         priority="primary"
                         busy={!traceId}
-                        title={traceId ? undefined : t('Processing trace\u2026')}
+                        tooltipProps={{
+                          title: traceId ? undefined : t('Processing trace\u2026'),
+                        }}
                         onClick={() => {
                           const params = new URLSearchParams(window.location.search);
                           params.set('table', Tab.TRACE);
@@ -703,13 +683,13 @@ const EventWaitingIndicator = styled((p: React.HTMLAttributes<HTMLDivElement>) =
   position: relative;
   z-index: 10;
   flex-grow: 1;
-  font-size: ${p => p.theme.fontSize.md};
-  color: ${p => p.theme.pink400};
+  font-size: ${p => p.theme.font.size.md};
+  color: ${p => p.theme.colors.pink500};
 `;
 
 const PulsingIndicator = styled('div')`
   ${pulsingIndicatorStyles};
-  margin-left: ${space(1)};
+  margin-left: ${p => p.theme.space.md};
 `;
 
 const EventReceivedIndicator = styled((p: React.HTMLAttributes<HTMLDivElement>) => (
@@ -721,35 +701,35 @@ const EventReceivedIndicator = styled((p: React.HTMLAttributes<HTMLDivElement>) 
   display: flex;
   align-items: center;
   flex-grow: 1;
-  font-size: ${p => p.theme.fontSize.md};
-  color: ${p => p.theme.successText};
+  font-size: ${p => p.theme.font.size.md};
+  color: ${p => p.theme.tokens.content.success};
 `;
 
 const SubTitle = styled('div')`
-  margin-bottom: ${space(1)};
+  margin-bottom: ${p => p.theme.space.md};
 `;
 
 const Title = styled('div')`
   font-size: 26px;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
 `;
 
 const BulletList = styled('ul')`
   list-style-type: disc;
   padding-left: 20px;
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
 
   li {
-    margin-bottom: ${space(1)};
+    margin-bottom: ${p => p.theme.space.md};
   }
 `;
 
 const HeaderWrapper = styled('div')`
   display: flex;
   justify-content: space-between;
-  gap: ${space(3)};
-  border-radius: ${p => p.theme.borderRadius};
-  padding: ${space(4)};
+  gap: ${p => p.theme.space['2xl']};
+  border-radius: ${p => p.theme.radius.md};
+  padding: ${p => p.theme.space['3xl']};
 `;
 
 const HeaderText = styled('div')`
@@ -761,7 +741,7 @@ const HeaderText = styled('div')`
 `;
 
 const Setup = styled('div')`
-  padding: ${space(4)};
+  padding: ${p => p.theme.space['3xl']};
 
   &:after {
     content: '';
@@ -769,12 +749,12 @@ const Setup = styled('div')`
     right: 50%;
     top: 2.5%;
     height: 95%;
-    border-right: 1px ${p => p.theme.border} solid;
+    border-right: 1px ${p => p.theme.tokens.border.primary} solid;
   }
 `;
 
 const Preview = styled('div')`
-  padding: ${space(4)};
+  padding: ${p => p.theme.space['3xl']};
 `;
 
 const Body = styled('div')`
@@ -802,7 +782,8 @@ const Image = styled('img')`
 const Divider = styled('hr')`
   height: 1px;
   width: 95%;
-  background: ${p => p.theme.border};
+  /* eslint-disable-next-line @sentry/scraps/use-semantic-token */
+  background: ${p => p.theme.tokens.border.primary};
   border: none;
   margin-top: 0;
   margin-bottom: 0;
@@ -811,42 +792,7 @@ const Divider = styled('hr')`
 const Arcade = styled('iframe')`
   width: 750px;
   max-width: 100%;
-  margin-top: ${space(3)};
+  margin-top: ${p => p.theme.space['2xl']};
   height: 522px;
   border: 0;
-`;
-
-const CONTENT_SPACING = space(1);
-
-const ConfigurationWrapper = styled('div')`
-  margin-bottom: ${CONTENT_SPACING};
-`;
-
-const DescriptionWrapper = styled('div')`
-  code:not([class*='language-']) {
-    color: ${p => p.theme.pink400};
-  }
-
-  :not(:last-child) {
-    margin-bottom: ${CONTENT_SPACING};
-  }
-
-  && > h4,
-  && > h5,
-  && > h6 {
-    font-size: ${p => p.theme.fontSize.xl};
-    font-weight: ${p => p.theme.fontWeight.bold};
-    line-height: 34px;
-  }
-
-  && > * {
-    margin: 0;
-    &:not(:last-child) {
-      margin-bottom: ${CONTENT_SPACING};
-    }
-  }
-`;
-
-const AdditionalInfo = styled(DescriptionWrapper)`
-  margin-top: ${CONTENT_SPACING};
 `;

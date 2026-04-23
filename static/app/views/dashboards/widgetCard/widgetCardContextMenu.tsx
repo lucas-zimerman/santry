@@ -1,299 +1,182 @@
-import type React from 'react';
+import {useMemo} from 'react';
 import styled from '@emotion/styled';
 import type {Location} from 'history';
+import qs from 'query-string';
+
+import {Link} from '@sentry/scraps/link';
+import {Text} from '@sentry/scraps/text';
 
 import {
   openAddToDashboardModal,
   openDashboardWidgetQuerySelectorModal,
 } from 'sentry/actionCreators/modal';
 import {openConfirmModal} from 'sentry/components/confirm';
-import {Tag} from 'sentry/components/core/badge/tag';
-import {Button} from 'sentry/components/core/button';
-import {Tooltip} from 'sentry/components/core/tooltip';
 import type {MenuItemProps} from 'sentry/components/dropdownMenu';
-import {DropdownMenu} from 'sentry/components/dropdownMenu';
-import {isWidgetViewerPath} from 'sentry/components/modals/widgetViewerModal/utils';
-import {IconEllipsis, IconExpand, IconInfo} from 'sentry/icons';
-import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
+import {t, tct} from 'sentry/locale';
 import type {PageFilters} from 'sentry/types/core';
 import type {Series} from 'sentry/types/echarts';
-import type {InjectedRouter} from 'sentry/types/legacyReactRouter';
 import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import type {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
-import type {AggregationOutputType} from 'sentry/utils/discover/fields';
-import {
-  MEPState,
-  useMEPSettingContext,
-} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
-import useOrganization from 'sentry/utils/useOrganization';
+import {isEquation, stripEquationPrefix} from 'sentry/utils/discover/fields';
+import {MutableSearch} from 'sentry/utils/tokenizeSearch';
+import {safeURL} from 'sentry/utils/url/safeURL';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {Dataset} from 'sentry/views/alerts/rules/metric/types';
 import type {DashboardFilters, Widget} from 'sentry/views/dashboards/types';
 import {DashboardWidgetSource, WidgetType} from 'sentry/views/dashboards/types';
 import {
+  applyDashboardFilters,
   getWidgetDiscoverUrl,
   getWidgetIssueUrl,
   hasDatasetSelector,
   isUsingPerformanceScore,
+  isWidgetEditable,
   performanceScoreTooltip,
+  usesTimeSeriesData,
 } from 'sentry/views/dashboards/utils';
 import {
   getWidgetExploreUrl,
-  getWidgetLogURL,
+  widgetTypeSupportsExploreMultiQuery,
 } from 'sentry/views/dashboards/utils/getWidgetExploreUrl';
+import {getWidgetMetricsUrl} from 'sentry/views/dashboards/utils/getWidgetMetricsUrl';
 import {getReferrer} from 'sentry/views/dashboards/widgetCard/genericWidgetQueries';
-import {WidgetViewerContext} from 'sentry/views/dashboards/widgetViewer/widgetViewerContext';
+import {transformWidgetSeriesToTimeSeries} from 'sentry/views/dashboards/widgetCard/transformWidgetSeriesToTimeSeries';
 import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
+import {getExploreUrl} from 'sentry/views/explore/utils';
+import {getAlertsUrl} from 'sentry/views/insights/common/utils/getAlertsUrl';
 
-import {useDashboardsMEPContext} from './dashboardsMEPContext';
-
-type Props = {
-  dashboardFilters: DashboardFilters | undefined;
-  location: Location;
-  organization: Organization;
-  router: InjectedRouter;
+export const useTransactionsDeprecationWarning = ({
+  widget,
+  selection,
+}: {
   selection: PageFilters;
   widget: Widget;
-  widgetLimitReached: boolean;
-  description?: string;
-  hasEditAccess?: boolean;
-  index?: string;
-  isPreview?: boolean;
-  onDelete?: () => void;
-  onDuplicate?: () => void;
-  onEdit?: () => void;
-  pageLinks?: string;
-  seriesData?: Series[];
-  seriesResultsType?: Record<string, AggregationOutputType>;
-  showContextMenu?: boolean;
-  tableData?: TableDataWithTitle[];
-  title?: string | React.ReactNode;
-  totalIssuesCount?: string;
-};
-
-export const useIndexedEventsWarning = (): string | null => {
-  const {isMetricsData} = useDashboardsMEPContext();
+}): React.JSX.Element | null => {
   const organization = useOrganization();
-  const metricSettingContext = useMEPSettingContext();
 
-  return !organization.features.includes('performance-mep-bannerless-ui') &&
-    isMetricsData === false &&
-    metricSettingContext &&
-    metricSettingContext.metricSettingState !== MEPState.TRANSACTIONS_ONLY
-    ? t('Indexed')
-    : null;
-};
+  // memoize the URL to avoid recalculating it on every render
+  const exploreUrl = useMemo(() => {
+    if (
+      !organization.features.includes('transaction-widget-deprecation-explore-view') ||
+      widget.widgetType !== WidgetType.TRANSACTIONS ||
+      !widget.exploreUrls ||
+      widget.exploreUrls.length === 0
+    ) {
+      return null;
+    }
+    return createExploreUrl(widget.exploreUrls[0]!, selection, organization);
+  }, [organization, widget.widgetType, widget.exploreUrls, selection]);
 
-function WidgetCardContextMenu({
-  organization,
-  dashboardFilters,
-  selection,
-  widget,
-  widgetLimitReached,
-  hasEditAccess,
-  onDelete,
-  onDuplicate,
-  onEdit,
-  showContextMenu,
-  isPreview,
-  router,
-  location,
-  index,
-  seriesData,
-  tableData,
-  pageLinks,
-  totalIssuesCount,
-  seriesResultsType,
-  description,
-  title,
-}: Props) {
-  const indexedEventsWarning = useIndexedEventsWarning();
-  const {isMetricsData} = useDashboardsMEPContext();
-
-  if (!showContextMenu) {
+  if (!exploreUrl) {
     return null;
   }
 
-  const openWidgetViewerPath = (id: string | undefined) => {
-    if (!isWidgetViewerPath(location.pathname)) {
-      router.push({
-        pathname: `${location.pathname}${
-          location.pathname.endsWith('/') ? '' : '/'
-        }widget/${id}/`,
-        query: location.query,
-      });
+  return tct(
+    'Transaction based widgets will soon be migrated to spans widgets. To see what your query could look like, open it in [explore:Explore].',
+    {
+      explore: <Link to={exploreUrl} />,
     }
-  };
+  );
+};
 
-  if (isPreview) {
+const createExploreUrl = (
+  baseUrl: string,
+  selection: PageFilters,
+  organization: Organization
+): string => {
+  const parsedUrl = safeURL(baseUrl);
+  const queryParams = qs.parse(parsedUrl?.search ?? '');
+
+  if (queryParams.aggregateField) {
+    // we need to parse the aggregateField because it comes in stringified but needs to be passed in JSON format
+    if (typeof queryParams.aggregateField === 'string') {
+      queryParams.aggregateField = JSON.parse(queryParams.aggregateField);
+    } else if (Array.isArray(queryParams.aggregateField)) {
+      queryParams.aggregateField = queryParams.aggregateField.map(item =>
+        JSON.parse(item)
+      );
+    }
+  }
+  return getExploreUrl({organization, selection, ...queryParams});
+};
+
+export const useDroppedColumnsWarning = (widget: Widget): React.JSX.Element | null => {
+  if (!widget.changedReason) {
+    return null;
+  }
+
+  const columnsDropped = [];
+  const equationsDropped = [];
+  const orderbyDropped = [];
+  for (const changedReason of widget.changedReason) {
+    if (changedReason.selected_columns.length > 0) {
+      columnsDropped.push(...changedReason.selected_columns);
+    }
+    if (changedReason.equations) {
+      equationsDropped.push(
+        ...changedReason.equations.map(equation => equation.equation)
+      );
+    }
+    if (changedReason.orderby) {
+      orderbyDropped.push(
+        ...changedReason.orderby.flatMap(orderby =>
+          typeof orderby.reason === 'string' ? orderby.orderby : orderby.reason
+        )
+      );
+    }
+  }
+
+  const orderbyDroppedWithoutNegation = orderbyDropped.map(orderby =>
+    orderby.startsWith('-') ? orderby.replace('-', '') : orderby
+  );
+  const equationsDroppedParsed = equationsDropped.map(equation => {
+    if (isEquation(equation)) {
+      return stripEquationPrefix(equation);
+    }
+    return equation;
+  });
+  const combinedWarnings = [
+    ...columnsDropped,
+    ...equationsDroppedParsed,
+    ...orderbyDroppedWithoutNegation,
+  ];
+  const allWarningsSet = new Set(combinedWarnings);
+  const allWarnings = [...allWarningsSet];
+
+  if (allWarnings.length > 0) {
     return (
-      <WidgetViewerContext.Consumer>
-        {({setData}) => (
-          <ContextWrapper>
-            {indexedEventsWarning ? (
-              <Tooltip title={indexedEventsWarning} skipWrapper>
-                <SampledTag>{t('Indexed')}</SampledTag>
-              </Tooltip>
-            ) : null}
-            {title && (
-              <Tooltip
-                title={
-                  <span>
-                    <WidgetTooltipTitle>{title}</WidgetTooltipTitle>
-                    {description && (
-                      <WidgetTooltipDescription>{description}</WidgetTooltipDescription>
-                    )}
-                  </span>
-                }
-                containerDisplayMode="grid"
-                isHoverable
-              >
-                <WidgetTooltipButton
-                  aria-label={t('Widget description')}
-                  borderless
-                  size="xs"
-                  icon={<IconInfo />}
-                />
-              </Tooltip>
-            )}
-            <StyledDropdownMenuControl
-              items={[
-                {
-                  key: 'preview',
-                  label: t(
-                    'This is a preview only. To edit, you must add this dashboard.'
-                  ),
-                  disabled: true,
-                },
-              ]}
-              triggerProps={{
-                'aria-label': t('Widget actions'),
-                size: 'xs',
-                borderless: true,
-                showChevron: false,
-                icon: <IconEllipsis direction="down" size="sm" />,
-              }}
-              position="bottom-end"
-            />
-            <Button
-              aria-label={t('Open Widget Viewer')}
-              borderless
-              size="xs"
-              icon={<IconExpand />}
-              onClick={() => {
-                if (seriesData || tableData) {
-                  setData({
-                    seriesData,
-                    tableData,
-                    pageLinks,
-                    totalIssuesCount,
-                    seriesResultsType,
-                  });
-                }
-                openWidgetViewerPath(index);
-              }}
-            />
-          </ContextWrapper>
-        )}
-      </WidgetViewerContext.Consumer>
+      <div>
+        <StyledText as="p">
+          {tct(
+            'This widget looks different because it was migrated to the spans dataset and [columns] is not supported.',
+            {
+              columns: allWarnings.join(', '),
+            }
+          )}
+        </StyledText>
+      </div>
     );
   }
 
-  const menuOptions = getMenuOptions(
-    dashboardFilters,
-    organization,
-    selection,
-    widget,
-    Boolean(isMetricsData),
-    widgetLimitReached,
-    hasEditAccess,
-    location,
-    router,
-    onDelete,
-    onDuplicate,
-    onEdit
-  );
+  return null;
+};
 
-  if (!menuOptions.length) {
-    return null;
-  }
-
-  return (
-    <WidgetViewerContext.Consumer>
-      {({setData}) => (
-        <ContextWrapper>
-          {indexedEventsWarning ? (
-            <Tooltip title={indexedEventsWarning} skipWrapper>
-              <SampledTag>{t('Indexed')}</SampledTag>
-            </Tooltip>
-          ) : null}
-          {title && (
-            <Tooltip
-              title={
-                <span>
-                  <WidgetTooltipTitle>{title}</WidgetTooltipTitle>
-                  {description && (
-                    <WidgetTooltipDescription>{description}</WidgetTooltipDescription>
-                  )}
-                </span>
-              }
-              containerDisplayMode="grid"
-              isHoverable
-            >
-              <WidgetTooltipButton
-                aria-label={t('Widget description')}
-                borderless
-                size="xs"
-                icon={<IconInfo />}
-              />
-            </Tooltip>
-          )}
-          <StyledDropdownMenuControl
-            items={menuOptions}
-            triggerProps={{
-              'aria-label': t('Widget actions'),
-              size: 'xs',
-              borderless: true,
-              showChevron: false,
-              icon: <IconEllipsis direction="down" size="sm" />,
-            }}
-            position="bottom-end"
-          />
-          <Button
-            aria-label={t('Open Widget Viewer')}
-            borderless
-            size="xs"
-            icon={<IconExpand />}
-            onClick={() => {
-              setData({
-                seriesData,
-                tableData,
-                pageLinks,
-                totalIssuesCount,
-                seriesResultsType,
-              });
-              openWidgetViewerPath(widget.id ?? index);
-            }}
-          />
-        </ContextWrapper>
-      )}
-    </WidgetViewerContext.Consumer>
-  );
-}
+const StyledText = styled(Text)`
+  padding-bottom: ${p => p.theme.space.xs};
+`;
 
 export function getMenuOptions(
   dashboardFilters: DashboardFilters | undefined,
   organization: Organization,
   selection: PageFilters,
   widget: Widget,
-  isMetricsData: boolean,
   widgetLimitReached: boolean,
   hasEditAccess = true,
   location: Location,
-  router: InjectedRouter,
   onDelete?: () => void,
   onDuplicate?: () => void,
-  onEdit?: () => void
+  onEdit?: () => void,
+  timeseriesResults?: Series[]
 ) {
   const menuOptions: MenuItemProps[] = [];
 
@@ -317,9 +200,7 @@ export function getMenuOptions(
         widget,
         dashboardFilters,
         selection,
-        organization,
-        0,
-        isMetricsData
+        organization
       );
       menuOptions.push({
         key: 'open-in-discover',
@@ -329,11 +210,7 @@ export function getMenuOptions(
           : widget.queries.length === 1
             ? discoverPath
             : undefined,
-        tooltip: isUsingPerformanceScore(widget)
-          ? performanceScoreTooltip
-          : t(
-              'We are splitting datasets to make them easier to digest. Please confirm the dataset for this widget by clicking Edit Widget.'
-            ),
+        tooltip: isUsingPerformanceScore(widget) ? performanceScoreTooltip : null,
         tooltipOptions: {disabled: !optionDisabled},
         disabled: optionDisabled,
         showDetailsInOverlay: true,
@@ -353,7 +230,6 @@ export function getMenuOptions(
           openDashboardWidgetQuerySelectorModal({
             organization,
             widget,
-            isMetricsData,
             dashboardFilters,
           });
         },
@@ -361,32 +237,110 @@ export function getMenuOptions(
     }
   }
 
-  if (widget.widgetType === WidgetType.SPANS) {
+  if (
+    organization.features.includes('visibility-explore-view') &&
+    (widget.widgetType === WidgetType.SPANS || widget.widgetType === WidgetType.LOGS)
+  ) {
+    const multiQueryUnsupported =
+      widget.queries.length > 1 &&
+      !widgetTypeSupportsExploreMultiQuery(widget.widgetType);
+
     menuOptions.push({
       key: 'open-in-explore',
       label: t('Open in Explore'),
-      to: getWidgetExploreUrl(
-        widget,
-        dashboardFilters,
-        selection,
-        organization,
-        Mode.SAMPLES,
-        getReferrer(widget.displayType)
-      ),
+      disabled: multiQueryUnsupported,
+      tooltip: multiQueryUnsupported
+        ? t('Explore does not support multiple queries for this dataset')
+        : undefined,
+      to: multiQueryUnsupported
+        ? undefined
+        : (getWidgetExploreUrl(
+            widget,
+            dashboardFilters,
+            selection,
+            organization,
+            widget.queries.some(q => q.aggregates.length > 0)
+              ? Mode.AGGREGATE
+              : Mode.SAMPLES,
+            getReferrer(widget.displayType)
+          ) ?? undefined),
     });
   }
 
-  if (widget.widgetType === WidgetType.LOGS) {
+  if (
+    widget.widgetType === WidgetType.SPANS &&
+    usesTimeSeriesData(widget.displayType) &&
+    timeseriesResults?.length
+  ) {
+    const newAlertLabel = organization.features.includes('workflow-engine-ui')
+      ? t('Create a Monitor for')
+      : t('Create an Alert for');
+
+    const alertMenuOptions = timeseriesResults
+      .map((series, index) => {
+        const transformed = transformWidgetSeriesToTimeSeries(series, widget);
+
+        if (
+          !transformed ||
+          transformed.timeSeries.meta.isOther ||
+          isEquation(transformed.timeSeries.yAxis)
+        ) {
+          return null;
+        }
+
+        const {timeSeries, label, seriesName, widgetQuery} = transformed;
+
+        const baseQuery =
+          applyDashboardFilters(
+            widgetQuery?.conditions,
+            dashboardFilters,
+            widget.widgetType
+          ) ?? '';
+
+        // Add group-by values as filters to the alert query
+        const search = new MutableSearch(baseQuery);
+        for (const group of timeSeries.groupBy ?? []) {
+          if (group.value !== null && !Array.isArray(group.value)) {
+            search.addFilterValue(group.key, String(group.value));
+          }
+        }
+
+        return {
+          key: `create-alert-${seriesName}-${index}`,
+          label,
+          to: getAlertsUrl({
+            query: search.formatString(),
+            aggregate: timeSeries.yAxis,
+            dataset: Dataset.EVENTS_ANALYTICS_PLATFORM,
+            pageFilters: selection,
+            organization,
+            referrer: getReferrer(widget.displayType),
+          }),
+        } satisfies MenuItemProps;
+      })
+      .filter(Boolean) as MenuItemProps[];
+
+    if (alertMenuOptions.length > 0) {
+      menuOptions.push({
+        key: 'create-alert',
+        label: newAlertLabel,
+        isSubmenu: true,
+        children: alertMenuOptions,
+      });
+    }
+  }
+
+  if (widget.widgetType === WidgetType.TRACEMETRICS) {
     menuOptions.push({
-      key: 'open-in-explore',
+      key: 'open-in-metrics',
       label: t('Open in Explore'),
-      to: getWidgetLogURL(
-        widget,
-        dashboardFilters,
-        selection,
-        organization,
-        getReferrer(widget.displayType)
-      ),
+      to: getWidgetMetricsUrl(widget, dashboardFilters, selection, organization),
+      onAction: () => {
+        trackAnalytics('dashboards_views.open_in_metrics.opened', {
+          organization,
+          widget_type: widget.displayType,
+        });
+      },
     });
   }
 
@@ -417,14 +371,15 @@ export function getMenuOptions(
         openAddToDashboardModal({
           organization,
           location,
-          router,
           selection,
-          widget: {
-            ...widget,
-            id: undefined,
-            dashboardId: undefined,
-            layout: undefined,
-          },
+          widgets: [
+            {
+              ...widget,
+              id: undefined,
+              dashboardId: undefined,
+              layout: undefined,
+            },
+          ],
           actions: ['add-and-stay-on-current-page', 'open-in-widget-builder'],
           source: DashboardWidgetSource.DASHBOARDS,
         });
@@ -444,7 +399,10 @@ export function getMenuOptions(
       key: 'edit-widget',
       label: t('Edit Widget'),
       onAction: () => onEdit?.(),
-      disabled: !hasEditAccess,
+      disabled: !hasEditAccess || !isWidgetEditable(widget.displayType),
+      tooltip: isWidgetEditable(widget.displayType)
+        ? undefined
+        : t('Static widgets from the widget library cannot be edited.'),
     });
 
     menuOptions.push({
@@ -464,41 +422,3 @@ export function getMenuOptions(
 
   return menuOptions;
 }
-
-export default WidgetCardContextMenu;
-
-const ContextWrapper = styled('div')`
-  display: flex;
-  align-items: center;
-  height: ${space(3)};
-  margin-left: ${space(1)};
-  gap: ${space(0.25)};
-`;
-
-const StyledDropdownMenuControl = styled(DropdownMenu)`
-  display: flex;
-  & > button {
-    z-index: auto;
-  }
-`;
-
-const SampledTag = styled(Tag)`
-  margin-right: ${space(0.5)};
-`;
-
-const WidgetTooltipTitle = styled('div')`
-  font-weight: bold;
-  font-size: ${p => p.theme.fontSize.md};
-  text-align: left;
-`;
-
-const WidgetTooltipDescription = styled('div')`
-  margin-top: ${space(0.5)};
-  font-size: ${p => p.theme.fontSize.sm};
-  text-align: left;
-`;
-
-// We're using a button here to preserve tab accessibility
-const WidgetTooltipButton = styled(Button)`
-  pointer-events: none;
-`;

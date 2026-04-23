@@ -1,7 +1,7 @@
 import {Fragment} from 'react';
 
 import type {GridColumnOrder} from 'sentry/components/tables/gridEditable';
-import GridEditable from 'sentry/components/tables/gridEditable';
+import {GridEditable} from 'sentry/components/tables/gridEditable';
 import {ActionCell} from 'sentry/components/workflowEngine/gridCell/actionCell';
 import {TimeAgoCell} from 'sentry/components/workflowEngine/gridCell/timeAgoCell';
 import {
@@ -103,7 +103,7 @@ export default Storybook.story('Grid Cell Components', story => {
   ];
 
   const linkedGroupsTable: Array<GridColumnOrder<keyof ExampleAutomation>> = [
-    {key: 'linkedItems', name: 'Connected Monitors/Automations', width: 200},
+    {key: 'linkedItems', name: 'Connected Monitors/Alerts', width: 200},
   ];
 
   const openIssuesTable: Array<GridColumnOrder<keyof ExampleAutomation>> = [

@@ -1,25 +1,24 @@
 import {Component, Fragment} from 'react';
-import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import Access from 'sentry/components/acl/access';
-import CircleIndicator from 'sentry/components/circleIndicator';
-import Confirm from 'sentry/components/confirm';
-import {Alert} from 'sentry/components/core/alert';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {Alert} from '@sentry/scraps/alert';
+import {Tag} from '@sentry/scraps/badge';
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {Access} from 'sentry/components/acl/access';
+import {Confirm} from 'sentry/components/confirm';
 import {IconDelete, IconSettings, IconWarning} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {ObjectStatus} from 'sentry/types/core';
 import type {Integration, IntegrationProvider} from 'sentry/types/integrations';
 import type {Organization} from 'sentry/types/organization';
-import type {IntegrationAnalyticsKey} from 'sentry/utils/analytics/integrations';
 import {getIntegrationStatus} from 'sentry/utils/integrationUtil';
+import {isActiveSuperuser} from 'sentry/utils/isActiveSuperuser';
 
 import {AddIntegrationButton} from './addIntegrationButton';
-import IntegrationItem from './integrationItem';
+import {IntegrationItem} from './integrationItem';
 
 type Props = {
   integration: Integration;
@@ -27,11 +26,13 @@ type Props = {
   onRemove: (integration: Integration) => void;
   organization: Organization;
   provider: IntegrationProvider;
-  trackIntegrationAnalytics: (eventKey: IntegrationAnalyticsKey) => void; // analytics callback
+  trackIntegrationAnalytics: (
+    eventKey: 'integrations.uninstall_clicked' | 'integrations.uninstall_completed'
+  ) => void; // analytics callback
   requiresUpgrade?: boolean;
 };
 
-export default class InstalledIntegration extends Component<Props> {
+export class InstalledIntegration extends Component<Props> {
   handleUninstallClick = () => {
     this.props.trackIntegrationAnalytics('integrations.uninstall_clicked');
   };
@@ -68,7 +69,9 @@ export default class InstalledIntegration extends Component<Props> {
     const message = (
       <Fragment>
         <Alert.Container>
-          <Alert type="error">{t('Deleting this integration has consequences!')}</Alert>
+          <Alert variant="danger">
+            {t('Deleting this integration has consequences!')}
+          </Alert>
         </Alert.Container>
         {body}
       </Fragment>
@@ -86,7 +89,9 @@ export default class InstalledIntegration extends Component<Props> {
     const message = (
       <Fragment>
         <Alert.Container>
-          <Alert type="error">{t('This integration cannot be removed in Sentry')}</Alert>
+          <Alert variant="danger">
+            {t('This integration cannot be removed in Sentry')}
+          </Alert>
         </Alert.Container>
         {body}
       </Fragment>
@@ -114,7 +119,11 @@ export default class InstalledIntegration extends Component<Props> {
     return (
       <Access access={['org:integrations']}>
         {({hasAccess}) => {
+          const superuser = isActiveSuperuser();
+          const canConfigure =
+            (hasAccess || superuser) && this.integrationStatus === 'active';
           const disableAction = !(hasAccess && this.integrationStatus === 'active');
+          const isPendingDeletion = this.integrationStatus === 'pending_deletion';
           return (
             <Fragment>
               <IntegrationItemBox>
@@ -122,7 +131,7 @@ export default class InstalledIntegration extends Component<Props> {
               </IntegrationItemBox>
               <div>
                 <Tooltip
-                  disabled={allowMemberConfiguration || hasAccess}
+                  disabled={allowMemberConfiguration || hasAccess || superuser}
                   position="left"
                   title={t(
                     'You must be an organization owner, manager or admin to configure'
@@ -145,15 +154,17 @@ export default class InstalledIntegration extends Component<Props> {
                       size="sm"
                     />
                   )}
-                  <StyledLinkButton
-                    borderless
-                    icon={<IconSettings />}
-                    disabled={!allowMemberConfiguration && disableAction}
-                    to={`/settings/${organization.slug}/integrations/${provider.key}/${integration.id}/`}
-                    data-test-id="integration-configure-button"
-                  >
-                    {t('Configure')}
-                  </StyledLinkButton>
+                  {!provider.metadata.aspects?.directEnable && (
+                    <StyledLinkButton
+                      priority="transparent"
+                      icon={<IconSettings />}
+                      disabled={!allowMemberConfiguration && !canConfigure}
+                      to={`/settings/${organization.slug}/integrations/${provider.key}/${integration.id}/`}
+                      data-test-id="integration-configure-button"
+                    >
+                      {t('Configure')}
+                    </StyledLinkButton>
+                  )}
                 </Tooltip>
               </div>
               <div>
@@ -166,12 +177,12 @@ export default class InstalledIntegration extends Component<Props> {
                   <Confirm
                     priority="danger"
                     onConfirming={this.handleUninstallClick}
-                    disabled={!hasAccess}
+                    disabled={!hasAccess || isPendingDeletion}
                     {...removeConfirmProps}
                   >
                     <StyledButton
-                      disabled={!hasAccess}
-                      borderless
+                      disabled={!hasAccess || isPendingDeletion}
+                      priority="transparent"
                       icon={<IconDelete />}
                       data-test-id="integration-remove-button"
                     >
@@ -180,7 +191,7 @@ export default class InstalledIntegration extends Component<Props> {
                   </Confirm>
                 </Tooltip>
               </div>
-              <StyledIntegrationStatus
+              <IntegrationStatus
                 status={this.integrationStatus}
                 // Let the hook handle the alert for disabled org integrations
                 hideTooltip={integration.organizationIntegrationStatus === 'disabled'}
@@ -194,44 +205,34 @@ export default class InstalledIntegration extends Component<Props> {
 }
 
 const StyledButton = styled(Button)`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const StyledLinkButton = styled(LinkButton)`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const IntegrationItemBox = styled('div')`
   flex: 1;
 `;
 
-function IntegrationStatus(
-  props: React.HTMLAttributes<HTMLDivElement> & {
-    status: ObjectStatus;
-    hideTooltip?: boolean;
-  }
-) {
-  const theme = useTheme();
-  const {status, hideTooltip, ...p} = props;
-  const color = status === 'active' ? theme.success : theme.gray300;
-  const inner = (
-    <div {...p}>
-      <CircleIndicator size={6} color={color} />
-      <IntegrationStatusText data-test-id="integration-status">{`${
-        status === 'active'
-          ? t('enabled')
-          : status === 'pending_deletion'
-            ? t('pending deletion')
-            : status === 'disabled'
-              ? t('disabled')
-              : t('unknown')
-      }`}</IntegrationStatusText>
-    </div>
-  );
-  return hideTooltip ? (
-    inner
-  ) : (
+function IntegrationStatus({
+  status,
+  hideTooltip,
+}: {
+  status: ObjectStatus;
+  hideTooltip?: boolean;
+}) {
+  const label = {
+    active: <Tag variant="success">{t('enabled')}</Tag>,
+    pending_deletion: <Tag variant="info">{t('pending deletion')}</Tag>,
+    disabled: <Tag variant="muted">{t('disabled')}</Tag>,
+    deletion_in_progress: <Tag variant="muted">{t('unknown')}</Tag>,
+  }[status] ?? <Tag variant="muted">{t('unknown')}</Tag>;
+
+  return (
     <Tooltip
+      disabled={hideTooltip}
       title={
         status === 'active'
           ? t('This integration can be disabled by clicking the Uninstall button')
@@ -239,26 +240,17 @@ function IntegrationStatus(
             ? t('This integration has been disconnected from the external provider')
             : t('Deletion takes a few minutes to complete.')
       }
+      skipWrapper
     >
-      {inner}
+      <Flex align="center">
+        <IntegrationStatusText data-test-id="integration-status">
+          {label}
+        </IntegrationStatusText>
+      </Flex>
     </Tooltip>
   );
 }
 
-const StyledIntegrationStatus = styled(IntegrationStatus)`
-  display: flex;
-  align-items: center;
-  color: ${p => p.theme.subText};
-  font-weight: light;
-  text-transform: capitalize;
-  &:before {
-    content: '|';
-    color: ${p => p.theme.gray200};
-    margin-right: ${space(1)};
-    font-weight: ${p => p.theme.fontWeight.normal};
-  }
-`;
-
 const IntegrationStatusText = styled('div')`
-  margin: 0 ${space(0.75)} 0 ${space(0.5)};
+  margin: 0 ${p => p.theme.space.sm} 0 ${p => p.theme.space.xs};
 `;

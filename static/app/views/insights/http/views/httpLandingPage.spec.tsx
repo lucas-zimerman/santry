@@ -1,19 +1,16 @@
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
 import {ProjectFixture} from 'sentry-fixture/project';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {render, screen, waitForElementToBeRemoved} from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import {useReleaseStats} from 'sentry/utils/useReleaseStats';
 import {SAMPLING_MODE} from 'sentry/views/explore/hooks/useProgressiveQuery';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
 import {HTTPLandingPage} from 'sentry/views/insights/http/views/httpLandingPage';
 
-jest.mock('sentry/utils/useLocation');
-jest.mock('sentry/utils/usePageFilters');
 jest.mock('sentry/utils/useReleaseStats');
 
 describe('HTTPLandingPage', () => {
@@ -27,22 +24,14 @@ describe('HTTPLandingPage', () => {
 
   let spanListRequestMock!: jest.Mock;
   let regionFilterRequestMock!: jest.Mock;
-  jest.mocked(usePageFilters).mockReturnValue(
-    PageFilterStateFixture({
-      selection: {
-        datetime: {
-          period: '10d',
-          start: null,
-          end: null,
-          utc: false,
-        },
-        environments: [],
-        projects: [],
-      },
-    })
-  );
 
-  const useLocationMock = jest.mocked(useLocation);
+  const baseRouterConfig = {
+    location: {
+      pathname: '/insights/backend/http/',
+      query: {statsPeriod: '10d', 'span.domain': 'git', project: '1'},
+    },
+    route: '/insights/backend/http/',
+  };
 
   jest.mocked(useReleaseStats).mockReturnValue({
     isLoading: false,
@@ -55,14 +44,15 @@ describe('HTTPLandingPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    useLocationMock.mockReturnValue({
-      pathname: '/insights/backend/http/',
-      search: '',
-      query: {statsPeriod: '10d', 'span.domain': 'git', project: '1'},
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
+    PageFiltersStore.onInitializeUrlState({
+      projects: [],
+      environments: [],
+      datetime: {
+        period: '10d',
+        start: null,
+        end: null,
+        utc: false,
+      },
     });
 
     ProjectsStore.loadInitialData([
@@ -82,7 +72,7 @@ describe('HTTPLandingPage', () => {
     });
 
     regionFilterRequestMock = MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/events/`,
+      url: '/organizations/org-slug/events/',
       method: 'GET',
       match: [
         MockApiClient.matchQuery({
@@ -165,7 +155,7 @@ describe('HTTPLandingPage', () => {
     });
 
     throughputRequestMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       method: 'GET',
       match: [
         MockApiClient.matchQuery({
@@ -173,23 +163,20 @@ describe('HTTPLandingPage', () => {
         }),
       ],
       body: {
-        data: [
-          [1699907700, [{count: 7810.2}]],
-          [1699908000, [{count: 1216.8}]],
+        timeSeries: [
+          TimeSeriesFixture({
+            yAxis: 'epm()',
+            values: [
+              {value: 7810.2, timestamp: 1699907700000},
+              {value: 1216.8, timestamp: 1699908000000},
+            ],
+          }),
         ],
-        meta: {
-          fields: {
-            'epm()': 'rate',
-          },
-          units: {
-            'epm()': '1/second',
-          },
-        },
       },
     });
 
     durationRequestMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       method: 'GET',
       match: [
         MockApiClient.matchQuery({
@@ -197,23 +184,20 @@ describe('HTTPLandingPage', () => {
         }),
       ],
       body: {
-        data: [
-          [1699907700, [{count: 710.2}]],
-          [1699908000, [{count: 116.8}]],
+        timeSeries: [
+          TimeSeriesFixture({
+            yAxis: 'avg(span.self_time)',
+            values: [
+              {value: 710.2, timestamp: 1699907700000},
+              {value: 1216.8, timestamp: 1699908000000},
+            ],
+          }),
         ],
-        meta: {
-          fields: {
-            'avg(span.duration)': 'duration',
-          },
-          units: {
-            'avg(span.duration)': 'millisecond',
-          },
-        },
       },
     });
 
     statusRequestMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events-stats/`,
+      url: `/organizations/${organization.slug}/events-timeseries/`,
       method: 'GET',
       match: [
         MockApiClient.matchQuery({
@@ -221,33 +205,20 @@ describe('HTTPLandingPage', () => {
         }),
       ],
       body: {
-        'http_response_rate(3)': {
-          data: [[1699908000, [{count: 0.2}]]],
-          meta: {
-            fields: {
-              'http_response_rate(3)': 'percentage',
-            },
-            units: {},
-          },
-        },
-        'http_response_rate(4)': {
-          data: [[1699908000, [{count: 0.1}]]],
-          meta: {
-            fields: {
-              'http_response_rate(4)': 'percentage',
-            },
-            units: {},
-          },
-        },
-        'http_response_rate(5)': {
-          data: [[1699908000, [{count: 0.3}]]],
-          meta: {
-            fields: {
-              'http_response_rate(5)': 'percentage',
-            },
-            units: {},
-          },
-        },
+        timeSeries: [
+          TimeSeriesFixture({
+            yAxis: 'http_response_rate(3)',
+            values: [{value: 0.2, timestamp: 1699908000000}],
+          }),
+          TimeSeriesFixture({
+            yAxis: 'http_response_rate(4)',
+            values: [{value: 0.1, timestamp: 1699908000000}],
+          }),
+          TimeSeriesFixture({
+            yAxis: 'http_response_rate(5)',
+            values: [{value: 0.1, timestamp: 1699908000000}],
+          }),
+        ],
       },
     });
   });
@@ -257,33 +228,29 @@ describe('HTTPLandingPage', () => {
   });
 
   it('fetches module data', async () => {
-    render(<HTTPLandingPage />, {organization});
+    render(<HTTPLandingPage />, {organization, initialRouterConfig: baseRouterConfig});
 
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 
     expect(throughputRequestMock).toHaveBeenNthCalledWith(
       1,
-      `/organizations/${organization.slug}/events-stats/`,
+      `/organizations/${organization.slug}/events-timeseries/`,
       expect.objectContaining({
         method: 'GET',
         query: {
-          cursor: undefined,
           dataset: 'spans',
           sampling: SAMPLING_MODE.NORMAL,
           environment: [],
           excludeOther: 0,
-          field: [],
+          groupBy: undefined,
           interval: '30m',
-          orderby: undefined,
           partial: 1,
-          per_page: 50,
           project: [],
           query: 'span.op:http.client',
           referrer: 'api.insights.http.landing-throughput-chart',
           statsPeriod: '10d',
-          topEvents: undefined,
-          yAxis: 'epm()',
-          transformAliasToInputFormat: '1',
+          yAxis: ['epm()'],
+          caseInsensitive: undefined,
         },
       })
     );
@@ -309,58 +276,50 @@ describe('HTTPLandingPage', () => {
 
     expect(durationRequestMock).toHaveBeenNthCalledWith(
       1,
-      `/organizations/${organization.slug}/events-stats/`,
+      `/organizations/${organization.slug}/events-timeseries/`,
       expect.objectContaining({
         method: 'GET',
         query: {
-          cursor: undefined,
           dataset: 'spans',
           sampling: SAMPLING_MODE.NORMAL,
           environment: [],
           excludeOther: 0,
-          field: [],
+          groupBy: undefined,
           interval: '30m',
-          orderby: undefined,
           partial: 1,
-          per_page: 50,
           project: [],
           query: 'span.op:http.client',
           referrer: 'api.insights.http.landing-duration-chart',
           statsPeriod: '10d',
-          topEvents: undefined,
-          yAxis: 'avg(span.self_time)',
-          transformAliasToInputFormat: '1',
+          yAxis: ['avg(span.self_time)'],
+          caseInsensitive: undefined,
         },
       })
     );
 
     expect(statusRequestMock).toHaveBeenNthCalledWith(
       1,
-      `/organizations/${organization.slug}/events-stats/`,
+      `/organizations/${organization.slug}/events-timeseries/`,
       expect.objectContaining({
         method: 'GET',
         query: {
-          cursor: undefined,
           dataset: 'spans',
           sampling: SAMPLING_MODE.NORMAL,
           environment: [],
           excludeOther: 0,
-          field: [],
+          groupBy: undefined,
           interval: '30m',
-          orderby: undefined,
           partial: 1,
-          per_page: 50,
           project: [],
           query: 'span.op:http.client',
           referrer: 'api.insights.http.landing-response-code-chart',
           statsPeriod: '10d',
-          topEvents: undefined,
           yAxis: [
             'http_response_rate(3)',
             'http_response_rate(4)',
             'http_response_rate(5)',
           ],
-          transformAliasToInputFormat: '1',
+          caseInsensitive: undefined,
         },
       })
     );
@@ -396,14 +355,9 @@ describe('HTTPLandingPage', () => {
   });
 
   it('renders a list of domains', async () => {
-    render(<HTTPLandingPage />, {organization});
+    render(<HTTPLandingPage />, {organization, initialRouterConfig: baseRouterConfig});
 
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
-
-    expect(screen.getByRole('heading', {level: 1})).toHaveTextContent('Backend');
-    const tab = screen.getByRole('tab', {name: 'Outbound API Requests'});
-    expect(tab).toBeInTheDocument();
-    expect(tab).toHaveAttribute('aria-selected', 'true');
 
     expect(screen.getByRole('table', {name: 'Domains'})).toBeInTheDocument();
 
@@ -441,22 +395,21 @@ describe('HTTPLandingPage', () => {
   });
 
   it('sorts with query params', async () => {
-    useLocationMock.mockReturnValue({
-      pathname: '/insights/backend/http/',
-      search: '',
-      query: {
-        statsPeriod: '10d',
-        'span.domain': 'git',
-        project: '1',
-        [QueryParameterNames.DOMAINS_SORT]: '-avg(span.self_time)',
+    render(<HTTPLandingPage />, {
+      organization,
+      initialRouterConfig: {
+        ...baseRouterConfig,
+        location: {
+          ...baseRouterConfig.location,
+          query: {
+            statsPeriod: '10d',
+            'span.domain': 'git',
+            project: '1',
+            [QueryParameterNames.DOMAINS_SORT]: '-avg(span.self_time)',
+          },
+        },
       },
-      hash: '',
-      state: undefined,
-      action: 'PUSH',
-      key: '',
     });
-
-    render(<HTTPLandingPage />, {organization});
 
     await waitForElementToBeRemoved(() => screen.queryAllByTestId('loading-indicator'));
 

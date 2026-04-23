@@ -1,18 +1,17 @@
-import AnalyticsArea from 'sentry/components/analyticsArea';
-import NoProjectMessage from 'sentry/components/noProjectMessage';
-import Redirect from 'sentry/components/redirect';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
-import useOrganization from 'sentry/utils/useOrganization';
-import {useRedirectNavV2Routes} from 'sentry/views/nav/useRedirectNavV2Routes';
+import {Outlet} from 'react-router-dom';
 
-type Props = RouteComponentProps & {
-  children: React.ReactNode;
-};
+import {Stack} from '@sentry/scraps/layout';
 
-export default function FeedbackContainer({children}: Props) {
+import {AnalyticsArea} from 'sentry/components/analyticsArea';
+import {NoProjectMessage} from 'sentry/components/noProjectMessage';
+import {Redirect} from 'sentry/components/redirect';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useRedirectNavigationV2Routes} from 'sentry/views/navigation/useRedirectNavigationV2Routes';
+
+export default function FeedbackContainer() {
   const organization = useOrganization();
 
-  const redirectPath = useRedirectNavV2Routes({
+  const redirectPath = useRedirectNavigationV2Routes({
     oldPathPrefix: '/feedback/',
     newPathPrefix: '/issues/feedback/',
   });
@@ -23,7 +22,11 @@ export default function FeedbackContainer({children}: Props) {
 
   return (
     <AnalyticsArea name="feedback">
-      <NoProjectMessage organization={organization}>{children}</NoProjectMessage>
+      <Stack flex={1}>
+        <NoProjectMessage organization={organization}>
+          <Outlet />
+        </NoProjectMessage>
+      </Stack>
     </AnalyticsArea>
   );
 }

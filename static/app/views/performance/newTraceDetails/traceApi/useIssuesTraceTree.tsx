@@ -1,9 +1,10 @@
 import {useEffect, useState} from 'react';
+import type {QueryStatus} from '@tanstack/react-query';
 
-import type {QueryStatus, UseApiQueryResult} from 'sentry/utils/queryClient';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
-import useProjects from 'sentry/utils/useProjects';
+import type {UseApiQueryResult} from 'sentry/utils/queryClient';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
 import {IssuesTraceTree} from 'sentry/views/performance/newTraceDetails/traceModels/issuesTraceTree';
 import type {TraceTree} from 'sentry/views/performance/newTraceDetails/traceModels/traceTree';
 import {useTraceState} from 'sentry/views/performance/newTraceDetails/traceState/traceStateProvider';

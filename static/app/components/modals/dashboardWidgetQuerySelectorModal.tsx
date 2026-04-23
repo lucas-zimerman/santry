@@ -2,19 +2,20 @@ import {Fragment} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
+import {Button} from '@sentry/scraps/button';
+import {Input} from '@sentry/scraps/input';
+import {Flex} from '@sentry/scraps/layout';
+import {Link} from '@sentry/scraps/link';
+
 import type {ModalRenderProps} from 'sentry/actionCreators/modal';
 import type {Client} from 'sentry/api';
-import {Button} from 'sentry/components/core/button';
-import {Input} from 'sentry/components/core/input';
-import {Link} from 'sentry/components/core/link';
 import {IconChevron, IconSearch} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {PageFilters} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import withApi from 'sentry/utils/withApi';
-import withPageFilters from 'sentry/utils/withPageFilters';
+import {withApi} from 'sentry/utils/withApi';
+import {withPageFilters} from 'sentry/utils/withPageFilters';
 import type {DashboardFilters, Widget} from 'sentry/views/dashboards/types';
 import {getWidgetDiscoverUrl} from 'sentry/views/dashboards/utils';
 
@@ -22,7 +23,6 @@ export type DashboardWidgetQuerySelectorModalOptions = {
   dashboardFilters: DashboardFilters | undefined;
   organization: Organization;
   widget: Widget;
-  isMetricsData?: boolean;
 };
 
 type Props = ModalRenderProps &
@@ -33,8 +33,7 @@ type Props = ModalRenderProps &
   };
 
 function DashboardWidgetQuerySelectorModal(props: Props) {
-  const {organization, widget, selection, isMetricsData, Body, Header, dashboardFilters} =
-    props;
+  const {organization, widget, selection, Body, Header, dashboardFilters} = props;
 
   const renderQueries = () => {
     const querySearchBars = widget.queries.map((query, index) => {
@@ -45,13 +44,11 @@ function DashboardWidgetQuerySelectorModal(props: Props) {
         },
         dashboardFilters,
         selection,
-        organization,
-        0,
-        isMetricsData
+        organization
       );
       return (
         <Fragment key={index}>
-          <QueryContainer>
+          <Flex marginBottom="md">
             <Container>
               <SearchLabel htmlFor="smart-search-input" aria-label={t('Search events')}>
                 <IconSearch />
@@ -71,7 +68,7 @@ function DashboardWidgetQuerySelectorModal(props: Props) {
                 aria-label={t('Open in Discover')}
               />
             </Link>
-          </QueryContainer>
+          </Flex>
         </Fragment>
       );
     });
@@ -105,33 +102,28 @@ const StyledInput = styled(Input)`
     cursor: default;
   }
 `;
-const QueryContainer = styled('div')`
-  display: flex;
-  margin-bottom: ${space(1)};
-`;
 const OpenInDiscoverButton = styled(Button)`
-  margin-left: ${space(1)};
+  margin-left: ${p => p.theme.space.md};
 `;
 
 const Container = styled('div')`
-  border: 1px solid ${p => p.theme.border};
-  box-shadow: inset ${p => p.theme.dropShadowMedium};
-  background: ${p => p.theme.backgroundSecondary};
-  padding: 7px ${space(1)};
+  border: 1px solid ${p => p.theme.tokens.border.primary};
+  background: ${p => p.theme.tokens.background.secondary};
+  padding: 7px ${p => p.theme.space.md};
   position: relative;
   display: grid;
   grid-template-columns: max-content 1fr max-content;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   align-items: start;
   flex-grow: 1;
-  border-radius: ${p => p.theme.borderRadius};
+  border-radius: ${p => p.theme.radius.md};
 `;
 
 const SearchLabel = styled('label')`
   display: flex;
-  padding: ${space(0.5)} 0;
+  padding: ${p => p.theme.space.xs} 0;
   margin: 0;
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 export const modalCss = css`

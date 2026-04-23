@@ -2,32 +2,30 @@ import {Fragment} from 'react';
 import {useTheme} from '@emotion/react';
 import type {Query} from 'history';
 
-import EventsRequest from 'sentry/components/charts/eventsRequest';
+import {EventsRequest} from 'sentry/components/charts/eventsRequest';
 import {HeaderTitleLegend} from 'sentry/components/charts/styles';
 import {getInterval, getSeriesSelection} from 'sentry/components/charts/utils';
-import {normalizeDateTimeParams} from 'sentry/components/organizations/pageFilters/parse';
-import QuestionTooltip from 'sentry/components/questionTooltip';
+import {normalizeDateTimeParams} from 'sentry/components/pageFilters/parse';
+import {QuestionTooltip} from 'sentry/components/questionTooltip';
 import {t, tct} from 'sentry/locale';
 import type {OrganizationSummary} from 'sentry/types/organization';
 import {getUtcToLocalDateObject} from 'sentry/utils/dates';
 import {parseFunction} from 'sentry/utils/discover/fields';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useRouter from 'sentry/utils/useRouter';
 import {
   SPAN_OPERATION_BREAKDOWN_FILTER_TO_FIELD,
   SpanOperationBreakdownFilter,
 } from 'sentry/views/performance/transactionSummary/filter';
 import type {ViewProps} from 'sentry/views/performance/types';
 
-import Content from './content';
+import {Content} from './content';
 
 type Props = ViewProps & {
   currentFilter: SpanOperationBreakdownFilter;
   organization: OrganizationSummary;
   queryExtra: Query;
-  withoutZerofill: boolean;
   queryExtras?: Record<string, string>;
 };
 
@@ -37,7 +35,7 @@ const yAxisValues = ['p50', 'p75', 'p95', 'p99', 'p100', 'avg'];
  * Fetch and render a stacked area chart that shows duration percentiles over
  * the past 7 days
  */
-function DurationChart({
+export function DurationChart({
   project,
   environment,
   organization,
@@ -45,13 +43,11 @@ function DurationChart({
   statsPeriod,
   queryExtra,
   currentFilter,
-  withoutZerofill,
   start: propsStart,
   end: propsEnd,
   queryExtras,
 }: Props) {
   const navigate = useNavigate();
-  const router = useRouter();
   const location = useLocation();
   const api = useApi();
   const theme = useTheme();
@@ -85,7 +81,6 @@ function DurationChart({
 
   const contentCommonProps = {
     theme,
-    router,
     start,
     end,
     utc,
@@ -122,7 +117,7 @@ function DurationChart({
         size="sm"
         position="top"
         title={t(
-          `Duration Breakdown reflects transaction durations by percentile over time.`
+          'Duration Breakdown reflects transaction durations by percentile over time.'
         )}
       />
     </HeaderTitleLegend>
@@ -140,7 +135,6 @@ function DurationChart({
         includePrevious={false}
         yAxis={yAxis}
         partial
-        withoutZerofill={withoutZerofill}
         referrer="api.insights.transaction-summary.duration-chart"
         queryExtras={queryExtras}
       >
@@ -165,5 +159,3 @@ function DurationChart({
     </Fragment>
   );
 }
-
-export default DurationChart;

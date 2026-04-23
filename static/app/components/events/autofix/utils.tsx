@@ -1,3 +1,5 @@
+import {useCallback, useMemo} from 'react';
+
 import {formatRootCauseText} from 'sentry/components/events/autofix/autofixRootCause';
 import {formatSolutionText} from 'sentry/components/events/autofix/autofixSolution';
 import {
@@ -12,6 +14,7 @@ import {
 import {t} from 'sentry/locale';
 import type {Event} from 'sentry/types/event';
 import type {Group} from 'sentry/types/group';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {formatEventToMarkdown} from 'sentry/views/issueDetails/streamline/hooks/useCopyIssueDetails';
 
 export function getRootCauseDescription(autofixData: AutofixData) {
@@ -74,7 +77,7 @@ export function formatRootCauseWithEvent(
     return rootCauseText;
   }
 
-  const eventText = '\n# Raw Event Data\n' + formatEventToMarkdown(event);
+  const eventText = '\n# Raw Event Data\n' + formatEventToMarkdown(event, undefined);
   return rootCauseText + eventText;
 }
 
@@ -95,7 +98,7 @@ export function formatSolutionWithEvent(
   combinedText += solutionText;
 
   if (event) {
-    const eventText = '\n# Raw Event Data\n' + formatEventToMarkdown(event);
+    const eventText = '\n# Raw Event Data\n' + formatEventToMarkdown(event, undefined);
     combinedText += eventText;
   }
 
@@ -172,14 +175,82 @@ export const getCodeChangesIsLoading = (autofixData: AutofixData) => {
   return changesStep?.status === AutofixStatus.PROCESSING;
 };
 
-const supportedProviders = ['integrations:github', 'integrations:github_enterprise'];
-
-export const isSupportedAutofixProvider = (provider?: {id: string; name: string}) => {
-  if (!provider) {
+export function hasPullRequest(autofixData: AutofixData | null | undefined): boolean {
+  if (!autofixData) {
     return false;
   }
-  return supportedProviders.includes(provider.id);
-};
+
+  const changesStep = autofixData.steps?.find(
+    step => step.type === AutofixStepType.CHANGES
+  );
+
+  return Boolean(changesStep?.changes?.some(change => change.pull_request));
+}
+
+const BASE_SUPPORTED_PROVIDERS = [
+  'github',
+  'integrations:github',
+  'integrations:github_enterprise',
+];
+
+/**
+ * Feature-gated providers. Each entry maps a feature flag to the provider IDs
+ * it unlocks. Add new providers here as they become supported.
+ */
+const FEATURE_GATED_PROVIDERS: Array<{
+  flag: string;
+  providerIds: string[];
+}> = [
+  {
+    flag: 'seer-gitlab-support',
+    providerIds: ['gitlab', 'integrations:gitlab'],
+  },
+];
+
+/**
+ * Pure function for non-hook contexts (e.g. buildIntegrationTreeNodes).
+ * Returns true if the provider is in the supported list.
+ */
+export function isSeerSupportedProvider(
+  provider: {id: string; name: string},
+  supportedProviderIds: string[]
+): boolean {
+  return supportedProviderIds.includes(provider.id);
+}
+
+/**
+ * Returns the list of provider IDs supported for Seer based on the
+ * organization's feature flags. To support a new provider, add an entry
+ * to FEATURE_GATED_PROVIDERS above.
+ */
+export function useSeerSupportedProviderIds(): string[] {
+  const organization = useOrganization();
+  return useMemo(() => {
+    const ids = [...BASE_SUPPORTED_PROVIDERS];
+    for (const {flag, providerIds} of FEATURE_GATED_PROVIDERS) {
+      if (organization.features.includes(flag)) {
+        ids.push(...providerIds);
+      }
+    }
+    return ids;
+  }, [organization.features]);
+}
+
+/**
+ * Convenience hook that returns a provider-check callback.
+ * Use this in React components that need to test individual providers.
+ */
+export function useIsSeerSupportedProvider(): (provider: {
+  id: string;
+  name: string;
+}) => boolean {
+  const supportedProviderIds = useSeerSupportedProviderIds();
+  return useCallback(
+    (provider: {id: string; name: string}) =>
+      isSeerSupportedProvider(provider, supportedProviderIds),
+    [supportedProviderIds]
+  );
+}
 
 export interface AutofixProgressDetails {
   overallProgress: number;
@@ -238,7 +309,7 @@ export function isIssueQuickFixable(group: Group) {
 }
 
 export function getAutofixRunErrorMessage(autofixData: AutofixData | undefined) {
-  if (!autofixData || autofixData.status !== AutofixStatus.ERROR) {
+  if (autofixData?.status !== AutofixStatus.ERROR) {
     return null;
   }
 

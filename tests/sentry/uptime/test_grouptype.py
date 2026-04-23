@@ -18,18 +18,19 @@ from sentry.issues.producer import PayloadType, produce_occurrence_to_kafka
 from sentry.models.group import Group, GroupStatus
 from sentry.testutils.cases import TestCase, UptimeTestCase
 from sentry.testutils.helpers.datetime import freeze_time
+from sentry.testutils.helpers.uptime import MOCK_ASSERTION_FAILURE_DATA
 from sentry.uptime.grouptype import (
     UptimeDetectorHandler,
     UptimeDomainCheckFailure,
     UptimePacketValue,
-    build_detector_fingerprint_component,
     build_event_data,
     build_evidence_display,
-    build_fingerprint,
-    resolve_uptime_issue,
 )
-from sentry.uptime.models import UptimeStatus, UptimeSubscription, get_uptime_subscription
+from sentry.uptime.models import UptimeResponseCapture, UptimeSubscription, get_uptime_subscription
+from sentry.uptime.subscriptions.subscriptions import resolve_uptime_issue
 from sentry.uptime.types import UptimeMonitorMode
+from sentry.uptime.utils import build_detector_fingerprint_component, build_fingerprint
+from sentry.utils import json
 from sentry.workflow_engine.models.data_source import DataPacket
 from sentry.workflow_engine.models.detector import Detector
 from sentry.workflow_engine.types import DetectorEvaluationResult, DetectorPriorityLevel
@@ -88,8 +89,8 @@ class BuildDetectorFingerprintComponentTest(UptimeTestCase):
         assert fingerprint_component == f"uptime-detector:{detector.id}"
 
 
-class BuildFingerprintForProjectSubscriptionTest(UptimeTestCase):
-    def test_build_fingerprint_for_project_subscription(self) -> None:
+class BuildFingerprintTest(UptimeTestCase):
+    def test_build_fingerprint(self) -> None:
         detector = self.create_uptime_detector()
 
         fingerprint = build_fingerprint(detector)
@@ -149,56 +150,157 @@ class TestUptimeHandler(UptimeTestCase):
         return evaluation[None]
 
     def test_simple_evaluate(self) -> None:
-        detector = self.create_uptime_detector()
+        detector = self.create_uptime_detector(downtime_threshold=2, recovery_threshold=1)
         uptime_subscription = get_uptime_subscription(detector)
 
-        assert uptime_subscription.uptime_status == UptimeStatus.OK
+        detector_state = detector.detectorstate_set.first()
+        assert detector_state and detector_state.priority_level == DetectorPriorityLevel.OK
 
         now = datetime.now()
 
-        with (
-            self.feature("organizations:uptime-create-issues"),
-            mock.patch("sentry.uptime.grouptype.get_active_failure_threshold", return_value=2),
-        ):
-            evaluation = self.handle_result(
-                detector,
-                uptime_subscription,
-                self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=5)),
-            )
-            assert evaluation is None
+        evaluation = self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=5)),
+        )
+        assert evaluation is None
 
-            # Second evaluation produces a DetectorEvaluationResult
-            evaluation = self.handle_result(
-                detector,
-                uptime_subscription,
-                self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=4)),
-            )
-            assert evaluation is not None
-            assert evaluation.priority == DetectorPriorityLevel.HIGH
-            assert isinstance(evaluation.result, IssueOccurrence)
-            assert (
-                evaluation.result.issue_title == f"Downtime detected for {uptime_subscription.url}"
-            )
+        # Second evaluation produces a DetectorEvaluationResult
+        evaluation = self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=4)),
+        )
+        assert evaluation is not None
+        assert evaluation.priority == DetectorPriorityLevel.HIGH
+        assert isinstance(evaluation.result, IssueOccurrence)
+        assert evaluation.result.issue_title == f"Downtime detected for {uptime_subscription.url}"
 
-            # Fingerprint includes the existing uptime fingerprints, without
-            # this we would create new issues instead of reusing the existing
-            # issues.
-            fingerprint = set(build_fingerprint(detector))
-            assert fingerprint & set(evaluation.result.fingerprint) == fingerprint
+        # Fingerprint includes the existing uptime fingerprints, without
+        # this we would create new issues instead of reusing the existing
+        # issues.
+        fingerprint = set(build_fingerprint(detector))
+        assert fingerprint & set(evaluation.result.fingerprint) == fingerprint
 
-            # Update the uptime_status. In the future this will be removed and
-            # we'll just use the DetectorState models to represent this
-            assert uptime_subscription.uptime_status == UptimeStatus.FAILED
+        # Check the detector state was updated to HIGH
+        detector_state.refresh_from_db()
+        assert detector_state.is_triggered
+        assert detector_state.priority_level == DetectorPriorityLevel.HIGH
 
-    def test_issue_creation_disabled(self) -> None:
-        detector = self.create_uptime_detector()
+    def test_occurrence_includes_response_capture(self) -> None:
+        detector = self.create_uptime_detector(downtime_threshold=2, recovery_threshold=1)
         uptime_subscription = get_uptime_subscription(detector)
 
-        assert uptime_subscription.uptime_status == UptimeStatus.OK
+        now = datetime.now()
+
+        first_failure_time_ms = int((now - timedelta(minutes=5)).timestamp() * 1000)
+        capture = UptimeResponseCapture.objects.create(
+            uptime_subscription=uptime_subscription,
+            file_id=1,
+            scheduled_check_time_ms=first_failure_time_ms,
+        )
+
+        self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=5)),
+        )
+
+        evaluation = self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=4)),
+        )
+        assert evaluation is not None
+        assert isinstance(evaluation.result, IssueOccurrence)
+        assert evaluation.result.evidence_data["response_capture_id"] == capture.id
+
+    def test_assertion_failure_evidence_data(self) -> None:
+        detector = self.create_uptime_detector(downtime_threshold=2, recovery_threshold=1)
+        uptime_subscription = get_uptime_subscription(detector)
+
+        now = datetime.now()
+
+        self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=5)),
+        )
+
+        evaluation = self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=4)),
+        )
+        assert evaluation is not None
+        assert isinstance(evaluation.result, IssueOccurrence)
+        assert evaluation.result.evidence_data["assertion_failure_data"] == json.dumps(
+            MOCK_ASSERTION_FAILURE_DATA
+        )
+
+    def test_check_id_evidence_data(self) -> None:
+        check_id = uuid.uuid4().hex
+        detector = self.create_uptime_detector(downtime_threshold=2, recovery_threshold=1)
+        uptime_subscription = get_uptime_subscription(detector)
+
+        now = datetime.now()
+
+        self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(
+                scheduled_check_time=now - timedelta(minutes=5), guid=check_id
+            ),
+        )
+
+        evaluation = self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(
+                scheduled_check_time=now - timedelta(minutes=4), guid=check_id
+            ),
+        )
+        assert evaluation is not None
+        assert isinstance(evaluation.result, IssueOccurrence)
+        assert evaluation.result.evidence_data["check_id"] == check_id
+
+    def test_occurrence_excludes_old_response_capture(self) -> None:
+        detector = self.create_uptime_detector(downtime_threshold=2, recovery_threshold=1)
+        uptime_subscription = get_uptime_subscription(detector)
+
+        now = datetime.now()
+
+        old_time_ms = int((now - timedelta(hours=1)).timestamp() * 1000)
+        UptimeResponseCapture.objects.create(
+            uptime_subscription=uptime_subscription,
+            file_id=1,
+            scheduled_check_time_ms=old_time_ms,
+        )
+
+        self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=5)),
+        )
+
+        evaluation = self.handle_result(
+            detector,
+            uptime_subscription,
+            self.create_uptime_result(scheduled_check_time=now - timedelta(minutes=4)),
+        )
+        assert evaluation is not None
+        assert isinstance(evaluation.result, IssueOccurrence)
+        assert "response_capture_id" not in evaluation.result.evidence_data
+
+    def test_issue_creation_disabled(self) -> None:
+        detector = self.create_uptime_detector(downtime_threshold=1, recovery_threshold=1)
+        uptime_subscription = get_uptime_subscription(detector)
+
+        detector_state = detector.detectorstate_set.first()
+        assert detector_state and detector_state.priority_level == DetectorPriorityLevel.OK
 
         with (
-            # uptime-create-issues flag not enabled. No issue created
-            mock.patch("sentry.uptime.grouptype.get_active_failure_threshold", return_value=1),
+            self.options({"uptime.create-issues": False}),
             mock.patch("sentry.uptime.grouptype.logger") as logger,
         ):
             check_result = self.create_uptime_result()
@@ -216,10 +318,11 @@ class TestUptimeHandler(UptimeTestCase):
                 },
             )
 
-            # uptime_status is updated even when issue creation is disabled.
-            # This keeps the uptime_status in sync with DetectorState (until we
-            # remove it)
-            assert uptime_subscription.uptime_status == UptimeStatus.FAILED
+            # Detector state is updated even when issue creation is disabled
+            detector_state = detector.detectorstate_set.first()
+            assert detector_state is not None
+            assert detector_state.is_triggered
+            assert detector_state.priority_level == DetectorPriorityLevel.HIGH
 
         options = {
             "uptime.restrict-issue-creation-by-hosting-provider-id": [
@@ -227,12 +330,7 @@ class TestUptimeHandler(UptimeTestCase):
             ]
         }
 
-        with (
-            # All features enabled, but the host provider is disabled
-            self.feature(["organizations:uptime-create-issues"]),
-            self.options(options),
-            mock.patch("sentry.uptime.grouptype.get_active_failure_threshold", return_value=1),
-        ):
+        with self.options(options):
             evaluation = self.handle_result(
                 detector,
                 uptime_subscription,
@@ -245,28 +343,22 @@ class TestUptimeHandler(UptimeTestCase):
         Test that a uptime monitor that flaps between failure, success success,
         failure, etc does not produce any evaluations.
         """
-        detector = self.create_uptime_detector()
+        detector = self.create_uptime_detector(downtime_threshold=3, recovery_threshold=1)
         uptime_subscription = get_uptime_subscription(detector)
-
-        assert uptime_subscription.uptime_status == UptimeStatus.OK
 
         now = datetime.now()
 
-        with (
-            self.feature(["organizations:uptime-create-issues"]),
-            mock.patch("sentry.uptime.grouptype.get_active_failure_threshold", return_value=3),
-        ):
-            status_cycle: cycle[CheckStatus] = cycle(
-                [CHECKSTATUS_FAILURE, CHECKSTATUS_SUCCESS, CHECKSTATUS_SUCCESS]
-            )
+        status_cycle: cycle[CheckStatus] = cycle(
+            [CHECKSTATUS_FAILURE, CHECKSTATUS_SUCCESS, CHECKSTATUS_SUCCESS]
+        )
 
-            for idx in range(12, 0, -1):
-                result = self.create_uptime_result(
-                    status=next(status_cycle),
-                    scheduled_check_time=now - timedelta(minutes=idx),
-                )
-                evaluation = self.handle_result(detector, uptime_subscription, result)
-                assert evaluation is None
+        for idx in range(12, 0, -1):
+            result = self.create_uptime_result(
+                status=next(status_cycle),
+                scheduled_check_time=now - timedelta(minutes=idx),
+            )
+            evaluation = self.handle_result(detector, uptime_subscription, result)
+            assert evaluation is None
 
 
 class TestUptimeDomainCheckFailureDetectorConfig(TestCase):
@@ -282,6 +374,8 @@ class TestUptimeDomainCheckFailureDetectorConfig(TestCase):
             config={
                 "mode": UptimeMonitorMode.MANUAL,
                 "environment": "hi",
+                "recovery_threshold": 1,
+                "downtime_threshold": 3,
             },
         )
 

@@ -1,30 +1,29 @@
-import {Fragment} from 'react';
-import {css} from '@emotion/react';
+import {Fragment, useEffect, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Button} from 'sentry/components/core/button';
+import {Button} from '@sentry/scraps/button';
+
 import {IconAdd, IconSubtract} from 'sentry/icons';
 import {tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 
 interface GroupingComponentFramesProps {
-  collapsed: boolean;
+  initialCollapsed: boolean;
   items: React.ReactNode[];
   maxVisibleItems?: number;
-  onCollapsedChange?: (collapsed: boolean) => void;
 }
 
-function GroupingComponentFrames({
+export function GroupingComponentFrames({
   items,
   maxVisibleItems = 2,
-  onCollapsedChange,
-  collapsed,
+  initialCollapsed,
 }: GroupingComponentFramesProps) {
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
   const isCollapsible = items.length > maxVisibleItems;
 
-  const setCollapsed = (next: boolean) => {
-    onCollapsedChange?.(next);
-  };
+  useEffect(() => {
+    // eslint-disable-next-line react-you-might-not-need-an-effect/no-derived-state
+    setCollapsed(initialCollapsed);
+  }, [initialCollapsed]);
 
   return (
     <Fragment>
@@ -76,21 +75,12 @@ function GroupingComponentFrames({
 }
 
 const ToggleCollapse = styled(Button)`
-  margin: ${space(0.5)} 0;
-  color: ${p => p.theme.linkColor};
+  margin: ${p => p.theme.space.xs} 0;
+  color: ${p => p.theme.tokens.interactive.link.accent.rest};
 `;
 
 export const GroupingComponentListItem = styled('li')<{isCollapsible?: boolean}>`
   padding: 0;
-  margin: ${space(0.25)} 0 ${space(0.25)} ${space(1.5)};
-
-  ${p =>
-    p.isCollapsible &&
-    css`
-      border-left: 1px solid ${p.theme.innerBorder};
-      margin: 0 0 -${space(0.25)} ${space(1)};
-      padding-left: ${space(0.5)};
-    `}
+  margin: ${p => p.theme.space['2xs']} 0 ${p => p.theme.space['2xs']}
+    ${p => p.theme.space.lg};
 `;
-
-export default GroupingComponentFrames;

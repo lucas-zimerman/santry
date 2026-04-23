@@ -12,6 +12,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry.auth.services.auth import AuthenticatedToken
+from sentry.silo.util import PROXY_APIGATEWAY_HEADER
 from sentry.types.ratelimit import RateLimitMeta, SnubaRateLimitMeta
 from sentry.utils import metrics
 
@@ -30,7 +31,7 @@ class _AccessLogMetaData:
         return time.time() - self.request_start_time
 
 
-def _get_request_auth(request: Request) -> AuthenticatedToken | None:
+def _get_request_auth(request: Request) -> AuthenticatedToken | str | None:
     if request.path_info.startswith(settings.ANONYMOUS_STATIC_PREFIXES):
         return None
     # may not be present if request was rejected by a middleware between this
@@ -48,7 +49,6 @@ def _get_token_name(auth: AuthenticatedToken | None) -> str | None:
 
 
 def _get_rate_limit_stats_dict(request: Request) -> dict[str, str | int | None]:
-
     rate_limit_metadata: RateLimitMeta | None = getattr(request, "rate_limit_metadata", None)
     snuba_rate_limit_metadata: SnubaRateLimitMeta | None = getattr(
         request, "snuba_rate_limit_metadata", None
@@ -94,10 +94,21 @@ def _create_api_access_log(
             view = request.resolver_match._func_path
 
         request_auth = _get_request_auth(request)
+        if isinstance(request_auth, str):
+            # RPC authenticator currently set auth to a string.
+            # a) Those are also system tokens and should be ignored.
+            # b) _get_token_name raises on non AuthenticatedToken
+            return
+
         token_type = _get_token_name(request_auth)
         if token_type == "system":
             # if its an internal request, no need to log
             return
+
+        impersonator_user_id = None
+        actual_user = getattr(request, "actual_user", None)
+        if actual_user is not None:
+            impersonator_user_id = getattr(actual_user, "id", None)
 
         request_user = getattr(request, "user", None)
         user_id = getattr(request_user, "id", None)
@@ -123,6 +134,8 @@ def _create_api_access_log(
             rate_limited=getattr(request, "will_be_rate_limited", False),
             rate_limit_category=getattr(request, "rate_limit_category", None),
             request_duration_seconds=access_log_metadata.get_request_duration(),
+            gateway_proxy=request.headers.get(PROXY_APIGATEWAY_HEADER, None),
+            impersonator_user_id=impersonator_user_id,
             **_get_rate_limit_stats_dict(request),
         )
         auth = get_authorization_header(request).split()

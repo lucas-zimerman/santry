@@ -7,13 +7,14 @@ from typing import Any, NoReturn
 
 from django.urls import reverse
 
-from sentry import features
+from sentry.constants import ObjectStatus
 from sentry.integrations.mixins.issues import MAX_CHAR
 from sentry.integrations.models.external_issue import ExternalIssue
 from sentry.integrations.source_code_management.issues import SourceCodeIssueIntegration
 from sentry.issues.grouptype import GroupCategory
 from sentry.issues.issue_occurrence import IssueOccurrence
 from sentry.models.group import Group
+from sentry.models.repository import Repository
 from sentry.organizations.services.organization.service import organization_service
 from sentry.services.eventstore.models import Event, GroupEvent
 from sentry.shared_integrations.exceptions import (
@@ -29,6 +30,8 @@ from sentry.users.models.user import User
 from sentry.users.services.user import RpcUser
 from sentry.utils.http import absolute_uri
 from sentry.utils.strings import truncatechars
+
+PAGE_NUMBER_LIMIT = 1
 
 
 class GitHubIssuesSpec(SourceCodeIssueIntegration):
@@ -173,10 +176,7 @@ class GitHubIssuesSpec(SourceCodeIssueIntegration):
             org = org_context.organization
 
         params = kwargs.pop("params", {})
-        page_number_limit = (
-            features.has("organizations:github-get-repos-page-limit", org) and 1 or None
-        )
-        default_repo, repo_choices = self.get_repository_choices(group, params, page_number_limit)
+        default_repo, repo_choices = self.get_repository_choices(group, params, PAGE_NUMBER_LIMIT)
 
         assignees = self.get_allowed_assignees(default_repo) if default_repo else []
         labels: Sequence[tuple[str, str]] = []
@@ -224,6 +224,17 @@ class GitHubIssuesSpec(SourceCodeIssueIntegration):
         repo = data.get("repo")
         if not repo:
             raise IntegrationFormError({"repo": "Repository is required"})
+
+        # Check the repository belongs to the integration
+        if not Repository.objects.filter(
+            name=repo,
+            integration_id=self.model.id,
+            organization_id=self.organization_id,
+            status=ObjectStatus.ACTIVE,
+        ).exists():
+            raise IntegrationFormError(
+                {"repo": f"Given repository, {repo} does not belong to this installation"}
+            )
 
         # Create clean issue data with required fields
         if not data.get("title"):
@@ -317,6 +328,16 @@ class GitHubIssuesSpec(SourceCodeIssueIntegration):
 
         if not repo:
             raise IntegrationFormError({"repo": "Repository is required"})
+
+        if not Repository.objects.filter(
+            name=repo,
+            integration_id=self.model.id,
+            organization_id=self.organization_id,
+            status=ObjectStatus.ACTIVE,
+        ).exists():
+            raise IntegrationFormError(
+                {"repo": f"Given repository, {repo} does not belong to this installation"}
+            )
 
         if not issue_num:
             raise IntegrationFormError({"externalIssue": "Issue number is required"})

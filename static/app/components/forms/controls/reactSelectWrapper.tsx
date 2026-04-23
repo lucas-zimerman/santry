@@ -19,13 +19,15 @@ components.LoadingIndicator.defaultProps = undefined;
 
 const ReactSelectWrapper = (({ref, ...props}: any) => {
   // Reapply default props to the component
-  return <ReactSelect {...reactSelectDefaultProps} {...props} ref={ref} />;
+  return (
+    <ReactSelect {...reactSelectDefaultProps} {...props} ref={ref} menuPlacement="auto" />
+  );
 }) as any as typeof ReactSelect;
 
 export {ReactSelectWrapper as ReactSelect, ReactSelectWrapper as default, components};
 export {createFilter, mergeStyles} from 'react-select';
 export type {
-  Props,
+  NamedProps as Props,
   StylesConfig,
   SingleValueProps,
   GroupedOptionsType,

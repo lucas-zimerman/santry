@@ -1,12 +1,15 @@
+import {skipToken, useQuery} from '@tanstack/react-query';
+
 import {useFetchGroupAndEvent} from 'sentry/components/featureFlags/hooks/useFetchGroupAndEvent';
 import {
-  useOrganizationFlagLog,
+  organizationFlagLogOptions,
   useOrganizationFlagLogInfinite,
 } from 'sentry/components/featureFlags/hooks/useOrganizationFlagLog';
 import type {Event} from 'sentry/types/event';
 import type {Group} from 'sentry/types/group';
-import {useApiQuery} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {defined} from 'sentry/utils';
+import {apiOptions, selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useGroup} from 'sentry/views/issueDetails/useGroup';
 
 type FetchGroupAndEventParams = Parameters<typeof useFetchGroupAndEvent>[0];
@@ -46,23 +49,25 @@ export function useFlagsInEventPaginated({
   });
 
   const {
-    data: rawFlagData,
-    getResponseHeader,
+    data: rawFlagResp,
     isPending: isFlagsPending,
     isError: isFlagsError,
     error: flagsError,
-  } = useOrganizationFlagLog({
-    organization,
-    query: {
-      ...query,
-      flag: eventFlags,
-    },
+  } = useQuery({
+    ...organizationFlagLogOptions({
+      organization,
+      query: {
+        ...query,
+        flag: eventFlags,
+      },
+    }),
     enabled: enabled && Boolean(eventFlags?.length),
+    select: selectJsonWithHeaders,
   });
-  const pageLinks = getResponseHeader?.('Link') ?? null;
+  const pageLinks = rawFlagResp?.headers.Link ?? null;
 
   return {
-    flags: rawFlagData?.data ?? [],
+    flags: rawFlagResp?.json?.data ?? [],
     event,
     group,
     pageLinks,
@@ -106,22 +111,32 @@ export function useFlagsInEvent({
   const group = groupProp ?? groupData;
 
   const projectSlug = group?.project.slug;
+  const eventEnabled =
+    enabled && Boolean(eventId && projectSlug && organization.slug) && !eventProp;
   const {
     data: eventData,
     isPending: isEventPending,
     isError: isEventError,
     error: eventError,
-  } = useApiQuery<Event>(
-    [`/organizations/${organization.slug}/events/${projectSlug}:${eventId}/`],
-    {
-      staleTime: Infinity,
-      enabled:
-        enabled && Boolean(eventId && projectSlug && organization.slug) && !eventProp,
-    }
+  } = useQuery(
+    apiOptions.as<Event>()(
+      '/organizations/$organizationIdOrSlug/events/$projectIdOrSlug:$eventId/',
+      {
+        path: eventEnabled
+          ? {
+              organizationIdOrSlug: organization.slug,
+              projectIdOrSlug: projectSlug!,
+              eventId: eventId!,
+            }
+          : skipToken,
+        staleTime: Infinity,
+      }
+    )
   );
   const event = eventProp ?? eventData;
 
-  const eventFlags = event?.contexts?.flags?.values?.map(f => f.flag);
+  const eventFlags =
+    event?.contexts?.flags?.values?.map(f => f?.flag).filter(defined) ?? [];
 
   const {
     data: rawFlagData,
@@ -134,7 +149,7 @@ export function useFlagsInEvent({
       ...query,
       flag: eventFlags,
     },
-    enabled: enabled && Boolean(eventFlags?.length),
+    enabled: enabled && Boolean(eventFlags.length),
   });
 
   return {

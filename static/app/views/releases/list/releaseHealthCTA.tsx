@@ -1,17 +1,16 @@
-import {useCallback} from 'react';
 import styled from '@emotion/styled';
 
-import {Alert} from 'sentry/components/core/alert';
-import {ExternalLink} from 'sentry/components/core/link';
+import {Alert} from '@sentry/scraps/alert';
+import {ExternalLink} from '@sentry/scraps/link';
+
 import {releaseHealth} from 'sentry/data/platformCategories';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {PageFilters} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import type {Release} from 'sentry/types/release';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import {useApiQuery} from 'sentry/utils/queryClient';
+import {useDetailedProject} from 'sentry/utils/project/useDetailedProject';
 
 interface Props {
   organization: Organization;
@@ -20,7 +19,7 @@ interface Props {
   selection: PageFilters;
 }
 
-export default function ReleaseHealthCTA({
+export function ReleaseHealthCTA({
   organization,
   releases,
   selectedProject,
@@ -30,19 +29,22 @@ export default function ReleaseHealthCTA({
     data: project,
     isPending,
     isError,
-  } = useApiQuery<Project>([`/projects/${organization.slug}/${selectedProject?.slug}/`], {
-    enabled: Boolean(selectedProject) && releases.length > 0,
-    staleTime: 1_000, // 1 second
-  });
+  } = useDetailedProject(
+    {orgSlug: organization.slug, projectSlug: selectedProject?.slug ?? ''},
+    {
+      enabled: Boolean(selectedProject) && releases.length > 0,
+      staleTime: 1_000, // 1 second
+    }
+  );
 
-  const trackAddReleaseHealth = useCallback(() => {
+  const trackAddReleaseHealth = () => {
     if (organization.id && selection.projects[0]) {
       trackAnalytics('releases_list.click_add_release_health', {
         organization,
         project_id: selection.projects[0],
       });
     }
-  }, [organization, selection]);
+  };
 
   if (isPending || isError) {
     return null;
@@ -57,7 +59,7 @@ export default function ReleaseHealthCTA({
 
   return (
     <Alert.Container>
-      <Alert type="info">
+      <Alert variant="info">
         <AlertText>
           <div>
             {t(
@@ -80,7 +82,7 @@ const AlertText = styled('div')`
   display: flex;
   align-items: flex-start;
   justify-content: flex-start;
-  gap: ${space(2)};
+  gap: ${p => p.theme.space.xl};
 
   > *:nth-child(1) {
     flex: 1;

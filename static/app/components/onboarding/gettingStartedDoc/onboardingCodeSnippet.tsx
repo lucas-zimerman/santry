@@ -2,12 +2,16 @@ import {Fragment, useCallback, useMemo, useState} from 'react';
 import {createPortal} from 'react-dom';
 import beautify from 'js-beautify';
 
-import {CodeSnippet} from 'sentry/components/codeSnippet';
+import {CodeBlock} from '@sentry/scraps/code';
+
 import {AuthTokenGenerator} from 'sentry/components/onboarding/gettingStartedDoc/authTokenGenerator';
+import {useRegisteredTabSelection} from 'sentry/components/onboarding/gettingStartedDoc/selectedCodeTabContext';
 import {PACKAGE_LOADING_PLACEHOLDER} from 'sentry/utils/gettingStartedDocs/getPackageVersion';
 
-interface OnboardingCodeSnippetProps
-  extends Omit<React.ComponentProps<typeof CodeSnippet>, 'onAfterHighlight'> {}
+interface OnboardingCodeSnippetProps extends Omit<
+  React.ComponentProps<typeof CodeBlock>,
+  'onAfterHighlight'
+> {}
 
 /**
  * Replaces tokens in a DOM element with a span element.
@@ -22,7 +26,7 @@ export function replaceTokensWithSpan(element: HTMLElement) {
   );
 
   return Array.from<HTMLSpanElement>(
-    element.querySelectorAll(`[data-token="___ORG_AUTH_TOKEN___"]`)
+    element.querySelectorAll('[data-token="___ORG_AUTH_TOKEN___"]')
   );
 }
 
@@ -47,7 +51,7 @@ export function OnboardingCodeSnippet({
 
   return (
     <Fragment>
-      <CodeSnippet
+      <CodeBlock
         dark
         language={language}
         hideCopyButton={partialLoading}
@@ -63,7 +67,7 @@ export function OnboardingCodeSnippet({
               brace_style: 'preserve-inline',
             })
           : children.trim()}
-      </CodeSnippet>
+      </CodeBlock>
       {authTokenNodes.map(node => createPortal(<AuthTokenGenerator />, node))}
     </Fragment>
   );
@@ -90,32 +94,25 @@ interface TabbedCodeSnippetProps {
    * A callback to be invoked when the configuration is selected and copied to the clipboard
    */
   onSelectAndCopy?: () => void;
-  /**
-   * Whether or not the configuration or parts of it are currently being loaded
-   */
-  partialLoading?: boolean;
 }
 
 export function TabbedCodeSnippet({
   tabs,
   onCopy,
   onSelectAndCopy,
-  partialLoading,
 }: TabbedCodeSnippetProps) {
-  const [selectedTabValue, setSelectedTabValue] = useState(tabs[0]!.value);
-  const selectedTab = tabs.find(tab => tab.value === selectedTabValue) ?? tabs[0]!;
-  const {code, language, filename} = selectedTab;
+  const [selectedTabValue, setSelectedTabValue] = useRegisteredTabSelection(tabs);
+  const resolvedTab = tabs.find(tab => tab.value === selectedTabValue) ?? tabs[0]!;
+  const {code, language, filename} = resolvedTab;
 
   return (
     <OnboardingCodeSnippet
       language={language}
       onCopy={onCopy}
       onSelectAndCopy={onSelectAndCopy}
-      hideCopyButton={partialLoading}
-      disableUserSelection={partialLoading}
       tabs={tabs}
       selectedTab={selectedTabValue}
-      onTabClick={value => setSelectedTabValue(value)}
+      onTabClick={setSelectedTabValue}
       filename={filename}
     >
       {code}

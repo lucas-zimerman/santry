@@ -1,24 +1,35 @@
 import {Fragment, useMemo} from 'react';
 import styled from '@emotion/styled';
 
+import {Flex} from '@sentry/scraps/layout';
+
 import {SdkDocumentation} from 'sentry/components/onboarding/gettingStartedDoc/sdkDocumentation';
 import type {ProductSolution} from 'sentry/components/onboarding/gettingStartedDoc/types';
-import platforms, {otherPlatform} from 'sentry/data/platforms';
+import {useOnboardingContext} from 'sentry/components/onboarding/onboardingContext';
+import {otherPlatform, allPlatforms as platforms} from 'sentry/data/platforms';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import {browserHistory} from 'sentry/utils/browserHistory';
 import {decodeList} from 'sentry/utils/queryString';
-import useOrganization from 'sentry/utils/useOrganization';
-import SetupIntroduction from 'sentry/views/onboarding/components/setupIntroduction';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
+import {useExperiment} from 'sentry/utils/useExperiment';
+import {useLocation} from 'sentry/utils/useLocation';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {SetupIntroduction} from 'sentry/views/onboarding/components/setupIntroduction';
 import {OtherPlatformsInfo} from 'sentry/views/projectInstall/otherPlatformsInfo';
 
-import FirstEventFooter from './components/firstEventFooter';
+import {FirstEventFooter} from './components/firstEventFooter';
 import type {StepProps} from './types';
 
-function SetupDocs({location, recentCreatedProject: project}: StepProps) {
+export function SetupDocs({recentCreatedProject: project, genBackButton}: StepProps) {
   const organization = useOrganization();
-
+  const location = useLocation();
+  const navigate = useNavigate();
+  const {setSelectedFeatures} = useOnboardingContext();
+  const {inExperiment: hasScmOnboarding} = useExperiment({
+    feature: 'onboarding-scm-experiment',
+    reportExposure: false,
+  });
   const products = useMemo<ProductSolution[]>(
     () => decodeList(location.query.product ?? []) as ProductSolution[],
     [location.query.product]
@@ -34,7 +45,7 @@ function SetupDocs({location, recentCreatedProject: project}: StepProps) {
 
   return (
     <Fragment>
-      <Wrapper>
+      <Flex justify="center" margin="xl">
         <MainContent>
           <Fragment>
             <SetupIntroduction
@@ -52,38 +63,48 @@ function SetupDocs({location, recentCreatedProject: project}: StepProps) {
                 organization={organization}
                 project={project}
                 activeProductSelection={products}
+                onProductSelectionSync={
+                  hasScmOnboarding ? setSelectedFeatures : undefined
+                }
                 newOrg
               />
             )}
           </Fragment>
         </MainContent>
-      </Wrapper>
+      </Flex>
       <FirstEventFooter
         project={project}
         organization={organization}
         isLast
+        leading={genBackButton?.()}
         onClickSetupLater={() => {
-          const orgIssuesURL = `/organizations/${organization.slug}/issues/?project=${project.id}&referrer=onboarding-setup-docs`;
-          trackAnalytics('growth.onboarding_clicked_setup_platform_later', {
-            organization,
-            platform: currentPlatformKey,
-            project_id: project.id,
-          });
-          browserHistory.push(orgIssuesURL);
+          if (hasScmOnboarding) {
+            trackAnalytics('onboarding.scm_setup_platform_later_clicked', {
+              organization,
+              platform: currentPlatformKey,
+              project_id: project.id,
+            });
+          } else {
+            trackAnalytics('growth.onboarding_clicked_setup_platform_later', {
+              organization,
+              platform: currentPlatformKey,
+              project_id: project.id,
+            });
+          }
+          navigate(
+            normalizeUrl({
+              pathname: `/organizations/${organization.slug}/issues/`,
+              query: {
+                project: project.id,
+                referrer: 'onboarding-setup-docs',
+              },
+            })
+          );
         }}
       />
     </Fragment>
   );
 }
-
-export default SetupDocs;
-
-const Wrapper = styled('div')`
-  display: flex;
-  flex-direction: row;
-  margin: ${space(2)};
-  justify-content: center;
-`;
 
 const MainContent = styled('div')`
   max-width: 850px;

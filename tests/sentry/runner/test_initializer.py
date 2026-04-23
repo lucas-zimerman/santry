@@ -1,8 +1,16 @@
 import types
 
 import pytest
+from django.core.cache import caches
+from django.test import override_settings
 
-from sentry.runner.initializer import ConfigurationError, apply_legacy_settings, bootstrap_options
+from sentry.options import default_store
+from sentry.runner.initializer import (
+    ConfigurationError,
+    apply_legacy_settings,
+    bind_cache_to_option_store,
+    bootstrap_options,
+)
 from sentry.utils.warnings import DeprecatedSettingWarning
 
 
@@ -190,7 +198,6 @@ def test_apply_legacy_settings(settings) -> None:
     settings.SENTRY_USE_QUEUE = True
     settings.SENTRY_ALLOW_REGISTRATION = True
     settings.SENTRY_ADMIN_EMAIL = "admin-email"
-    settings.SENTRY_SYSTEM_MAX_EVENTS_PER_MINUTE = 10
     settings.SENTRY_REDIS_OPTIONS = {"foo": "bar"}
     settings.SENTRY_ENABLE_EMAIL_REPLIES = True
     settings.SENTRY_SMTP_HOSTNAME = "reply-hostname"
@@ -203,11 +210,9 @@ def test_apply_legacy_settings(settings) -> None:
     settings.SENTRY_RELOCATION_OPTIONS = {"relocation-baz": "relocation-qux"}
     with pytest.warns(DeprecatedSettingWarning) as warninfo:
         apply_legacy_settings(settings)
-    assert settings.CELERY_ALWAYS_EAGER is False
     assert settings.SENTRY_FEATURES["auth:register"] is True
     assert settings.SENTRY_OPTIONS == {
         "system.admin-email": "admin-email",
-        "system.rate-limit": 10,
         "system.secret-key": "secret-key",
         "redis.clusters": {"default": {"foo": "bar"}},
         "mail.from": "mail-from",
@@ -238,8 +243,6 @@ def test_apply_legacy_settings(settings) -> None:
             ),
             ("SENTRY_REDIS_OPTIONS", 'SENTRY_OPTIONS["redis.clusters"]'),
             ("SENTRY_SMTP_HOSTNAME", "SENTRY_OPTIONS['mail.reply-hostname']"),
-            ("SENTRY_SYSTEM_MAX_EVENTS_PER_MINUTE", "SENTRY_OPTIONS['system.rate-limit']"),
-            ("SENTRY_USE_QUEUE", "CELERY_ALWAYS_EAGER"),
         },
     )
 
@@ -255,3 +258,31 @@ def test_require_secret_key(settings) -> None:
     assert "system.secret-key" not in settings.SENTRY_OPTIONS
     with pytest.raises(ConfigurationError):
         apply_legacy_settings(settings)
+
+
+def test_bind_cache_to_option_store_with_options_cache() -> None:
+    from django.conf import settings
+
+    cache_config = settings.CACHES.copy()
+    cache_config["options"] = {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+    }
+
+    with override_settings(CACHES=cache_config):
+        bind_cache_to_option_store()
+
+        # Should use 'options' cache, not 'default'
+        assert default_store.cache == caches["options"]
+
+
+def test_bind_cache_to_option_store_without_options_cache() -> None:
+    from django.conf import settings
+
+    cache_config = settings.CACHES.copy()
+    cache_config.pop("options", None)
+
+    with override_settings(CACHES=cache_config):
+        bind_cache_to_option_store()
+
+        # Should use 'default' cache when 'options' doesn't exist
+        assert default_store.cache == caches["default"]

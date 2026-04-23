@@ -63,7 +63,7 @@ describe('DashboardTable', () => {
         ]}
         cursorKey="test"
         isLoading={false}
-        title={''}
+        title=""
       />
     );
 
@@ -104,7 +104,7 @@ describe('DashboardTable', () => {
     // matches the format of the "0ms ago" text more robustly in
     // case the timestamp does not exactly match
     const lastVisitedContent = lastVisitedCell.textContent;
-    expect(lastVisitedContent).toMatch(/[\d\w]+s ago$/);
+    expect(lastVisitedContent).toMatch(/\w+s ago$/);
   });
 
   it('renders release filters', () => {
@@ -113,7 +113,7 @@ describe('DashboardTable', () => {
         dashboards={[DashboardListItemFixture({filters: {release: ['1.0.0']}})]}
         cursorKey="test"
         isLoading={false}
-        title={''}
+        title=""
       />
     );
 
@@ -180,9 +180,8 @@ describe('DashboardTable', () => {
       expect.objectContaining({
         method: 'POST',
         data: expect.objectContaining({
-          title: 'Dashboard',
+          title: 'Dashboard copy',
           widgets: [],
-          duplicate: true,
         }),
       })
     );

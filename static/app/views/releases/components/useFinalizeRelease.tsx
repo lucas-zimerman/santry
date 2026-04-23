@@ -1,8 +1,10 @@
-import type {Release} from 'sentry/types/release';
-import {fetchMutation, useMutation} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useMutation} from '@tanstack/react-query';
 
-export default function useFinalizeRelease() {
+import type {Release} from 'sentry/types/release';
+import {fetchMutation} from 'sentry/utils/queryClient';
+import {useOrganization} from 'sentry/utils/useOrganization';
+
+export function useFinalizeRelease() {
   const organization = useOrganization();
 
   return useMutation({
@@ -19,7 +21,7 @@ export default function useFinalizeRelease() {
 
       return fetchMutation({
         method: 'PUT',
-        url: `/organizations/${organization.slug}/releases/${release.version}/`,
+        url: `/organizations/${organization.slug}/releases/${encodeURIComponent(release.version)}/`,
         options: {},
         data: payload,
       });

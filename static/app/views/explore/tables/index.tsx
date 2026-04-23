@@ -1,28 +1,29 @@
-import {Fragment, useCallback} from 'react';
-import styled from '@emotion/styled';
+import {Fragment, useEffect} from 'react';
+
+import {Badge} from '@sentry/scraps/badge';
+import {Button} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+import {TabList, Tabs} from '@sentry/scraps/tabs';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
 import {openModal} from 'sentry/actionCreators/modal';
-import {Button} from 'sentry/components/core/button';
-import {TabList, Tabs} from 'sentry/components/core/tabs';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import {IconTable} from 'sentry/icons/iconTable';
+import {IconEdit} from 'sentry/icons/iconEdit';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Confidence} from 'sentry/types/organization';
-import useOrganization from 'sentry/utils/useOrganization';
-import {
-  useExploreFields,
-  useSetExploreFields,
-} from 'sentry/views/explore/contexts/pageParamsContext';
+import {defined} from 'sentry/utils';
+import {AttributeBreakdownsContent} from 'sentry/views/explore/components/attributeBreakdowns/content';
 import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
-import {useTraceItemTags} from 'sentry/views/explore/contexts/spanTagsContext';
+import {useSpanItemAttributes} from 'sentry/views/explore/contexts/traceItemAttributeContext';
 import type {AggregatesTableResult} from 'sentry/views/explore/hooks/useExploreAggregatesTable';
 import type {SpansTableResult} from 'sentry/views/explore/hooks/useExploreSpansTable';
 import type {TracesTableResult} from 'sentry/views/explore/hooks/useExploreTracesTable';
 import {Tab} from 'sentry/views/explore/hooks/useTab';
 import {
   useQueryParamsAggregateFields,
+  useQueryParamsCrossEvents,
+  useQueryParamsFields,
   useSetQueryParamsAggregateFields,
+  useSetQueryParamsFields,
 } from 'sentry/views/explore/queryParams/context';
 import {AggregateColumnEditorModal} from 'sentry/views/explore/tables/aggregateColumnEditorModal';
 import {AggregatesTable} from 'sentry/views/explore/tables/aggregatesTable';
@@ -43,18 +44,19 @@ interface ExploreTablesProps extends BaseExploreTablesProps {
 }
 
 export function ExploreTables(props: ExploreTablesProps) {
-  const organization = useOrganization();
+  const crossEvents = useQueryParamsCrossEvents();
 
   const aggregateFields = useQueryParamsAggregateFields();
   const setAggregateFields = useSetQueryParamsAggregateFields();
 
-  const fields = useExploreFields();
-  const setFields = useSetExploreFields();
+  const fields = useQueryParamsFields();
+  const setFields = useSetQueryParamsFields();
 
-  const {tags: numberTags} = useTraceItemTags('number');
-  const {tags: stringTags} = useTraceItemTags('string');
+  const {attributes: numberTags} = useSpanItemAttributes({}, 'number');
+  const {attributes: stringTags} = useSpanItemAttributes({}, 'string');
+  const {attributes: booleanTags} = useSpanItemAttributes({}, 'boolean');
 
-  const openColumnEditor = useCallback(() => {
+  const openColumnEditor = () => {
     openModal(
       modalProps => (
         <ColumnEditorModal
@@ -63,13 +65,14 @@ export function ExploreTables(props: ExploreTablesProps) {
           onColumnsChange={setFields}
           stringTags={stringTags}
           numberTags={numberTags}
+          booleanTags={booleanTags}
         />
       ),
       {closeEvents: 'escape-key'}
     );
-  }, [fields, setFields, stringTags, numberTags]);
+  };
 
-  const openAggregateColumnEditor = useCallback(() => {
+  const openAggregateColumnEditor = () => {
     openModal(
       modalProps => (
         <AggregateColumnEditorModal
@@ -78,29 +81,47 @@ export function ExploreTables(props: ExploreTablesProps) {
           onColumnsChange={setAggregateFields}
           stringTags={stringTags}
           numberTags={numberTags}
+          booleanTags={booleanTags}
         />
       ),
       {closeEvents: 'escape-key'}
     );
-  }, [aggregateFields, setAggregateFields, stringTags, numberTags]);
+  };
+
+  useEffect(() => {
+    if (
+      props.tab === Tab.ATTRIBUTE_BREAKDOWNS &&
+      defined(crossEvents) &&
+      crossEvents.length > 0
+    ) {
+      props.setTab(Tab.SPAN);
+    }
+  }, [crossEvents, props]);
 
   return (
     <Fragment>
-      <SamplesTableHeader>
+      <Flex justify="between" marginBottom="md" gap="md" wrap="wrap">
         <Tabs value={props.tab} onChange={props.setTab} size="sm">
-          <TabList hideBorder variant="floating">
+          <TabList variant="floating">
             <TabList.Item key={Tab.SPAN}>{t('Span Samples')}</TabList.Item>
             <TabList.Item key={Tab.TRACE}>{t('Trace Samples')}</TabList.Item>
             <TabList.Item key={Mode.AGGREGATE}>{t('Aggregates')}</TabList.Item>
+            <TabList.Item
+              key={Tab.ATTRIBUTE_BREAKDOWNS}
+              textValue={t('Attribute Breakdowns')}
+              disabled={defined(crossEvents) && crossEvents.length > 0}
+            >
+              {t('Attribute Breakdowns')}
+              <Badge variant="beta">Beta</Badge>
+            </TabList.Item>
           </TabList>
         </Tabs>
         {props.tab === Tab.SPAN ? (
-          <Button onClick={openColumnEditor} icon={<IconTable />} size="sm">
+          <Button onClick={openColumnEditor} icon={<IconEdit />} size="sm">
             {t('Edit Table')}
           </Button>
-        ) : props.tab === Mode.AGGREGATE &&
-          organization.features.includes('visibility-explore-aggregate-editor') ? (
-          <Button onClick={openAggregateColumnEditor} icon={<IconTable />} size="sm">
+        ) : props.tab === Mode.AGGREGATE ? (
+          <Button onClick={openAggregateColumnEditor} icon={<IconEdit />} size="sm">
             {t('Edit Table')}
           </Button>
         ) : (
@@ -111,22 +132,16 @@ export function ExploreTables(props: ExploreTablesProps) {
                 : t('Use the Group By and Visualize controls to change table columns')
             }
           >
-            <Button disabled onClick={openColumnEditor} icon={<IconTable />} size="sm">
+            <Button disabled onClick={openColumnEditor} icon={<IconEdit />} size="sm">
               {t('Edit Table')}
             </Button>
           </Tooltip>
         )}
-      </SamplesTableHeader>
+      </Flex>
       {props.tab === Tab.SPAN && <SpansTable {...props} />}
       {props.tab === Tab.TRACE && <TracesTable {...props} />}
       {props.tab === Mode.AGGREGATE && <AggregatesTable {...props} />}
+      {props.tab === Tab.ATTRIBUTE_BREAKDOWNS && <AttributeBreakdownsContent />}
     </Fragment>
   );
 }
-
-const SamplesTableHeader = styled('div')`
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  margin-bottom: ${space(1)};
-`;

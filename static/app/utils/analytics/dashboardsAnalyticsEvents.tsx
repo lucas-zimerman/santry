@@ -8,6 +8,7 @@ export enum WidgetBuilderVersion {
 // Used in the full-page widget builder
 type DashboardsEventParametersWidgetBuilder = {
   'dashboards_views.engagement.load': {
+    globalFilterCount: number;
     issuesRatio: number;
     logRatio: number;
     title: string;
@@ -78,6 +79,13 @@ export type DashboardsEventParameters = {
   'dashboards2.filter.cancel': Record<string, unknown>;
   'dashboards2.filter.change': {filter_type: string};
   'dashboards2.filter.save': Record<string, unknown>;
+  'dashboards2.global_filter.add': Record<string, unknown>;
+  'dashboards2.global_filter.remove': Record<string, unknown>;
+  'dashboards2.span_migration.results_check': {
+    error_message: string;
+    dashboard_id?: string;
+    widget_id?: string;
+  };
   'dashboards_manage.change_sort': {
     sort: string;
   };
@@ -87,20 +95,14 @@ export type DashboardsEventParameters = {
   'dashboards_manage.create.start': Record<string, unknown>;
   'dashboards_manage.delete': {dashboard_id: number; view_type: DashboardsLayout};
   'dashboards_manage.duplicate': {dashboard_id: number; view_type: DashboardsLayout};
+  'dashboards_manage.generate.start': Record<string, unknown>;
   'dashboards_manage.paginate': Record<string, unknown>;
   'dashboards_manage.search': Record<string, unknown>;
-  'dashboards_manage.templates.add': {
-    dashboard_id: string;
-    dashboard_title: string;
-    was_previewed: boolean;
-  };
-  'dashboards_manage.templates.preview': {
-    dashboard_id: string;
-  };
-  'dashboards_manage.templates.toggle': {
-    show_templates: boolean;
-  };
   'dashboards_manage.toggle_favorite': {dashboard_id: string; favorited: boolean};
+  'dashboards_views.insights_redirect': {
+    dashboard_id: string;
+    prebuilt_id: number;
+  };
   'dashboards_views.open_in_discover.opened': {
     widget_type: string;
   };
@@ -171,6 +173,8 @@ export const dashboardsEventMap: Record<DashboardsEventKey, string | null> = {
   'dashboards2.filter.save': 'Dashboards2: Filter bar save',
   'dashboards2.filter.cancel': 'Dashboards2: Filter bar cancel',
   'dashboards2.filter.change': 'Dashboards2: Filter bar changed',
+  'dashboards2.global_filter.add': 'Dashboards2: Global filter added',
+  'dashboards2.global_filter.remove': 'Dashboards2: Global filter removed',
   'dashboards_views.query_selector.opened':
     'Dashboards2: Query Selector opened for Widget',
   'dashboards_views.query_selector.selected':
@@ -186,12 +190,11 @@ export const dashboardsEventMap: Record<DashboardsEventKey, string | null> = {
   'dashboards_manage.change_sort': 'Dashboards Manager: Sort By Changed',
   'dashboards_manage.change_view_type': 'Dashboards Manager: View Type Toggled',
   'dashboards_manage.create.start': 'Dashboards Manager: Dashboard Create Started',
+  'dashboards_manage.generate.start':
+    'Dashboards Manager: Dashboard Seer Generate Started',
   'dashboards_manage.delete': 'Dashboards Manager: Dashboard Deleted',
   'dashboards_manage.duplicate': 'Dashboards Manager: Dashboard Duplicated',
   'dashboards_manage.paginate': 'Dashboards Manager: Paginate',
-  'dashboards_manage.templates.toggle': 'Dashboards Manager: Template Toggle Changed',
-  'dashboards_manage.templates.add': 'Dashboards Manager: Template Added',
-  'dashboards_manage.templates.preview': 'Dashboards Manager: Template Previewed',
   'dashboards_manage.toggle_favorite': 'Dashboards Manager: Dashboard Favorite Toggled',
   'dashboards_views.widget_viewer.edit': 'Widget Viewer: Edit Widget Modal Opened',
   'dashboards_views.widget_viewer.open': 'Widget Viewer: Opened',
@@ -204,5 +207,8 @@ export const dashboardsEventMap: Record<DashboardsEventKey, string | null> = {
   'dashboards_views.widget_viewer.zoom': 'Widget Viewer: Chart zoomed',
   'dashboards2.edit_access.start': 'Dashboards2: Edit Access Dropdown Opened',
   'dashboards2.edit_access.save': 'Dashboards2: Edit Access Dropdown Selection Saved',
+  'dashboards2.span_migration.results_check':
+    'Dashboards2: Check Widget Results From Span Migration',
+  'dashboards_views.insights_redirect': 'Insights: Redirected to Dashboard',
   ...dashboardsEventMapWidgetBuilder,
 };

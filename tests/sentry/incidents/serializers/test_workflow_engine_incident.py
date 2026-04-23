@@ -1,32 +1,41 @@
-from datetime import timedelta
+from typing import Any
 
 from sentry.api.serializers import serialize
+from sentry.incidents.endpoints.serializers.utils import get_fake_id_from_object_id
 from sentry.incidents.endpoints.serializers.workflow_engine_incident import (
     WorkflowEngineDetailedIncidentSerializer,
     WorkflowEngineIncidentSerializer,
 )
-from sentry.incidents.logic import update_incident_status
 from sentry.incidents.models.incident import (
     IncidentActivityType,
     IncidentStatus,
     IncidentStatusMethod,
     IncidentType,
 )
-from sentry.issues.priority import PriorityChangeReason
-from sentry.models.activity import Activity
-from sentry.types.activity import ActivityType
+from sentry.models.groupopenperiodactivity import GroupOpenPeriodActivity, OpenPeriodActivityType
+from sentry.snuba.models import SnubaQueryEventType
 from sentry.types.group import PriorityLevel
+from sentry.workflow_engine.models import (
+    ActionAlertRuleTriggerAction,
+    AlertRuleDetector,
+    DataConditionAlertRuleTrigger,
+)
 from tests.sentry.incidents.serializers.test_workflow_engine_base import (
     TestWorkflowEngineSerializer,
 )
 
 
-class TestDetectorSerializer(TestWorkflowEngineSerializer):
+class TestIncidentSerializer(TestWorkflowEngineSerializer):
     def setUp(self) -> None:
         super().setUp()
         self.add_warning_trigger()
         self.add_incident_data()
         self.incident_identifier = str(self.incident_group_open_period.incident_identifier)
+        self.expected["eventTypes"] = sorted(
+            SnubaQueryEventType.EventType(et.type).name.lower()
+            for et in SnubaQueryEventType.objects.filter(snuba_query=self.alert_rule.snuba_query)
+        )
+        self.expected["snooze"] = False
         self.incident_expected = {
             "id": str(self.incident_group_open_period.incident_id),
             "identifier": self.incident_identifier,
@@ -41,135 +50,170 @@ class TestDetectorSerializer(TestWorkflowEngineSerializer):
             "dateStarted": self.group_open_period.date_started,
             "dateDetected": self.group_open_period.date_started,
             "dateCreated": self.group_open_period.date_added,
-            "dateClosed": (
-                self.group_open_period.date_ended.replace(second=0, microsecond=0)
-                if self.group_open_period.date_ended
-                else None
-            ),
+            "dateClosed": None,
         }
+
+    @staticmethod
+    def _sort_triggers(incident: dict[str, Any]) -> dict[str, Any]:
+        """Sort triggers by label for order-independent comparison."""
+        incident = dict(incident)
+        incident["alertRule"] = dict(incident["alertRule"])
+        incident["alertRule"]["triggers"] = sorted(
+            incident["alertRule"]["triggers"], key=lambda t: t["label"]
+        )
+        return incident
 
     def test_simple(self) -> None:
         serialized_incident = serialize(
             self.group_open_period, self.user, WorkflowEngineIncidentSerializer()
         )
-        assert serialized_incident == self.incident_expected
-
-    def test_activity(self) -> None:
-        incident_activity_id = "-1"  # temp and wrong
-
-        open_period_activities = []
-        created = {
-            "id": incident_activity_id,
-            "incidentIdentifier": self.incident_identifier,
-            "type": IncidentActivityType.CREATED,
-            "value": None,
-            "previousValue": None,
-            "user": None,
-            "comment": None,
-            "dateCreated": self.group_open_period.date_started,
-        }
-        detected = created.copy()
-        detected["type"] = IncidentActivityType.DETECTED
-        open_period_activities.append(created)
-        open_period_activities.append(detected)
-
-        updated_warning = {
-            "id": incident_activity_id,
-            "incidentIdentifier": self.incident_identifier,
-            "type": IncidentActivityType.STATUS_CHANGE,
-            "value": IncidentStatus.WARNING,
-            "previousValue": None,
-            "user": None,
-            "comment": None,
-            "dateCreated": self.group_open_period.date_started,
-        }
-        open_period_activities.append(updated_warning)
-        self.incident_expected["activities"] = open_period_activities
-
-        serialized_incident = serialize(
-            self.group_open_period,
-            self.user,
-            WorkflowEngineIncidentSerializer(expand=["activities"]),
+        assert self._sort_triggers(serialized_incident) == self._sort_triggers(
+            self.incident_expected
         )
-        assert serialized_incident == self.incident_expected
-
-        # escalate to critical status
-        update_incident_status(self.incident, IncidentStatus.CRITICAL)
-        Activity.objects.create(
-            project=self.group_open_period.group.project,
-            group=self.group_open_period.group,
-            type=ActivityType.SET_PRIORITY.value,
-            data={
-                "priority": PriorityLevel.HIGH.to_str(),
-                "reason": PriorityChangeReason.ONGOING,
-            },
-            datetime=self.now + timedelta(minutes=5),
-        )
-        updated_critical = {
-            "id": incident_activity_id,
-            "incidentIdentifier": self.incident_identifier,
-            "type": IncidentActivityType.STATUS_CHANGE,
-            "value": IncidentStatus.CRITICAL,
-            "previousValue": IncidentStatus.WARNING,
-            "user": None,
-            "comment": None,
-            "dateCreated": self.group_open_period.date_started,
-        }
-        open_period_activities.append(updated_critical)
-        serialized_incident = serialize(
-            self.group_open_period,
-            self.user,
-            WorkflowEngineIncidentSerializer(expand=["activities"]),
-        )
-        assert serialized_incident == self.incident_expected
-
-        # resolve incident
-        update_incident_status(
-            self.incident,
-            IncidentStatus.CLOSED,
-            IncidentStatusMethod.RULE_UPDATED,
-            self.group_open_period.date_ended,
-        )
-        resolution_activity = Activity.objects.create(
-            project=self.group_open_period.group.project,
-            group=self.group_open_period.group,
-            user_id=self.group_open_period.user_id,
-            type=ActivityType.SET_RESOLVED.value,
-            data={},
-            datetime=self.now + timedelta(minutes=10),
-        )
-        self.group_open_period.date_ended = self.now + timedelta(days=1)
-        self.group_open_period.resolution_activity = resolution_activity
-        self.group_open_period.save()
-
-        resolved = {
-            "id": incident_activity_id,
-            "incidentIdentifier": self.incident_identifier,
-            "type": IncidentActivityType.STATUS_CHANGE,
-            "value": IncidentStatus.CLOSED,
-            "previousValue": IncidentStatus.CRITICAL,
-            "user": self.group_open_period.user_id,
-            "comment": None,
-            "dateCreated": self.group_open_period.date_started,
-        }
-        open_period_activities.append(resolved)
-        self.incident_expected["statusMethod"] = IncidentStatusMethod.RULE_UPDATED.value
-        self.incident_expected["status"] = IncidentStatus.CLOSED.value
-        self.incident_expected["dateClosed"] = (
-            self.group_open_period.date_ended.replace(second=0, microsecond=0)
-            if self.group_open_period.date_ended
-            else None
-        )
-        serialized_incident = serialize(
-            self.group_open_period,
-            self.user,
-            WorkflowEngineIncidentSerializer(expand=["activities"]),
-        )
-        assert serialized_incident == self.incident_expected
 
     def test_detailed(self) -> None:
         serialized_incident = serialize(
             self.group_open_period, self.user, WorkflowEngineDetailedIncidentSerializer()
         )
         self.incident_expected["discoverQuery"] = "(event.type:error) AND (level:error)"
-        assert serialized_incident == self.incident_expected
+        assert self._sort_triggers(serialized_incident) == self._sort_triggers(
+            self.incident_expected
+        )
+
+    def test_no_incident(self) -> None:
+        """
+        Assert that nothing breaks if the legacy models do not exist.
+        """
+        self.incident_group_open_period.delete()
+        ard = AlertRuleDetector.objects.filter(detector_id=self.detector.id)
+        dcart = DataConditionAlertRuleTrigger.objects.filter(
+            data_condition_id=self.critical_detector_trigger.id
+        )
+        aarta = ActionAlertRuleTriggerAction.objects.filter(action_id=self.critical_action.id)
+
+        ard.delete()
+        dcart.delete()
+        aarta.delete()
+
+        serialized_incident = serialize(
+            self.group_open_period, self.user, WorkflowEngineIncidentSerializer()
+        )
+        fake_alert_rule_id = get_fake_id_from_object_id(self.detector.id)
+        fake_incident_id = get_fake_id_from_object_id(self.group_open_period.id)
+        self.expected.update({"id": str(fake_alert_rule_id)})
+        self.expected["triggers"][0].update(
+            {
+                "id": str(get_fake_id_from_object_id(self.critical_detector_trigger.id)),
+                "alertRuleId": str(fake_alert_rule_id),
+            }
+        )
+        self.expected["triggers"][1].update(
+            {
+                "alertRuleId": str(fake_alert_rule_id),
+            }
+        )
+        self.expected["triggers"][0]["actions"][0].update(
+            {
+                "id": str(get_fake_id_from_object_id(self.critical_action.id)),
+                "alertRuleTriggerId": str(
+                    get_fake_id_from_object_id(self.critical_detector_trigger.id)
+                ),
+            }
+        )
+
+        self.incident_expected.update(
+            {
+                "id": str(fake_incident_id),
+                "identifier": str(fake_incident_id),
+            }
+        )
+        assert self._sort_triggers(serialized_incident) == self._sort_triggers(
+            self.incident_expected
+        )
+
+    def test_with_activities(self) -> None:
+        gopa = GroupOpenPeriodActivity.objects.create(
+            date_added=self.group_open_period.date_added,
+            group_open_period=self.group_open_period,
+            type=OpenPeriodActivityType.OPENED,
+            value=self.group.priority,
+            event_id="a" * 32,
+        )
+        serialized_incident = serialize(
+            self.group_open_period,
+            self.user,
+            WorkflowEngineIncidentSerializer(expand=["activities"]),
+        )
+        assert len(serialized_incident["activities"]) == 1
+        assert serialized_incident["activities"][0] == {
+            "id": str(gopa.id),
+            "type": IncidentActivityType.STATUS_CHANGE.value,
+            "value": str(IncidentStatus.CRITICAL.value),
+            "previousValue": None,
+            "dateCreated": gopa.date_added,
+        }
+
+    def test_with_activities_tracks_previous_value(self) -> None:
+        GroupOpenPeriodActivity.objects.create(
+            date_added=self.group_open_period.date_added,
+            group_open_period=self.group_open_period,
+            type=OpenPeriodActivityType.OPENED,
+            value=self.group.priority,
+        )
+        gopa_status_change = GroupOpenPeriodActivity.objects.create(
+            date_added=self.group_open_period.date_added,
+            group_open_period=self.group_open_period,
+            type=OpenPeriodActivityType.STATUS_CHANGE,
+            value=PriorityLevel.MEDIUM,
+        )
+        serialized_incident = serialize(
+            self.group_open_period,
+            self.user,
+            WorkflowEngineIncidentSerializer(expand=["activities"]),
+        )
+        activities = serialized_incident["activities"]
+        assert len(activities) == 2
+        assert activities[0]["value"] == str(IncidentStatus.CRITICAL.value)
+        assert activities[0]["previousValue"] is None
+        assert activities[1]["value"] == str(IncidentStatus.WARNING.value)
+        assert activities[1]["previousValue"] == str(IncidentStatus.CRITICAL.value)
+        assert activities[1]["id"] == str(gopa_status_change.id)
+
+    def test_with_activities_closed_maps_to_closed_status(self) -> None:
+        GroupOpenPeriodActivity.objects.create(
+            date_added=self.group_open_period.date_added,
+            group_open_period=self.group_open_period,
+            type=OpenPeriodActivityType.OPENED,
+            value=self.group.priority,
+        )
+        gopa_closed = GroupOpenPeriodActivity.objects.create(
+            date_added=self.group_open_period.date_added,
+            group_open_period=self.group_open_period,
+            type=OpenPeriodActivityType.CLOSED,
+            value=None,
+        )
+        serialized_incident = serialize(
+            self.group_open_period,
+            self.user,
+            WorkflowEngineIncidentSerializer(expand=["activities"]),
+        )
+        activities = serialized_incident["activities"]
+        assert len(activities) == 2
+        assert activities[1]["id"] == str(gopa_closed.id)
+        assert activities[1]["value"] == str(IncidentStatus.CLOSED.value)
+        assert activities[1]["previousValue"] == str(IncidentStatus.CRITICAL.value)
+
+    def test_with_activities_skips_null_value_non_closed(self) -> None:
+        gopa_malformed = GroupOpenPeriodActivity.objects.create(
+            date_added=self.group_open_period.date_added,
+            group_open_period=self.group_open_period,
+            type=OpenPeriodActivityType.STATUS_CHANGE,
+            value=None,
+        )
+        serialized_incident = serialize(
+            self.group_open_period,
+            self.user,
+            WorkflowEngineIncidentSerializer(expand=["activities"]),
+        )
+        activity_ids = [a["id"] for a in serialized_incident["activities"]]
+        assert str(gopa_malformed.id) not in activity_ids

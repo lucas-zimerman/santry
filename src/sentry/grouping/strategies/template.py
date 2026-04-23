@@ -8,14 +8,14 @@ from sentry.grouping.component import (
     TemplateGroupingComponent,
 )
 from sentry.grouping.strategies.base import (
-    GroupingContext,
-    ReturnedVariants,
+    ComponentsByVariant,
     produces_variants,
     strategy,
 )
 from sentry.interfaces.template import Template
 
 if TYPE_CHECKING:
+    from sentry.grouping.context import GroupingContext
     from sentry.services.eventstore.models import Event
 
 
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 @produces_variants(["default"])
 def template_v1(
     interface: Template, event: Event, context: GroupingContext, **kwargs: Any
-) -> ReturnedVariants:
+) -> ComponentsByVariant:
     variant_name = context["variant_name"]
 
     filename_component = FilenameGroupingComponent()

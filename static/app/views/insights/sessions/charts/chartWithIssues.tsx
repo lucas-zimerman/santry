@@ -1,18 +1,17 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {Flex, Stack} from '@sentry/scraps/layout';
+
 import {openInsightChartModal} from 'sentry/actionCreators/modal';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Flex} from 'sentry/components/core/layout';
-import EventOrGroupExtraDetails from 'sentry/components/eventOrGroupExtraDetails';
-import EventOrGroupHeader from 'sentry/components/eventOrGroupHeader';
-import Panel from 'sentry/components/panels/panel';
+import {GroupHeaderRow} from 'sentry/components/groupHeaderRow';
+import {GroupMetaRow} from 'sentry/components/groupMetaRow';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {Panel} from 'sentry/components/panels/panel';
 import {GroupSummary} from 'sentry/components/stream/group';
 import {IconExpand} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import usePageFilters from 'sentry/utils/usePageFilters';
 import {useReleaseStats} from 'sentry/utils/useReleaseStats';
 import type {LegendSelection} from 'sentry/views/dashboards/widgets/common/types';
 import type {Plottable} from 'sentry/views/dashboards/widgets/timeSeriesWidget/plottables/plottable';
@@ -20,11 +19,11 @@ import {TimeSeriesWidgetVisualization} from 'sentry/views/dashboards/widgets/tim
 import {Widget} from 'sentry/views/dashboards/widgets/widget/widget';
 import type {WidgetTitleProps} from 'sentry/views/dashboards/widgets/widget/widgetTitle';
 import type {LoadableChartWidgetProps} from 'sentry/views/insights/common/components/widgets/types';
-import type {DiscoverSeries} from 'sentry/views/insights/common/queries/useDiscoverSeries';
+import type {DiscoverSeries} from 'sentry/views/insights/common/queries/types';
 import {WidgetVisualizationStates} from 'sentry/views/insights/pages/platform/laravel/widgetVisualizationStates';
 import {ModalChartContainer} from 'sentry/views/insights/pages/platform/shared/styles';
-import useProjectHasSessions from 'sentry/views/insights/sessions/queries/useProjectHasSessions';
-import useRecentIssues from 'sentry/views/insights/sessions/queries/useRecentIssues';
+import {useProjectHasSessions} from 'sentry/views/insights/sessions/queries/useProjectHasSessions';
+import {useRecentIssues} from 'sentry/views/insights/sessions/queries/useRecentIssues';
 import {SESSION_HEALTH_CHART_HEIGHT} from 'sentry/views/insights/sessions/utils/sessions';
 
 interface Props extends WidgetTitleProps, Partial<LoadableChartWidgetProps> {
@@ -38,7 +37,7 @@ interface Props extends WidgetTitleProps, Partial<LoadableChartWidgetProps> {
   legendSelection?: LegendSelection | undefined;
 }
 
-export default function ChartWithIssues(props: Props) {
+export function ChartWithIssues(props: Props) {
   const {
     description,
     error,
@@ -100,14 +99,14 @@ export default function ChartWithIssues(props: Props) {
   );
 
   const footer = hasData && recentIssues && (
-    <FooterIssues>
+    <Stack>
       {recentIssues.map(group => (
         <GroupWrapper canSelect key={group.id}>
-          <EventOrGroupHeader data={group} source={'session-health'} />
-          <EventOrGroupExtraDetails data={group} showLifetime={false} />
+          <GroupHeaderRow data={group} source="session-health" />
+          <GroupMetaRow data={group} showLifetime={false} />
         </GroupWrapper>
       ))}
-    </FooterIssues>
+    </Stack>
   );
 
   return (
@@ -122,7 +121,7 @@ export default function ChartWithIssues(props: Props) {
           <Button
             size="xs"
             aria-label={t('Open Full-Screen View')}
-            borderless
+            priority="transparent"
             icon={<IconExpand />}
             onClick={() => {
               openInsightChartModal({
@@ -130,7 +129,7 @@ export default function ChartWithIssues(props: Props) {
                   <Flex justify="between">
                     {title}
                     {hasData && recentIssues?.length ? (
-                      <LinkButton size="xs" to={{pathname: `/issues/`}}>
+                      <LinkButton size="xs" to={{pathname: '/issues/'}}>
                         {t('View All')}
                       </LinkButton>
                     ) : null}
@@ -155,7 +154,7 @@ export default function ChartWithIssues(props: Props) {
             }}
           />
           {hasData && recentIssues?.length ? (
-            <LinkButton size="xs" to={{pathname: `/issues/`}}>
+            <LinkButton size="xs" to={{pathname: '/issues/'}}>
               {t('View All')}
             </LinkButton>
           ) : null}
@@ -167,15 +166,11 @@ export default function ChartWithIssues(props: Props) {
   );
 }
 
-const FooterIssues = styled('div')`
-  display: flex;
-  flex-direction: column;
-`;
-
 const GroupWrapper = styled(GroupSummary)`
-  border-top: 1px solid ${p => p.theme.border};
-  padding: ${space(1)} ${space(0.5)} ${space(1.5)} ${space(0.5)};
-  margin-inline: ${space(1)};
+  border-top: 1px solid ${p => p.theme.tokens.border.primary};
+  padding: ${p => p.theme.space.md} ${p => p.theme.space.xs} ${p => p.theme.space.lg}
+    ${p => p.theme.space.xs};
+  margin-inline: ${p => p.theme.space.md};
 
   &:first-child {
     border-top: none;

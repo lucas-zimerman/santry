@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import DefaultDict, TypedDict
+from typing import TypedDict
 
 from sentry.api.serializers import Serializer, register
 from sentry.constants import ALL_ACCESS_PROJECTS
@@ -14,6 +14,11 @@ from sentry.users.services.user.service import user_service
 from sentry.utils.dates import outside_retention_with_modified_start, parse_timestamp
 
 
+class CrossEventResponseType(TypedDict):
+    query: str
+    type: str
+
+
 class ExploreSavedQueryResponseOptional(TypedDict, total=False):
     environment: list[str]
     query: str
@@ -22,6 +27,13 @@ class ExploreSavedQueryResponseOptional(TypedDict, total=False):
     end: str
     interval: str
     mode: str
+    crossEvents: list[CrossEventResponseType]
+
+
+class ExploreSavedQueryChangedReasonType(TypedDict):
+    orderby: list[dict[str, str]] | None
+    equations: list[dict[str, str | list[str]]] | None
+    columns: list[str]
 
 
 class ExploreSavedQueryResponse(ExploreSavedQueryResponseOptional):
@@ -37,12 +49,13 @@ class ExploreSavedQueryResponse(ExploreSavedQueryResponseOptional):
     starred: bool
     position: int | None
     isPrebuilt: bool
+    changedReason: ExploreSavedQueryChangedReasonType | None
 
 
 @register(ExploreSavedQuery)
 class ExploreSavedQueryModelSerializer(Serializer):
     def get_attrs(self, item_list, user, **kwargs):
-        result: DefaultDict[str, dict] = defaultdict(lambda: {"created_by": {}})
+        result: defaultdict[str, dict] = defaultdict(lambda: {"created_by": {}})
 
         starred_queries = dict(
             ExploreSavedQueryStarred.objects.filter(
@@ -97,6 +110,7 @@ class ExploreSavedQueryModelSerializer(Serializer):
             "start",
             "end",
             "interval",
+            "crossEvents",
         ]
         data: ExploreSavedQueryResponse = {
             "id": str(obj.id),
@@ -111,6 +125,7 @@ class ExploreSavedQueryModelSerializer(Serializer):
             "starred": attrs.get("starred"),
             "position": attrs.get("position"),
             "isPrebuilt": obj.prebuilt_id is not None,
+            "changedReason": obj.changed_reason,
         }
 
         for key in query_keys:

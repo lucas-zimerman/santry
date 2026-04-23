@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getOperatingSystemContextData,
   type OperatingSystemContext,
@@ -77,8 +77,8 @@ describe('OperatingSystemContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'os'}
-        alias={'os'}
+        type="os"
+        alias="os"
         value={{...MOCK_OS_CONTEXT, raw_description: ''}}
       />
     );

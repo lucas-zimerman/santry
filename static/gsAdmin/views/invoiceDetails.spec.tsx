@@ -9,9 +9,9 @@ import {
   userEvent,
 } from 'sentry-test/reactTestingLibrary';
 
-import ConfigStore from 'sentry/stores/configStore';
+import {ConfigStore} from 'sentry/stores/configStore';
 
-import InvoiceDetails from 'admin/views/invoiceDetails';
+import {InvoiceDetails} from 'admin/views/invoiceDetails';
 
 describe('InvoiceDetails', () => {
   const mockOrg = OrganizationFixture();
@@ -47,14 +47,15 @@ describe('InvoiceDetails', () => {
     it('can close invoice', async () => {
       const invoice = InvoiceFixture({isClosed: false});
       MockApiClient.addMockResponse({
-        url: `/_admin/invoices/${invoice.id}/`,
+        url: `/_admin/cells/us/admin-invoices/${invoice.id}/`,
         body: invoice,
       });
 
       const updateMock = MockApiClient.addMockResponse({
-        url: `/customers/${mockOrg.slug}/invoices/${invoice.id}/close/`,
+        url: `/_admin/cells/us/invoices/${invoice.id}/close/`,
         method: 'PUT',
         body: InvoiceFixture({isClosed: true}),
+        host: 'https://us.sentry.io',
       });
 
       render(<InvoiceDetails />, {
@@ -62,7 +63,7 @@ describe('InvoiceDetails', () => {
           location: {
             pathname: `/organizations/${mockOrg.slug}/invoices/us/${invoice.id}/`,
           },
-          route: `/organizations/:orgId/invoices/:region/:invoiceId/`,
+          route: '/organizations/:orgId/invoices/:region/:invoiceId/',
         },
       });
 
@@ -80,7 +81,7 @@ describe('InvoiceDetails', () => {
     it('cannot close already closed invoice', async () => {
       const invoice = InvoiceFixture({isClosed: true});
       MockApiClient.addMockResponse({
-        url: `/_admin/invoices/${invoice.id}/`,
+        url: `/_admin/cells/de/admin-invoices/${invoice.id}/`,
         body: invoice,
         host: 'https://de.sentry.io',
       });
@@ -90,7 +91,7 @@ describe('InvoiceDetails', () => {
           location: {
             pathname: `/organizations/${mockOrg.slug}/invoices/de/${invoice.id}/`,
           },
-          route: `/organizations/:orgId/invoices/:region/:invoiceId/`,
+          route: '/organizations/:orgId/invoices/:region/:invoiceId/',
         },
       });
 
@@ -109,7 +110,7 @@ describe('InvoiceDetails', () => {
 
       const invoice = InvoiceFixture({isClosed: false});
       MockApiClient.addMockResponse({
-        url: `/_admin/invoices/${invoice.id}/`,
+        url: `/_admin/cells/us/admin-invoices/${invoice.id}/`,
         body: invoice,
         host: 'https://us.sentry.io',
       });
@@ -119,7 +120,7 @@ describe('InvoiceDetails', () => {
           location: {
             pathname: `/organizations/${mockOrg.slug}/invoices/us/${invoice.id}/`,
           },
-          route: `/organizations/:orgId/invoices/:region/:invoiceId/`,
+          route: '/organizations/:orgId/invoices/:region/:invoiceId/',
         },
       });
 
@@ -138,7 +139,7 @@ describe('InvoiceDetails', () => {
     it('can retry payment', async () => {
       const invoice = InvoiceFixture({isPaid: false});
       MockApiClient.addMockResponse({
-        url: `/_admin/invoices/${invoice.id}/`,
+        url: `/_admin/cells/us/admin-invoices/${invoice.id}/`,
         body: invoice,
         host: 'https://us.sentry.io',
       });
@@ -156,7 +157,7 @@ describe('InvoiceDetails', () => {
           location: {
             pathname: `/organizations/${mockOrg.slug}/invoices/us/${invoice.id}/`,
           },
-          route: `/organizations/:orgId/invoices/:region/:invoiceId/`,
+          route: '/organizations/:orgId/invoices/:region/:invoiceId/',
         },
       });
 
@@ -174,7 +175,7 @@ describe('InvoiceDetails', () => {
     it('cannot retry already paid invoice', async () => {
       const invoice = InvoiceFixture({isPaid: true});
       MockApiClient.addMockResponse({
-        url: `/_admin/invoices/${invoice.id}/`,
+        url: `/_admin/cells/us/admin-invoices/${invoice.id}/`,
         body: invoice,
         host: 'https://us.sentry.io',
       });
@@ -184,7 +185,7 @@ describe('InvoiceDetails', () => {
           location: {
             pathname: `/organizations/${mockOrg.slug}/invoices/us/${invoice.id}/`,
           },
-          route: `/organizations/:orgId/invoices/:region/:invoiceId/`,
+          route: '/organizations/:orgId/invoices/:region/:invoiceId/',
         },
       });
 

@@ -1,3 +1,4 @@
+import {t} from 'sentry/locale';
 import type {SelectValue} from 'sentry/types/core';
 import type {EventsStats} from 'sentry/types/organization';
 import type {QueryFieldValue} from 'sentry/utils/discover/fields';
@@ -74,6 +75,7 @@ const DEFAULT_FIELD: QueryFieldValue = {
 const DEFAULT_EVENT_TYPES = [EventTypes.ERROR, EventTypes.DEFAULT];
 
 export const DetectorErrorsConfig: DetectorDatasetConfig<ErrorsSeriesResponse> = {
+  name: t('Errors'),
   SearchBar: EventsSearchBar,
   defaultEventTypes: DEFAULT_EVENT_TYPES,
   defaultField: DEFAULT_FIELD,
@@ -129,4 +131,13 @@ export const DetectorErrorsConfig: DetectorDatasetConfig<ErrorsSeriesResponse> =
     parseEventTypesFromQuery(query, DEFAULT_EVENT_TYPES),
   // TODO: This should use the discover dataset unless `is:unresolved` is in the query
   getDiscoverDataset: () => DiscoverDatasets.ERRORS,
+  formatAggregateForTitle: aggregate => {
+    if (aggregate === 'count()') {
+      return t('Number of errors');
+    }
+    if (aggregate === 'count_unique(user)') {
+      return t('Users experiencing errors');
+    }
+    return aggregate;
+  },
 };

@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from sentry.hybridcloud.models.outbox import RegionOutbox, outbox_context
+from sentry.hybridcloud.models.outbox import CellOutbox, outbox_context
 from sentry.hybridcloud.outbox.category import OutboxCategory, OutboxScope
 from sentry.models.organization import Organization, OrganizationStatus
 from sentry.organizations.services.organization_actions.impl import (
@@ -16,7 +16,7 @@ from sentry.testutils.cases import TestCase
 
 
 def assert_outbox_update_message_exists(org: Organization, expected_count: int) -> None:
-    outbox_messages = RegionOutbox.objects.filter()
+    outbox_messages = CellOutbox.objects.filter()
 
     # TODO(HC): Remove this once we can ensure an expected count of 1 for every message
     #  It's not essential since these messages will coallesce, but there's no reason we
@@ -151,6 +151,25 @@ class OrganizationMarkOrganizationAsPendingDeletionWithOutboxMessageTest(TestCas
         assert self.org.slug == org_before_update.slug
 
         assert_outbox_update_message_exists(self.org, 0)
+
+    def test_mark_for_deletion_on_relocation_pending(self) -> None:
+        self.org.status = OrganizationStatus.RELOCATION_PENDING_APPROVAL
+        self.org.save()
+
+        org_before_update = Organization.objects.get(id=self.org.id)
+
+        with outbox_context(flush=False):
+            updated_org = mark_organization_as_pending_deletion_with_outbox_message(
+                org_id=self.org.id
+            )
+
+        assert updated_org, "Should update the org"
+        self.org.refresh_from_db()
+        assert self.org.status == OrganizationStatus.PENDING_DELETION
+        assert self.org.name == org_before_update.name
+        assert self.org.slug == org_before_update.slug
+
+        assert_outbox_update_message_exists(self.org, 1)
 
 
 class UnmarkOrganizationForDeletionWithOutboxMessageTest(TestCase):

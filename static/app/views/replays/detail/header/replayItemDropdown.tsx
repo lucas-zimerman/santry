@@ -1,21 +1,22 @@
-import styled from '@emotion/styled';
 import * as Sentry from '@sentry/react';
+
+import {Flex} from '@sentry/scraps/layout';
 
 import {addErrorMessage} from 'sentry/actionCreators/indicator';
 import type {MenuItemProps} from 'sentry/components/dropdownMenu';
 import {DropdownMenu} from 'sentry/components/dropdownMenu';
 import {IconDelete, IconDownload, IconEllipsis, IconUpload} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {defined} from 'sentry/utils';
 import {downloadObjectAsJson} from 'sentry/utils/downloadObjectAsJson';
 import {isActiveSuperuser} from 'sentry/utils/isActiveSuperuser';
-import useDeleteReplay from 'sentry/utils/replays/hooks/useDeleteReplay';
-import useShareReplayAtTimestamp from 'sentry/utils/replays/hooks/useShareReplayAtTimestamp';
-import type ReplayReader from 'sentry/utils/replays/replayReader';
+import {useDeleteReplay} from 'sentry/utils/replays/hooks/useDeleteReplay';
+import {useShareReplayAtTimestamp} from 'sentry/utils/replays/hooks/useShareReplayAtTimestamp';
+import type {ReplayReader} from 'sentry/utils/replays/replayReader';
 import {useIsSentryEmployee} from 'sentry/utils/useIsSentryEmployee';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 import type {ReplayRecord} from 'sentry/views/replays/types';
 
 interface Props {
@@ -26,11 +27,12 @@ interface Props {
   replayRecord: ReplayRecord | undefined;
 }
 
-export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: Props) {
+export function ReplayItemDropdown({projectSlug, replay, replayRecord}: Props) {
   const navigate = useNavigate();
   const organization = useOrganization();
   const isEmployee = useIsSentryEmployee();
   const isSuperUser = isActiveSuperuser();
+  const hasPageFrameFeature = useHasPageFrameFeature();
 
   const replayId = replayRecord?.id;
   const isMobile = replay?.isVideoReplay();
@@ -47,10 +49,10 @@ export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: 
     {
       key: 'download-rrweb',
       label: (
-        <ItemSpacer>
+        <Flex align="center" gap="md">
           <IconDownload />
           {t('Download JSON')}
-        </ItemSpacer>
+        </Flex>
       ),
       onAction: () => {
         try {
@@ -72,10 +74,10 @@ export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: 
       ? {
           key: 'download-replay-record',
           label: (
-            <ItemSpacer>
+            <Flex align="center" gap="md">
               <IconDownload />
               {t('Download Replay Record (superuser)')}
-            </ItemSpacer>
+            </Flex>
           ),
           onAction: () => {
             try {
@@ -96,10 +98,10 @@ export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: 
       ? {
           key: 'download-1st-video',
           label: (
-            <ItemSpacer>
+            <Flex align="center" gap="md">
               <IconDownload />
               {t('Download 1st video segment (superuser)')}
-            </ItemSpacer>
+            </Flex>
           ),
           onAction: () =>
             navigate(
@@ -111,10 +113,10 @@ export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: 
     {
       key: 'share',
       label: (
-        <ItemSpacer>
+        <Flex align="center" gap="md">
           <IconUpload />
           {t('Share')}
-        </ItemSpacer>
+        </Flex>
       ),
       onAction: onShareReplay,
       disabled: !replayId,
@@ -122,10 +124,10 @@ export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: 
     {
       key: 'delete',
       label: (
-        <ItemSpacer>
+        <Flex align="center" gap="md">
           <IconDelete />
           {t('Delete')}
-        </ItemSpacer>
+        </Flex>
       ),
       onAction: onDeleteReplay,
       disabled: !canDelete,
@@ -137,17 +139,11 @@ export default function ReplayItemDropdown({projectSlug, replay, replayRecord}: 
       position="bottom-end"
       triggerProps={{
         showChevron: false,
-        icon: <IconEllipsis color="subText" />,
+        icon: <IconEllipsis variant="muted" />,
       }}
-      size="sm"
+      size={hasPageFrameFeature ? 'sm' : 'xs'}
       items={dropdownItems}
       isDisabled={dropdownItems.length === 0}
     />
   );
 }
-
-const ItemSpacer = styled('div')`
-  display: flex;
-  gap: ${space(1)};
-  align-items: center;
-`;

@@ -6,7 +6,16 @@ import pytest
 from django.urls import NoReverseMatch, reverse
 
 from sentry import options
-from sentry.testutils.cases import TraceTestCase
+from sentry.api.endpoints.organization_events_trace import query_trace_data
+from sentry.issues.grouptype import (
+    PerformanceFileIOMainThreadGroupType,
+    PerformanceSlowDBQueryGroupType,
+)
+from sentry.issues.issue_occurrence import IssueOccurrence
+from sentry.models.group import Group
+from sentry.search.eap.occurrences.rollout_utils import EAPOccurrencesComparator
+from sentry.search.events.types import SnubaParams
+from sentry.testutils.cases import OccurrenceTestCase, TraceTestCase
 from sentry.utils.samples import load_data
 from tests.snuba.api.endpoints.test_organization_events import OrganizationEventsEndpointTestBase
 
@@ -15,7 +24,6 @@ class OrganizationEventsTraceEndpointBase(OrganizationEventsEndpointTestBase, Tr
     url_name: str
     FEATURES = [
         "organizations:performance-view",
-        "organizations:trace-view-load-more",
     ]
 
     def setUp(self) -> None:
@@ -45,7 +53,7 @@ class OrganizationEventsTraceEndpointBase(OrganizationEventsEndpointTestBase, Tr
             },
         )
 
-    def load_trace(self, is_eap=True):
+    def load_trace(self):
         self.root_event = self.create_event(
             trace_id=self.trace_id,
             transaction="root",
@@ -73,7 +81,6 @@ class OrganizationEventsTraceEndpointBase(OrganizationEventsEndpointTestBase, Tr
             slow_db_performance_issue=True,
             project_id=self.project.id,
             milliseconds=3000,
-            is_eap=is_eap,
         )
 
         # First Generation
@@ -95,7 +102,6 @@ class OrganizationEventsTraceEndpointBase(OrganizationEventsEndpointTestBase, Tr
                 parent_span_id=root_span_id,
                 project_id=self.gen1_project.id,
                 milliseconds=2000,
-                is_eap=is_eap,
             )
             for i, (root_span_id, gen1_span_id) in enumerate(
                 zip(self.root_span_ids, self.gen1_span_ids)
@@ -127,7 +133,6 @@ class OrganizationEventsTraceEndpointBase(OrganizationEventsEndpointTestBase, Tr
                 span_id=self.gen2_span_id if i == 0 else None,
                 project_id=self.gen2_project.id,
                 milliseconds=1000,
-                is_eap=is_eap,
             )
             for i, (gen1_span_id, gen2_span_id) in enumerate(
                 zip(self.gen1_span_ids, self.gen2_span_ids)
@@ -143,7 +148,6 @@ class OrganizationEventsTraceEndpointBase(OrganizationEventsEndpointTestBase, Tr
             project_id=self.gen3_project.id,
             parent_span_id=self.gen2_span_id,
             milliseconds=500,
-            is_eap=is_eap,
         )
 
 
@@ -228,7 +232,6 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
             spans=[],
             parent_span_id=parent_span_id,
             project_id=self.project.id,
-            is_eap=True,
         )
         url = reverse(
             "sentry-api-0-organization-events-trace-light",
@@ -263,7 +266,6 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
             spans=[],
             parent_span_id=None,
             project_id=self.project.id,
-            is_eap=True,
         )
         with self.feature(self.FEATURES):
             data: dict[str, str | int] = {"event_id": second_root.event_id, "project": -1}
@@ -311,7 +313,6 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
             spans=[],
             parent_span_id=None,
             project_id=self.project.id,
-            is_eap=True,
         )
         with self.feature(self.FEATURES):
             response = self.client.get(
@@ -383,7 +384,6 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
             spans=[],
             parent_span_id=None,
             project_id=self.project.id,
-            is_eap=True,
         )
 
         with self.feature(self.FEATURES):
@@ -471,7 +471,6 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
                 project_id=self.create_project(organization=self.organization).id,
                 parent_span_id=self.gen2_span_ids[1],
                 milliseconds=500,
-                is_eap=True,
             ).event_id,
             self.create_event(
                 trace_id=self.trace_id,
@@ -480,7 +479,6 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
                 project_id=self.create_project(organization=self.organization).id,
                 parent_span_id=self.gen2_span_ids[1],
                 milliseconds=1500,
-                is_eap=True,
             ).event_id,
         ]
 
@@ -648,7 +646,7 @@ class OrganizationEventsTraceLightEndpointTest(OrganizationEventsTraceEndpointBa
         assert response.status_code == 404
 
 
-class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
+class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase, OccurrenceTestCase):
     url_name = "sentry-api-0-organization-events-trace"
     check_generation = True
 
@@ -786,16 +784,17 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
     def test_detailed_trace_with_bad_tags(self) -> None:
         """Basically test that we're actually using the event serializer's method for tags"""
         trace = uuid4().hex
+        long_tag_key = "somethinglong" * 250  # 3250 characters
+        long_tag_value = "somethinglong" * 250  # 3250 characters
         self.create_event(
             trace_id=trace,
             transaction="bad-tags",
             parent_span_id=None,
             spans=[],
             project_id=self.project.id,
-            tags=[["somethinglong" * 250, "somethinglong" * 250]],
+            tags=[[long_tag_key, long_tag_value]],
             milliseconds=3000,
             store_event_kwargs={"assert_no_errors": False},
-            is_eap=True,
         )
 
         url = reverse(
@@ -812,7 +811,36 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
         assert response.status_code == 200, response.content
         root = response.data["transactions"][0]
         assert root["transaction.status"] == "ok"
-        assert {"key": None, "value": None} in root["tags"]
+
+        # Check that tags are trimmed to 200 characters, not dropped
+        # Find the tag with the long key/value (it should be trimmed but present)
+        found_long_tag = None
+        for tag in root["tags"]:
+            # Look for a tag that starts with our long key pattern and is around 200 chars
+            if (
+                tag["key"]
+                and tag["key"].startswith("somethinglongsomethinglong")
+                and len(tag["key"]) <= 200
+                and tag["value"]
+                and tag["value"].startswith("somethinglongsomethinglong")
+                and len(tag["value"]) <= 200
+            ):
+                found_long_tag = tag
+                break
+
+        assert found_long_tag is not None, f"Expected trimmed tag not found. Tags: {root['tags']}"
+
+        # Verify the tag key and value are trimmed to approximately 200 characters
+        assert len(found_long_tag["key"]) <= 200, (
+            f"Tag key too long: {len(found_long_tag['key'])} chars"
+        )
+        assert len(found_long_tag["value"]) <= 200, (
+            f"Tag value too long: {len(found_long_tag['value'])} chars"
+        )
+
+        # Verify they start with the expected pattern (not None)
+        assert found_long_tag["key"].startswith("somethinglongsomethinglong")
+        assert found_long_tag["value"].startswith("somethinglongsomethinglong")
 
     def test_bad_span_loop(self) -> None:
         """Maliciously create a loop in the span structure
@@ -840,7 +868,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             ],
             parent_span_id=self.gen2_span_ids[1],
             project_id=self.project.id,
-            is_eap=True,
         )
 
         with self.feature(self.FEATURES):
@@ -880,7 +907,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             project_id=self.project.id,
             milliseconds=3000,
             start_timestamp=self.day_ago - timedelta(minutes=1),
-            is_eap=True,
         )
         orphan_child = self.create_event(
             trace_id=self.trace_id,
@@ -897,7 +923,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             parent_span_id=root_span_id,
             project_id=self.project.id,
             milliseconds=300,
-            is_eap=True,
         )
         with self.feature(self.FEATURES):
             response = self.client_get(
@@ -924,7 +949,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             parent_span_id=None,
             project_id=self.project.id,
             milliseconds=500,
-            is_eap=True,
         )
         second_root = self.create_event(
             trace_id=trace_id,
@@ -933,7 +957,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             parent_span_id=None,
             project_id=self.project.id,
             milliseconds=1000,
-            is_eap=True,
         )
         self.url = reverse(
             self.url_name,
@@ -963,7 +986,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
                 project_id=self.create_project(organization=self.organization).id,
                 parent_span_id=self.gen2_span_ids[1],
                 milliseconds=1000,
-                is_eap=True,
             ).event_id,
             self.create_event(
                 trace_id=self.trace_id,
@@ -972,7 +994,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
                 project_id=self.create_project(organization=self.organization).id,
                 parent_span_id=self.gen2_span_ids[1],
                 milliseconds=2000,
-                is_eap=True,
             ).event_id,
         ]
 
@@ -1000,7 +1021,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             project_id=self.project.id,
             # Shorter duration means that this event happened first, and should be ordered first
             milliseconds=1000,
-            is_eap=True,
         )
         root_sibling_event = self.create_event(
             trace_id=self.trace_id,
@@ -1009,7 +1029,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             parent_span_id=parent_span_id,
             project_id=self.project.id,
             milliseconds=2000,
-            is_eap=True,
         )
 
         with self.feature(self.FEATURES):
@@ -1052,7 +1071,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             project_id=self.project.id,
             milliseconds=3000,
             start_timestamp=self.day_ago - timedelta(minutes=1),
-            is_eap=True,
         )
         child_event = self.create_event(
             trace_id=self.trace_id,
@@ -1072,7 +1090,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             # Because the snuba query orders based is_root then timestamp, this causes grandchild1-0 to be added to
             # results first before child1-0
             milliseconds=2000,
-            is_eap=True,
         )
         grandchild_event = self.create_event(
             trace_id=self.trace_id,
@@ -1090,7 +1107,6 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
             span_id=orphan_span_ids["grandchild"],
             project_id=self.gen1_project.id,
             milliseconds=1000,
-            is_eap=True,
         )
 
         with self.feature(self.FEATURES):
@@ -1426,8 +1442,168 @@ class OrganizationEventsTraceEndpointTest(OrganizationEventsTraceEndpointBase):
         assert "tags" not in trace_transaction
         assert "measurements" not in trace_transaction
 
+    def test_load_performance_issues_with_eap_as_source_of_truth(self) -> None:
+        self.load_trace()
 
-class OrganizationEventsTraceMetaEndpointTest(OrganizationEventsTraceEndpointBase):
+        group_ids = list(
+            Group.objects.filter(
+                project=self.project,
+                type__in=[
+                    PerformanceFileIOMainThreadGroupType.type_id,
+                    PerformanceSlowDBQueryGroupType.type_id,
+                ],
+            ).values_list("id", flat=True)
+        )
+        assert len(group_ids) == 2
+
+        issue_occ_id_1 = uuid4().hex
+        issue_occ_id_2 = uuid4().hex
+        offender_span_id = "0012" * 4
+
+        for occ_id in [issue_occ_id_1, issue_occ_id_2]:
+            IssueOccurrence(
+                id=occ_id,
+                project_id=self.project.id,
+                event_id=self.root_event.event_id,
+                fingerprint=[uuid4().hex],
+                issue_title="EAP Test Issue",
+                subtitle="eap test",
+                resource_id=None,
+                evidence_data={
+                    "parent_span_ids": [],
+                    "offender_span_ids": [offender_span_id],
+                },
+                evidence_display=[],
+                type=PerformanceFileIOMainThreadGroupType,
+                detection_time=self.day_ago,
+                level="info",
+                culprit="test",
+            ).save()
+
+        self.store_eap_items(
+            [
+                self.create_eap_occurrence(
+                    project=self.project,
+                    group_id=group_ids[0],
+                    trace_id=self.trace_id,
+                    event_id=self.root_event.event_id,
+                    issue_occurrence_id=issue_occ_id_1,
+                    timestamp=self.day_ago,
+                ),
+                self.create_eap_occurrence(
+                    project=self.project,
+                    group_id=group_ids[1],
+                    trace_id=self.trace_id,
+                    event_id=self.root_event.event_id,
+                    issue_occurrence_id=issue_occ_id_2,
+                    timestamp=self.day_ago,
+                ),
+            ]
+        )
+
+        with self.options(
+            {
+                EAPOccurrencesComparator._should_eval_option_name(): True,
+                EAPOccurrencesComparator._callsite_allowlist_option_name(): [
+                    "api.trace.load_performance_issues"
+                ],
+            }
+        ):
+            with self.feature(self.FEATURES):
+                response = self.client_get(
+                    data={"project": -1},
+                )
+
+        assert response.status_code == 200, response.content
+        trace_transaction = response.data["transactions"][0]
+        assert len(trace_transaction["performance_issues"]) == 2
+        for perf_issue in trace_transaction["performance_issues"]:
+            assert perf_issue["event_id"] == self.root_event.event_id
+            assert perf_issue["project_id"] == self.project.id
+            assert perf_issue["suspect_spans"] == [offender_span_id]
+
+    def test_query_trace_data_errors_with_eap_as_source_of_truth(self) -> None:
+        self.load_trace()
+
+        group_1 = self.create_group(project=self.project)
+        group_2 = self.create_group(project=self.project)
+        error_event_id_1 = uuid4().hex
+        error_event_id_2 = uuid4().hex
+        self.store_eap_items(
+            [
+                self.create_eap_occurrence(
+                    project=self.project,
+                    group_id=group_1.id,
+                    trace_id=self.trace_id,
+                    event_id=error_event_id_1,
+                    timestamp=self.day_ago,
+                    level="error",
+                    title="First EAP error",
+                    transaction="/api/first",
+                ),
+                self.create_eap_occurrence(
+                    project=self.project,
+                    group_id=group_2.id,
+                    trace_id=self.trace_id,
+                    event_id=error_event_id_2,
+                    timestamp=self.day_ago,
+                    level="warning",
+                    title="Second EAP error",
+                    transaction="/api/second",
+                ),
+            ]
+        )
+
+        snuba_params = SnubaParams(
+            start=self.day_ago - timedelta(hours=1),
+            end=self.day_ago + timedelta(hours=1),
+            organization=self.organization,
+            projects=[self.project, self.gen1_project, self.gen2_project],
+        )
+
+        with self.options(
+            {
+                EAPOccurrencesComparator._should_eval_option_name(): True,
+                EAPOccurrencesComparator._callsite_allowlist_option_name(): [
+                    "api.trace.query_trace_data.errors"
+                ],
+            }
+        ):
+            _transactions, errors = query_trace_data(
+                trace_id=self.trace_id,
+                snuba_params=snuba_params,
+                transaction_params=snuba_params,
+                limit=100,
+                event_id=None,
+            )
+
+        assert len(errors) == 2
+        errors_by_id = {e["id"]: e for e in errors}
+
+        error_1 = errors_by_id[error_event_id_1]
+        assert error_1["issue.id"] == group_1.id
+        assert error_1["project.id"] == self.project.id
+        assert error_1["project"] == self.project.slug
+        assert error_1["title"] == "First EAP error"
+        assert error_1["tags[level]"] == "error"
+        assert error_1["transaction"] == "/api/first"
+        assert error_1["timestamp"] is not None
+        assert error_1["timestamp_ms"] is not None
+        assert "trace.span" in error_1
+        assert "message" in error_1
+
+        error_2 = errors_by_id[error_event_id_2]
+        assert error_2["issue.id"] == group_2.id
+        assert error_2["project.id"] == self.project.id
+        assert error_2["project"] == self.project.slug
+        assert error_2["title"] == "Second EAP error"
+        assert error_2["tags[level]"] == "warning"
+        assert error_2["transaction"] == "/api/second"
+
+
+class OrganizationEventsTraceMetaEndpointTest(
+    OrganizationEventsTraceEndpointBase, OccurrenceTestCase
+):
     url_name = "sentry-api-0-organization-events-trace-meta"
 
     def test_no_projects(self) -> None:
@@ -1491,6 +1667,50 @@ class OrganizationEventsTraceMetaEndpointTest(OrganizationEventsTraceEndpointBas
                 data={"project": -1},
                 format="json",
             )
+        assert response.status_code == 200, response.content
+        data = response.data
+        assert data["projects"] == 4
+        assert data["transactions"] == 8
+        assert data["errors"] == 0
+        assert data["performance_issues"] == 2
+        assert data["span_count"] == 0
+        assert data["span_count_map"] == {}
+
+    def test_simple_with_eap_as_source_of_truth(self) -> None:
+        self.load_trace()
+        first_group = self.create_group(project=self.project)
+        second_group = self.create_group(project=self.project)
+        self.store_eap_items(
+            [
+                self.create_eap_occurrence(
+                    project=self.project,
+                    group_id=first_group.id,
+                    trace_id=self.trace_id,
+                    issue_occurrence_id=uuid4().hex,
+                ),
+                self.create_eap_occurrence(
+                    project=self.project,
+                    group_id=second_group.id,
+                    trace_id=self.trace_id,
+                    issue_occurrence_id=uuid4().hex,
+                ),
+            ]
+        )
+        with self.options(
+            {
+                EAPOccurrencesComparator._should_eval_option_name(): True,
+                EAPOccurrencesComparator._callsite_allowlist_option_name(): [
+                    "api.trace.count_performance_issues"
+                ],
+            }
+        ):
+            with self.feature(self.FEATURES):
+                response = self.client.get(
+                    self.url,
+                    data={"project": -1},
+                    format="json",
+                )
+
         assert response.status_code == 200, response.content
         data = response.data
         assert data["projects"] == 4

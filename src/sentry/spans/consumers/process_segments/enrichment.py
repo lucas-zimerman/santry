@@ -1,36 +1,45 @@
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from itertools import islice
 from typing import Any
 
-from sentry_kafka_schemas.schema_types.buffered_segments_v1 import SegmentSpan
+from sentry_conventions.attributes import ATTRIBUTE_NAMES
+from sentry_kafka_schemas.schema_types.ingest_spans_v1 import SpanEvent
 
-from sentry.performance_issues.types import SentryTags as PerformanceIssuesSentryTags
-from sentry.spans.consumers.process_segments.types import EnrichedSpan, get_span_op
+from sentry.spans.consumers.process_segments.types import (
+    Attribute,
+    attribute_value,
+    get_span_op,
+    is_gen_ai_span,
+)
 
 # Keys of shared sentry attributes that are shared across all spans in a segment. This list
 # is taken from `extract_shared_tags` in Relay.
 SHARED_SENTRY_ATTRIBUTES = (
-    "sentry.release",
+    ATTRIBUTE_NAMES.SENTRY_RELEASE,
     "sentry.user",
     "sentry.user.id",
     "sentry.user.ip",
     "sentry.user.username",
     "sentry.user.email",
+    "sentry.user.geo.city",
     "sentry.user.geo.country_code",
+    "sentry.user.geo.region",
+    "sentry.user.geo.subdivision",
     "sentry.user.geo.subregion",
-    "sentry.environment",
-    "sentry.transaction",
+    ATTRIBUTE_NAMES.SENTRY_ENVIRONMENT,
+    ATTRIBUTE_NAMES.SENTRY_TRANSACTION,
     "sentry.transaction.method",
     "sentry.transaction.op",
     "sentry.trace.status",
     "sentry.mobile",
     "sentry.os.name",
     "sentry.device.class",
-    "sentry.browser.name",
+    ATTRIBUTE_NAMES.SENTRY_BROWSER_NAME,
     "sentry.profiler_id",
-    "sentry.sdk.name",
-    "sentry.sdk.version",
-    "sentry.platform",
+    ATTRIBUTE_NAMES.SENTRY_SDK_NAME,
+    ATTRIBUTE_NAMES.SENTRY_SDK_VERSION,
+    ATTRIBUTE_NAMES.SENTRY_PLATFORM,
     "sentry.thread.id",
     "sentry.thread.name",
 )
@@ -44,8 +53,11 @@ MOBILE_MAIN_THREAD_NAME = "main"
 # not guaranteed in typing.
 DEFAULT_SPAN_OP = "default"
 
+# Maximum number of ancestor hops to search for an agent name in gen_ai spans.
+MAX_AGENT_NAME_ANCESTOR_HOPS = 5
 
-def _find_segment_span(spans: list[SegmentSpan]) -> SegmentSpan | None:
+
+def _find_segment_span(spans: list[SpanEvent]) -> SpanEvent | None:
     """
     Finds the segment in the span in the list that has ``is_segment`` set to
     ``True``.
@@ -67,74 +79,104 @@ def _find_segment_span(spans: list[SegmentSpan]) -> SegmentSpan | None:
 class TreeEnricher:
     """Enriches spans with information from their parent, child and sibling spans."""
 
-    def __init__(self, spans: list[SegmentSpan]) -> None:
+    def __init__(self, spans: list[SpanEvent]) -> None:
         self._segment_span = _find_segment_span(spans)
 
         self._ttid_ts = _timestamp_by_op(spans, "ui.load.initial_display")
         self._ttfd_ts = _timestamp_by_op(spans, "ui.load.full_display")
 
-        self._has_gen_ai_spans = False
-        self._span_map: dict[str, list[tuple[int, int]]] = {}
+        self._span_intervals: dict[str, list[tuple[int, int]]] = {}
+        self._spans_by_id: dict[str, SpanEvent] = {}
         for span in spans:
-
+            if "span_id" in span:
+                self._spans_by_id[span["span_id"]] = span
             if parent_span_id := span.get("parent_span_id"):
                 interval = _span_interval(span)
-                self._span_map.setdefault(parent_span_id, []).append(interval)
+                self._span_intervals.setdefault(parent_span_id, []).append(interval)
 
-            if not self._has_gen_ai_spans and get_span_op(span).startswith("gen_ai."):
-                self._has_gen_ai_spans = True
+    def _attributes(self, span: SpanEvent) -> dict[str, Any]:
+        attributes: dict[str, Any] = {**(span.get("attributes") or {})}
 
-    def _data(self, span: SegmentSpan) -> dict[str, Any]:
-        ret = {**span.get("data", {})}
+        def get_value(key: str) -> Any:
+            attr: dict[str, Any] = attributes.get(key) or {}
+            return attr.get("value")
+
         if self._segment_span is not None:
             # Assume that Relay has extracted the shared tags into `data` on the
             # root span. Once `sentry_tags` is removed, the logic from
             # `extract_shared_tags` should be moved here.
-            segment_fields = self._segment_span.get("data", {})
-            shared_tags = {k: v for k, v in segment_fields.items() if k in SHARED_SENTRY_ATTRIBUTES}
+            segment_attrs = self._segment_span.get("attributes") or {}
+            shared_attrs = {k: v for k, v in segment_attrs.items() if k in SHARED_SENTRY_ATTRIBUTES}
 
-            is_mobile = segment_fields.get("sentry.mobile") == "true"
+            is_mobile = attribute_value(self._segment_span, "sentry.mobile") == "true"
             mobile_start_type = _get_mobile_start_type(self._segment_span)
 
             if is_mobile:
                 # NOTE: Like in Relay's implementation, shared tags are added at the
                 # very end. This does not have access to the shared tag value. We
                 # keep behavior consistent, although this should be revisited.
-                if ret.get("sentry.thread.name") == MOBILE_MAIN_THREAD_NAME:
-                    ret["sentry.main_thread"] = "true"
-                if not ret.get("sentry.app_start_type") and mobile_start_type:
-                    ret["sentry.app_start_type"] = mobile_start_type
+                if get_value("sentry.thread.name") == MOBILE_MAIN_THREAD_NAME:
+                    attributes["sentry.main_thread"] = {"type": "string", "value": "true"}
+                if not get_value("sentry.app_start_type") and mobile_start_type:
+                    attributes["sentry.app_start_type"] = {
+                        "type": "string",
+                        "value": mobile_start_type,
+                    }
 
-            if self._ttid_ts is not None and span["end_timestamp_precise"] <= self._ttid_ts:
-                ret["sentry.ttid"] = "ttid"
-            if self._ttfd_ts is not None and span["end_timestamp_precise"] <= self._ttfd_ts:
-                ret["sentry.ttfd"] = "ttfd"
+            if self._ttid_ts is not None and span["end_timestamp"] <= self._ttid_ts:
+                attributes["sentry.ttid"] = {"type": "string", "value": "ttid"}
+            if self._ttfd_ts is not None and span["end_timestamp"] <= self._ttfd_ts:
+                attributes["sentry.ttfd"] = {"type": "string", "value": "ttfd"}
 
-            for key, value in shared_tags.items():
-                if ret.get(key) is None:
-                    ret[key] = value
-            if self._has_gen_ai_spans and span is self._segment_span:
-                ret["sentry._internal.segment.contains_gen_ai_spans"] = True
+            for key, value in shared_attrs.items():
+                if attributes.get(key) is None:
+                    attributes[key] = value
 
-        return ret
+            if is_gen_ai_span(span) and ATTRIBUTE_NAMES.GEN_AI_AGENT_NAME not in attributes:
+                if (agent_name := self._find_ancestor_agent_name(span)) is not None:
+                    attributes[ATTRIBUTE_NAMES.GEN_AI_AGENT_NAME] = {
+                        "type": "string",
+                        "value": agent_name,
+                    }
 
-    def _sentry_tags(self, data: dict[str, Any]) -> dict[str, str]:
-        """Backfill sentry tags used in performance issue detection.
+        attributes["sentry.exclusive_time_ms"] = {
+            "type": "double",
+            "value": self._exclusive_time(span),
+        }
 
-        Once performance issue detection is only called from process_segments,
-        (not from event_manager), the performance issues code can be refactored to access
-        span attributes instead of sentry_tags.
+        return attributes
+
+    def _iter_ancestors(self, span: SpanEvent) -> Iterator[SpanEvent]:
         """
-        sentry_tags = {}
-        for tag_key in PerformanceIssuesSentryTags.__mutable_keys__:
-            data_key = (
-                "sentry.normalized_description" if tag_key == "description" else f"sentry.{tag_key}"
-            )
-            if data_key in data:
-                sentry_tags[tag_key] = data[data_key]
-        return sentry_tags
+        Iterates over the ancestors of a span in order towards the root using the "parent_span_id" attribute.
+        """
+        current: SpanEvent | None = span
+        parent_span_id: str | None = None
 
-    def _exclusive_time(self, span: SegmentSpan) -> float:
+        while current is not None:
+            parent_span_id = current.get("parent_span_id")
+            if parent_span_id is not None:
+                current = self._spans_by_id.get(parent_span_id)
+            else:
+                current = None
+            if current is not None:
+                yield current
+            else:
+                break
+
+    def _find_ancestor_agent_name(self, span: SpanEvent) -> str | None:
+        """
+        Finds the nearest ancestor's agent name within MAX_AGENT_NAME_ANCESTOR_HOPS.
+        Returns the first agent name found, or None if no ancestor has one.
+        """
+        for ancestor in islice(self._iter_ancestors(span), MAX_AGENT_NAME_ANCESTOR_HOPS):
+            if (
+                agent_name := attribute_value(ancestor, ATTRIBUTE_NAMES.GEN_AI_AGENT_NAME)
+            ) is not None:
+                return agent_name
+        return None
+
+    def _exclusive_time(self, span: SpanEvent) -> float:
         """
         Sets the exclusive time on all spans in the list.
 
@@ -142,7 +184,7 @@ class TreeEnricher:
         of all time intervals where no child span was active.
         """
 
-        intervals = self._span_map.get(span["span_id"], [])
+        intervals = self._span_intervals.get(span["span_id"], [])
         # Sort by start ASC, end DESC to skip over nested intervals efficiently
         intervals.sort(key=lambda x: (x[0], -x[1]))
 
@@ -162,17 +204,15 @@ class TreeEnricher:
 
         return exclusive_time_us / 1_000
 
-    def enrich_span(self, span: SegmentSpan) -> EnrichedSpan:
-        exclusive_time = self._exclusive_time(span)
-        data = self._data(span)
+    def enrich_span(self, span: SpanEvent) -> SpanEvent:
+        attributes = self._attributes(span)
         return {
             **span,
-            "data": data,
-            "exclusive_time_ms": exclusive_time,
+            "attributes": attributes,
         }
 
     @classmethod
-    def enrich_spans(cls, spans: list[SegmentSpan]) -> tuple[int | None, list[EnrichedSpan]]:
+    def enrich_spans(cls, spans: list[SpanEvent]) -> tuple[int | None, list[SpanEvent]]:
         inst = cls(spans)
         ret = []
         segment_idx = None
@@ -186,31 +226,32 @@ class TreeEnricher:
         return segment_idx, ret
 
 
-def _get_mobile_start_type(segment: SegmentSpan) -> str | None:
+def _get_mobile_start_type(segment: SpanEvent) -> str | None:
     """
     Check the measurements on the span to determine what kind of start type the
     event is.
     """
-    data = segment.get("data") or {}
+    attributes = segment.get("attributes") or {}
 
-    if "app_start_cold" in data:
+    if "app_start_cold" in attributes:
         return "cold"
-    if "app_start_warm" in data:
+    if "app_start_warm" in attributes:
         return "warm"
 
     return None
 
 
-def _timestamp_by_op(spans: list[SegmentSpan], op: str) -> float | None:
+def _timestamp_by_op(spans: list[SpanEvent], op: str) -> float | None:
     for span in spans:
         if get_span_op(span) == op:
-            return span["end_timestamp_precise"]
+            return span["end_timestamp"]
     return None
 
 
-def _span_interval(span: SegmentSpan | EnrichedSpan) -> tuple[int, int]:
+def _span_interval(span: SpanEvent) -> tuple[int, int]:
     """Get the start and end timestamps of a span in microseconds."""
-    return _us(span["start_timestamp_precise"]), _us(span["end_timestamp_precise"])
+
+    return _us(span["start_timestamp"]), _us(span["end_timestamp"])
 
 
 def _us(timestamp: float) -> int:
@@ -220,33 +261,36 @@ def _us(timestamp: float) -> int:
 
 
 def compute_breakdowns(
-    spans: Sequence[SegmentSpan],
+    child_spans: Sequence[SpanEvent],
     breakdowns_config: dict[str, dict[str, Any]],
-) -> dict[str, float]:
+) -> dict[str, Attribute]:
     """
-    Computes breakdowns from all spans and writes them to the segment span.
+    Computes breakdowns from child spans, returned as an attributes dict ready
+    to merge into a segment span.
 
     Breakdowns are measurements that are derived from the spans in the segment.
-    By convention, their unit is in milliseconds. In the end, these measurements
-    are converted into attributes on the span trace item.
+    By convention, their unit is in milliseconds.
+
+    The segment span itself must be excluded from ``child_spans`` to avoid
+    inflating breakdowns with the segment's own duration.
     """
 
-    ret = {}
+    ret: dict[str, Attribute] = {}
     for breakdown_name, breakdown_config in breakdowns_config.items():
         ty = breakdown_config.get("type")
 
         if ty == "spanOperations":
-            breakdowns = _compute_span_ops(spans, breakdown_config)
+            breakdowns = _compute_span_ops(child_spans, breakdown_config)
         else:
             continue
 
         for key, value in breakdowns.items():
-            ret[f"{breakdown_name}.{key}"] = value
+            ret[f"{breakdown_name}.{key}"] = {"value": value, "type": "double"}
 
     return ret
 
 
-def _compute_span_ops(spans: Sequence[SegmentSpan], config: Any) -> dict[str, float]:
+def _compute_span_ops(spans: Sequence[SpanEvent], config: Any) -> dict[str, float]:
     matches = config.get("matches")
     if not matches:
         return {}

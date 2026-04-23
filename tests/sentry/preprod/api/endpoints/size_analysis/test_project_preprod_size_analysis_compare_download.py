@@ -1,5 +1,8 @@
-from django.test import override_settings
+from datetime import timedelta
+from unittest.mock import patch
+
 from django.urls import reverse
+from django.utils import timezone
 
 from sentry.preprod.models import (
     PreprodArtifact,
@@ -9,7 +12,6 @@ from sentry.preprod.models import (
 from sentry.testutils.cases import TestCase
 
 
-@override_settings(SENTRY_FEATURES={"organizations:preprod-frontend-routes": True})
 class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -18,7 +20,6 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
         self.project = self.create_project(organization=self.organization)
         self.login_as(user=self.user)
 
-        # Create test files
         self.head_file = self.create_file(
             name="head_size_analysis.json",
             type="application/json",
@@ -32,41 +33,30 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
             type="application/json",
         )
 
-        # Create preprod artifacts
-        self.head_artifact = PreprodArtifact.objects.create(
+        self.head_artifact = self.create_preprod_artifact(
             project=self.project,
             artifact_type=PreprodArtifact.ArtifactType.XCARCHIVE,
             state=PreprodArtifact.ArtifactState.PROCESSED,
         )
-        self.base_artifact = PreprodArtifact.objects.create(
+        self.base_artifact = self.create_preprod_artifact(
             project=self.project,
             artifact_type=PreprodArtifact.ArtifactType.XCARCHIVE,
             state=PreprodArtifact.ArtifactState.PROCESSED,
         )
 
-        # Create size analysis metrics
-        self.head_size_metrics = PreprodArtifactSizeMetrics.objects.create(
-            preprod_artifact=self.head_artifact,
+        self.head_size_metrics = self.create_preprod_artifact_size_metrics(
+            self.head_artifact,
             analysis_file_id=self.head_file.id,
-            metrics_artifact_type=PreprodArtifactSizeMetrics.MetricsArtifactType.MAIN_ARTIFACT,
+            metrics_type=PreprodArtifactSizeMetrics.MetricsArtifactType.MAIN_ARTIFACT,
             identifier="main",
             state=PreprodArtifactSizeMetrics.SizeAnalysisState.COMPLETED,
         )
-        self.base_size_metrics = PreprodArtifactSizeMetrics.objects.create(
-            preprod_artifact=self.base_artifact,
+        self.base_size_metrics = self.create_preprod_artifact_size_metrics(
+            self.base_artifact,
             analysis_file_id=self.base_file.id,
-            metrics_artifact_type=PreprodArtifactSizeMetrics.MetricsArtifactType.MAIN_ARTIFACT,
+            metrics_type=PreprodArtifactSizeMetrics.MetricsArtifactType.MAIN_ARTIFACT,
             identifier="main",
             state=PreprodArtifactSizeMetrics.SizeAnalysisState.COMPLETED,
-        )
-
-        # Create a size comparison with a file
-        self.size_comparison = PreprodArtifactSizeComparison.objects.create(
-            organization_id=self.organization.id,
-            head_size_analysis=self.head_size_metrics,
-            base_size_analysis=self.base_size_metrics,
-            file_id=self.comparison_file.id,
-            state=PreprodArtifactSizeComparison.State.SUCCESS,
         )
 
     def _get_url(
@@ -86,6 +76,14 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
         )
 
     def test_download_size_analysis_comparison_success(self) -> None:
+        self.create_preprod_artifact_size_comparison(
+            organization=self.organization,
+            head_size_analysis=self.head_size_metrics,
+            base_size_analysis=self.base_size_metrics,
+            file_id=self.comparison_file.id,
+            state=PreprodArtifactSizeComparison.State.SUCCESS,
+        )
+
         url = self._get_url()
         response = self.client.get(url)
 
@@ -99,15 +97,12 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
         response = self.client.get(url)
 
         assert response.status_code == 404
-        assert response.json()["error"] == "Comparison not found."
+        assert response.json()["detail"] == "Comparison not found."
 
     def test_download_size_analysis_comparison_no_file_id(self) -> None:
-        # Delete the existing comparison first to avoid duplicates
-        self.size_comparison.delete()
-
         # Create a comparison without a file_id
-        PreprodArtifactSizeComparison.objects.create(
-            organization_id=self.organization.id,
+        self.create_preprod_artifact_size_comparison(
+            organization=self.organization,
             head_size_analysis=self.head_size_metrics,
             base_size_analysis=self.base_size_metrics,
             file_id=None,
@@ -118,15 +113,12 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
         response = self.client.get(url)
 
         assert response.status_code == 404
-        assert response.json()["error"] == "Comparison not found."
+        assert response.json()["detail"] == "Comparison not found."
 
     def test_download_size_analysis_comparison_file_not_found(self) -> None:
-        # Delete the existing comparison first to avoid duplicates
-        self.size_comparison.delete()
-
         # Create a comparison with a non-existent file_id
-        PreprodArtifactSizeComparison.objects.create(
-            organization_id=self.organization.id,
+        self.create_preprod_artifact_size_comparison(
+            organization=self.organization,
             head_size_analysis=self.head_size_metrics,
             base_size_analysis=self.base_size_metrics,
             file_id=999999,  # Non-existent file ID
@@ -137,24 +129,17 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
         response = self.client.get(url)
 
         assert response.status_code == 404
-        assert response.json()["error"] == "Comparison not found."
+        assert response.json()["detail"] == "Comparison not found."
 
     def test_download_size_analysis_comparison_file_retrieval_failure(self) -> None:
-        # Delete the existing comparison first to avoid duplicates
-        self.size_comparison.delete()
-
-        # Create a file that will fail on getfile()
         failing_file = self.create_file(
             name="failing_comparison.json",
             type="application/json",
         )
-
-        # Mock the file to fail on getfile() by deleting it from storage
-        # but keeping the File record
         failing_file.delete()
 
-        PreprodArtifactSizeComparison.objects.create(
-            organization_id=self.organization.id,
+        self.create_preprod_artifact_size_comparison(
+            organization=self.organization,
             head_size_analysis=self.head_size_metrics,
             base_size_analysis=self.base_size_metrics,
             file_id=failing_file.id,
@@ -165,10 +150,51 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
         response = self.client.get(url)
 
         assert response.status_code == 404
-        assert response.json()["error"] == "Comparison not found."
+        assert response.json()["detail"] == "Comparison not found."
+
+    @patch(
+        "sentry.preprod.api.endpoints.size_analysis.project_preprod_size_analysis_compare_download.get_size_retention_cutoff"
+    )
+    def test_returns_404_for_expired_head_artifact(self, mock_cutoff) -> None:
+        mock_cutoff.return_value = timezone.now() - timedelta(days=30)
+        self.head_artifact.date_added = timezone.now() - timedelta(days=60)
+        self.head_artifact.save()
+
+        self.create_preprod_artifact_size_comparison(
+            organization=self.organization,
+            head_size_analysis=self.head_size_metrics,
+            base_size_analysis=self.base_size_metrics,
+            state=PreprodArtifactSizeComparison.State.SUCCESS,
+            file_id=self.comparison_file.id,
+        )
+
+        url = self._get_url()
+        response = self.client.get(url)
+        assert response.status_code == 404
+        assert response.json()["detail"] == "This build's size data has expired."
+
+    @patch(
+        "sentry.preprod.api.endpoints.size_analysis.project_preprod_size_analysis_compare_download.get_size_retention_cutoff"
+    )
+    def test_returns_404_for_expired_base_artifact(self, mock_cutoff) -> None:
+        mock_cutoff.return_value = timezone.now() - timedelta(days=30)
+        self.base_artifact.date_added = timezone.now() - timedelta(days=60)
+        self.base_artifact.save()
+
+        self.create_preprod_artifact_size_comparison(
+            organization=self.organization,
+            head_size_analysis=self.head_size_metrics,
+            base_size_analysis=self.base_size_metrics,
+            state=PreprodArtifactSizeComparison.State.SUCCESS,
+            file_id=self.comparison_file.id,
+        )
+
+        url = self._get_url()
+        response = self.client.get(url)
+        assert response.status_code == 404
+        assert response.json()["detail"] == "This build's size data has expired."
 
     def test_download_size_analysis_comparison_different_organization(self) -> None:
-        # Create a different organization
         other_user = self.create_user()
         other_org = self.create_organization(owner=other_user)
         other_project = self.create_project(organization=other_org)
@@ -181,4 +207,4 @@ class ProjectPreprodArtifactSizeAnalysisCompareDownloadEndpointTest(TestCase):
 
         # Should still return 404 because the comparison doesn't exist for this organization
         assert response.status_code == 404
-        assert response.json()["error"] == "Comparison not found."
+        assert response.json()["detail"] == "Comparison not found."

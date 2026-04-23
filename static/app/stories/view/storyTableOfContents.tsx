@@ -2,9 +2,8 @@ import {useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 import {useLocation} from 'react-router-dom';
 import styled from '@emotion/styled';
 
-import {Flex} from 'sentry/components/core/layout/flex';
-import {Text} from 'sentry/components/core/text';
-import {space} from 'sentry/styles/space';
+import {Flex} from '@sentry/scraps/layout';
+import {Text} from '@sentry/scraps/text';
 
 type Entry = {
   ref: HTMLElement;
@@ -261,9 +260,9 @@ const StoryIndexContainer = styled('div')`
   display: none;
   position: sticky;
   top: 52px;
-  margin-inline: 0 ${space(2)};
+  margin-inline: 0 ${p => p.theme.space.xl};
   height: fit-content;
-  padding: ${space(2)};
+  padding: ${p => p.theme.space.xl};
   min-width: 0;
 
   @media (min-width: ${p => p.theme.breakpoints.md}) {
@@ -273,8 +272,8 @@ const StoryIndexContainer = styled('div')`
 
 const StoryIndexTitle = styled('div')`
   line-height: 1.25;
-  font-size: ${p => p.theme.fontSize.md};
-  font-weight: ${p => p.theme.fontWeight.normal};
+  font-size: ${p => p.theme.font.size.md};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
   color: ${p => p.theme.tokens.content.primary};
   height: 28px;
   display: flex;
@@ -283,17 +282,17 @@ const StoryIndexTitle = styled('div')`
 
 const StoryIndexList = styled('ul')`
   list-style: none;
-  padding-left: ${space(1)};
-  padding-right: ${space(1)};
-  border-left: 1px solid ${p => p.theme.tokens.border.muted};
+  padding-left: ${p => p.theme.space.md};
+  padding-right: ${p => p.theme.space.md};
+  border-left: 1px solid ${p => p.theme.tokens.border.primary};
   margin: 0;
-  margin-left: -${space(2)};
+  margin-left: -${p => p.theme.space.xl};
   display: flex;
   flex-direction: column;
 
   ul {
-    margin-left: -${space(1)};
-    padding-left: ${space(1)};
+    margin-left: -${p => p.theme.space.md};
+    padding-left: ${p => p.theme.space.md};
     border-left: none;
   }
 `;
@@ -301,14 +300,14 @@ const StoryIndexList = styled('ul')`
 const StyledLink = styled('a')<{hasActiveChild: boolean; isActive: boolean}>`
   display: block;
   text-decoration: none;
-  padding: ${space(1)};
+  padding: ${p => p.theme.space.md};
   transition: color 80ms ease-out;
-  border-radius: ${p => p.theme.borderRadius};
+  border-radius: ${p => p.theme.radius.md};
   position: relative;
 
   &:hover {
-    background: ${p => p.theme.tokens.background.tertiary};
-    color: ${p => p.theme.textColor};
+    background: ${p => p.theme.tokens.interactive.transparent.neutral.background.hover};
+    color: ${p => p.theme.tokens.interactive.link.neutral.hover};
   }
 
   ${p =>
@@ -318,17 +317,17 @@ const StyledLink = styled('a')<{hasActiveChild: boolean; isActive: boolean}>`
         content: '';
         display: block;
         position: absolute;
-        left: -${space(1)};
+        left: -${p.theme.space.md};
         width: 4px;
         height: 16px;
         border-radius: 4px;
         transform: translateX(-2px);
-        background: ${p.theme.tokens.graphics.accent};
+        background: ${p.theme.tokens.graphics.accent.vibrant};
       }
     `}
 `;
 
 const StyledChildLink = styled(StyledLink)<{isActive: boolean}>`
-  margin-left: ${space(2)};
+  margin-left: ${p => p.theme.space.xl};
   border-left: 0;
 `;

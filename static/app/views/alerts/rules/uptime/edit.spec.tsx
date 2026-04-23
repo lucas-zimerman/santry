@@ -10,9 +10,9 @@ import {
   userEvent,
   within,
 } from 'sentry-test/reactTestingLibrary';
-import selectEvent from 'sentry-test/selectEvent';
+import {selectEvent} from 'sentry-test/selectEvent';
 
-import OrganizationStore from 'sentry/stores/organizationStore';
+import {OrganizationStore} from 'sentry/stores/organizationStore';
 
 import {UptimeRulesEdit} from './edit';
 
@@ -48,7 +48,6 @@ describe('uptime/edit', () => {
         onChangeTitle={handleChangeTitle}
         userTeamIds={[]}
         organization={organization}
-        project={project}
         params={{projectId: project.slug, ruleId: uptimeRule.id}}
       />,
       {organization}
@@ -85,7 +84,6 @@ describe('uptime/edit', () => {
         onChangeTitle={handleChangeTitle}
         userTeamIds={[]}
         organization={organization}
-        project={project}
         params={{projectId: project.slug, ruleId: uptimeRule.id}}
       />,
       {organization}

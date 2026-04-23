@@ -1,4 +1,5 @@
 import {useMemo, type ReactNode} from 'react';
+import {useQuery} from '@tanstack/react-query';
 import type Fuse from 'fuse.js';
 
 import {useSearchQueryBuilder} from 'sentry/components/searchQueryBuilder/context';
@@ -10,20 +11,24 @@ import {
   createAskSeerItem,
   createFilterValueItem,
   createItem,
+  createLogicFilterItem,
+  createRawSearchFilterContainsValueItem,
   createRawSearchFilterIsValueItem,
+  createRawSearchFuzzyFilterItem,
   createRawSearchItem,
 } from 'sentry/components/searchQueryBuilder/tokens/filterKeyListBox/utils';
 import type {FieldDefinitionGetter} from 'sentry/components/searchQueryBuilder/types';
 import type {Tag} from 'sentry/types/group';
 import {defined} from 'sentry/utils';
-import {FieldKey} from 'sentry/utils/fields';
+import {FieldKey, FieldKind} from 'sentry/utils/fields';
 import {useFuzzySearch} from 'sentry/utils/fuzzySearch';
+import {useDebouncedValue} from 'sentry/utils/useDebouncedValue';
 
 type FilterKeySearchItem = {
   description: string;
   item: Tag;
   keywords: string[];
-  type: 'value' | 'key';
+  type: 'value' | 'key' | 'logic';
   key?: string;
   value?: string;
 };
@@ -41,6 +46,35 @@ const FUZZY_SEARCH_OPTIONS: Fuse.IFuseOptions<FilterKeySearchItem> = {
   includeScore: true,
   distance: 1000,
 };
+
+// Note: we don't need to add in the parentheses because when typed they are
+// automatically handled by the parser and tokens created.
+const LOGIC_FILTER_ITEMS: FilterKeySearchItem[] = [
+  {
+    key: 'AND',
+    type: 'logic',
+    description: 'AND logical operator',
+    keywords: [],
+    item: {
+      key: 'AND',
+      name: 'AND',
+      kind: FieldKind.FIELD,
+      secondaryAliases: [],
+    },
+  },
+  {
+    key: 'OR',
+    type: 'logic',
+    description: 'OR logical operator',
+    keywords: [],
+    item: {
+      key: 'OR',
+      name: 'OR',
+      kind: FieldKind.FIELD,
+      secondaryAliases: [],
+    },
+  },
+];
 
 function isQuoted(inputValue: string) {
   return inputValue.startsWith('"') && inputValue.endsWith('"');
@@ -128,18 +162,66 @@ export function useSortedFilterKeyItems({
   filterValue: string;
   includeSuggestions: boolean;
   inputValue: string;
-}): SearchKeyItem[] {
+}): {isLoading: boolean; items: SearchKeyItem[]} {
   const {
     filterKeys,
     getFieldDefinition,
     filterKeySections,
     disallowFreeText,
+    disallowLogicalOperators,
     replaceRawSearchKeys,
     matchKeySuggestions,
     enableAISearch,
+    getTagKeys,
   } = useSearchQueryBuilder();
 
-  const flatKeys = useMemo(() => Object.values(filterKeys), [filterKeys]);
+  // Async key fetching with debounce when getTagKeys is provided
+  const shouldFetchAsync = !!getTagKeys;
+  const debouncedFilterValue = useDebouncedValue(filterValue);
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
+  const {data: asyncKeys, isLoading: isQueryLoading} = useQuery({
+    queryKey: ['search-query-builder-tag-keys', debouncedFilterValue],
+    queryFn: ctx => getTagKeys!(ctx.queryKey[1] ?? ''),
+    enabled: shouldFetchAsync,
+  });
+
+  const isLoading = shouldFetchAsync && isQueryLoading;
+
+  // Set of Tag.key values from static filterKeys, used consistently for deduplication.
+  const staticKeyValues = useMemo(
+    () => new Set(Object.values(filterKeys).map(k => k.key)),
+    [filterKeys]
+  );
+
+  const flatKeys = useMemo(() => {
+    const keys = Object.values(filterKeys);
+    if (!asyncKeys?.length) return keys;
+
+    return [...keys, ...asyncKeys.filter(k => !staticKeyValues.has(k.key))];
+  }, [filterKeys, asyncKeys, staticKeyValues]);
+
+  // Keys that exist only in asyncKeys and not in the static filterKeys.
+  // Used to partition results so async-only keys always render below static keys.
+  const asyncOnlyKeys = useMemo(() => {
+    if (!asyncKeys?.length) {
+      return new Set<string>();
+    }
+    return new Set(asyncKeys.filter(k => !staticKeyValues.has(k.key)).map(k => k.key));
+  }, [asyncKeys, staticKeyValues]);
+
+  // Merged lookup of static + async keys, used for validating search results.
+  // Without this, async-only keys would be filtered out by the `filterKeys` check.
+  const allKeysLookup = useMemo(() => {
+    if (!asyncKeys?.length) return filterKeys;
+
+    const merged = {...filterKeys};
+    for (const tag of asyncKeys) {
+      if (!staticKeyValues.has(tag.key)) {
+        merged[tag.key] = tag;
+      }
+    }
+    return merged;
+  }, [filterKeys, asyncKeys, staticKeyValues]);
 
   const searchableItems = useMemo<FilterKeySearchItem[]>(() => {
     const searchKeyItems: FilterKeySearchItem[] = flatKeys.map(key => {
@@ -154,24 +236,34 @@ export function useSortedFilterKeyItems({
       };
     });
 
+    const logicFilterItems = disallowLogicalOperators ? [] : LOGIC_FILTER_ITEMS;
+
     if (includeSuggestions) {
       return [
         ...searchKeyItems,
         ...getFilterSearchValues(flatKeys, {getFieldDefinition}),
+        ...logicFilterItems,
       ];
     }
 
-    return searchKeyItems;
-  }, [flatKeys, getFieldDefinition, includeSuggestions]);
+    return [...searchKeyItems, ...logicFilterItems];
+  }, [disallowLogicalOperators, flatKeys, getFieldDefinition, includeSuggestions]);
 
   const search = useFuzzySearch(searchableItems, FUZZY_SEARCH_OPTIONS);
 
-  return useMemo(() => {
+  const items = useMemo(() => {
     if (!filterValue || !search) {
       if (!filterKeySections.length) {
-        return flatKeys
-          .map(key => createItem(key, getFieldDefinition(key.key)))
+        const allItems = flatKeys.map(key =>
+          createItem(key, getFieldDefinition(key.key))
+        );
+        const staticItems = allItems
+          .filter(item => !asyncOnlyKeys.has(item.value))
           .sort((a, b) => a.textValue.localeCompare(b.textValue));
+        const asyncItems = allItems
+          .filter(item => asyncOnlyKeys.has(item.value))
+          .sort((a, b) => a.textValue.localeCompare(b.textValue));
+        return [...staticItems, ...asyncItems];
       }
 
       const filterSectionKeys = [
@@ -179,19 +271,41 @@ export function useSortedFilterKeyItems({
       ].slice(0, 50);
 
       return filterSectionKeys
-        .map(key => filterKeys[key])
+        .map(key => allKeysLookup[key])
         .filter(defined)
         .map(key => createItem(key, getFieldDefinition(key.key)));
     }
 
     const searched = search.search(filterValue);
 
-    const keyItems = searched
-      .map(({item}) => item)
-      .filter(item => item.type === 'key' && filterKeys[item.item.key])
-      .map(({item}) => {
-        return createItem(filterKeys[item.key]!, getFieldDefinition(item.key));
+    const allKeyItems = searched
+      .map(({item: filterSearchKeyItem}) => filterSearchKeyItem)
+      .filter(
+        filterSearchKeyItem =>
+          (filterSearchKeyItem.type === 'key' &&
+            allKeysLookup[filterSearchKeyItem.item.key]) ||
+          filterSearchKeyItem.type === 'logic'
+      )
+      .map(filterSearchKeyItem => {
+        if (
+          filterSearchKeyItem.type === 'logic' &&
+          (filterSearchKeyItem.key === 'AND' ||
+            filterSearchKeyItem.key === 'OR' ||
+            filterSearchKeyItem.key === '(' ||
+            filterSearchKeyItem.key === ')')
+        ) {
+          return createLogicFilterItem({value: filterSearchKeyItem.key});
+        }
+
+        const {key} = filterSearchKeyItem.item;
+        return createItem(allKeysLookup[key]!, getFieldDefinition(key));
       });
+
+    // Partition so async-only keys always appear below static keys,
+    // preserving fuzzy score order within each group.
+    const staticKeyItems = allKeyItems.filter(item => !asyncOnlyKeys.has(item.value));
+    const asyncKeyItems = allKeyItems.filter(item => asyncOnlyKeys.has(item.value));
+    const keyItems = [...staticKeyItems, ...asyncKeyItems];
 
     const askSeerItem = [];
     if (enableAISearch) {
@@ -215,12 +329,18 @@ export function useSortedFilterKeyItems({
         !replaceRawSearchKeys?.length;
 
       const rawSearchFilterIsValueItems =
-        replaceRawSearchKeys?.map(key => {
+        replaceRawSearchKeys?.flatMap(key => {
           const value = inputValue?.includes(' ')
             ? `"${inputValue.replace(/"/g, '')}"`
             : inputValue;
 
-          return createRawSearchFilterIsValueItem(key, value);
+          return [
+            createRawSearchFilterContainsValueItem(key, value),
+            createRawSearchFilterIsValueItem(key, value),
+            ...(/\w \w/.test(inputValue)
+              ? [createRawSearchFuzzyFilterItem(key, inputValue)]
+              : []),
+          ];
         }) ?? [];
 
       const rawSearchReplacements: KeySectionItem = {
@@ -285,10 +405,11 @@ export function useSortedFilterKeyItems({
 
     return [...keyItems, ...askSeerItem];
   }, [
+    allKeysLookup,
+    asyncOnlyKeys,
     disallowFreeText,
     enableAISearch,
     filterKeySections,
-    filterKeys,
     filterValue,
     flatKeys,
     getFieldDefinition,
@@ -298,4 +419,6 @@ export function useSortedFilterKeyItems({
     replaceRawSearchKeys,
     search,
   ]);
+
+  return {items, isLoading};
 }

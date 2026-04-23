@@ -1,14 +1,19 @@
+import {useQuery} from '@tanstack/react-query';
+
 import {t} from 'sentry/locale';
-import type {ActionType} from 'sentry/types/workflowEngine/actions';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
+import {ActionType} from 'sentry/types/workflowEngine/actions';
 import type {Automation, StatusWarning} from 'sentry/types/workflowEngine/automations';
 import type {DataConditionGroup} from 'sentry/types/workflowEngine/dataConditions';
 import {
   DataConditionGroupLogicType,
   DataConditionType,
 } from 'sentry/types/workflowEngine/dataConditions';
+import {defined} from 'sentry/utils';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {AgeComparison} from 'sentry/views/automations/components/actionFilters/constants';
 import type {ConflictingConditions} from 'sentry/views/automations/components/automationBuilderConflictContext';
-import {useDetectorQueriesByIds} from 'sentry/views/detectors/hooks';
+import {detectorListApiOptions} from 'sentry/views/detectors/hooks';
 
 export function getAutomationActions(automation: Automation): ActionType[] {
   return [
@@ -32,14 +37,14 @@ export function getAutomationActionsWarning(
   if (totalCount === 0) {
     return {
       color: 'danger' as const,
-      message: t('You must add an action for this automation to run.'),
+      message: t('You must add an action for this alert to run.'),
     };
   }
   if (inactiveCount === totalCount) {
     return {
       color: 'danger' as const,
       message: t(
-        'Automation is invalid because no actions can run. Actions need to be reconfigured.'
+        'Alert is invalid because no actions can run. Actions need to be reconfigured.'
       ),
     };
   }
@@ -52,11 +57,22 @@ export function getAutomationActionsWarning(
   return null;
 }
 
-export function useAutomationProjectIds(automation: Automation): string[] {
-  const queries = useDetectorQueriesByIds(automation.detectorIds);
-  return [
-    ...new Set(queries.map(query => query.data?.projectId).filter(x => x)),
-  ] as string[];
+export function useAutomationProjectSlugs(automation: Automation) {
+  const organization = useOrganization();
+  const {data: detectors, isLoading} = useQuery({
+    ...detectorListApiOptions(organization, {ids: automation.detectorIds}),
+    enabled: automation.detectorIds.length > 0,
+  });
+
+  const projectIds = [
+    ...new Set(detectors?.map(detector => detector.projectId).filter(defined) ?? []),
+  ];
+
+  const projectSlugs = projectIds
+    .map(projectId => ProjectsStore.getById(projectId)?.slug)
+    .filter(defined);
+
+  return {projectSlugs, isLoading};
 }
 
 export function findConflictingConditions(
@@ -154,6 +170,7 @@ export function findConflictingConditions(
 
 const conflictingTriggers = new Set<DataConditionType>([
   DataConditionType.FIRST_SEEN_EVENT,
+  DataConditionType.ISSUE_RESOLVED_TRIGGER,
   DataConditionType.REGRESSION_EVENT,
   DataConditionType.REAPPEARED_EVENT,
 ]);
@@ -168,7 +185,7 @@ const frequencyTypes = new Set<DataConditionType>([
 function findFirstSeenEventConflictingConditions(
   conditionGroup: DataConditionGroup
 ): Set<string> {
-  const conflictingConditions: Set<string> = new Set<string>();
+  const conflictingConditions = new Set<string>();
 
   // Find incompatible conditions for NONE logic type
   if (conditionGroup.logicType === DataConditionGroupLogicType.NONE) {
@@ -224,7 +241,7 @@ function findFirstSeenEventConflictingConditions(
 function findConflictingPriorityConditions(
   conditionGroup: DataConditionGroup
 ): Set<string> {
-  const conflictingConditions: Set<string> = new Set<string>();
+  const conflictingConditions = new Set<string>();
 
   const priorityGreaterOrEqualConditions: string[] = [];
   const priorityDeescalatingConditions: string[] = [];
@@ -262,7 +279,7 @@ function findConflictingPriorityConditions(
 
 function findDuplicateTriggerConditions(triggers: DataConditionGroup): Set<string> {
   const conditionCounts: Record<string, string[]> = {};
-  const duplicates: Set<string> = new Set();
+  const duplicates = new Set<string>();
 
   // Count the number of conditions for each type
   for (const condition of triggers.conditions) {

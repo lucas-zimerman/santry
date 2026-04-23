@@ -1,11 +1,11 @@
 from collections import defaultdict
-from typing import DefaultDict
 
 from django.db.models import prefetch_related_objects
 
 from sentry.api.serializers import Serializer, register, serialize
 from sentry.incidents.endpoints.utils import translate_threshold
 from sentry.incidents.models.alert_rule import AlertRuleTrigger, AlertRuleTriggerAction
+from sentry.workflow_engine.utils.legacy_metric_tracking import report_used_legacy_models
 
 
 @register(AlertRuleTrigger)
@@ -14,7 +14,7 @@ class AlertRuleTriggerSerializer(Serializer):
         prefetch_related_objects(item_list, "alert_rule")
 
         triggers = {item.id: item for item in item_list}
-        result: DefaultDict[str, dict[str, list[str]]] = defaultdict(dict)
+        result: defaultdict[str, dict[str, list[str]]] = defaultdict(dict)
 
         actions = AlertRuleTriggerAction.objects.filter(alert_rule_trigger__in=item_list).order_by(
             "id"
@@ -29,6 +29,9 @@ class AlertRuleTriggerSerializer(Serializer):
         return result
 
     def serialize(self, obj, attrs, user, **kwargs):
+        # Mark that we're using legacy AlertRuleTrigger models
+        report_used_legacy_models()
+
         return {
             "id": str(obj.id),
             "alertRuleId": str(obj.alert_rule_id),

@@ -2,13 +2,15 @@ import {useEffect, useState} from 'react';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import {Link} from 'sentry/components/core/link';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {Flex, Stack} from '@sentry/scraps/layout';
+import {Link} from '@sentry/scraps/link';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import {DateTime} from 'sentry/components/dateTime';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
 import {EventTags} from 'sentry/components/events/eventTags';
 import {noFilter} from 'sentry/components/events/interfaces/spans/filter';
 import {
@@ -16,29 +18,29 @@ import {
   MINIMAP_HEIGHT,
   MinimapBackground,
 } from 'sentry/components/events/interfaces/spans/minimap';
-import WaterfallModel from 'sentry/components/events/interfaces/spans/waterfallModel';
-import OpsBreakdown from 'sentry/components/events/opsBreakdown';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import TextOverflow from 'sentry/components/textOverflow';
+import {WaterfallModel} from 'sentry/components/events/interfaces/spans/waterfallModel';
+import {OpsBreakdown} from 'sentry/components/events/opsBreakdown';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {IconChevron, IconOpen} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {EventTransaction} from 'sentry/types/event';
 import type {Project} from 'sentry/types/project';
 import {defined} from 'sentry/utils';
+import {getApiUrl} from 'sentry/utils/api/getApiUrl';
 import {useDiscoverQuery} from 'sentry/utils/discover/discoverQuery';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {generateLinkToEventInTraceView} from 'sentry/utils/discover/urls';
 import {getShortEventId} from 'sentry/utils/events';
 import {useApiQuery} from 'sentry/utils/queryClient';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 const BUTTON_ICON_SIZE = 'sm';
 const BUTTON_SIZE = 'sm';
 
-export function getSampleEventQuery({
+function getSampleEventQuery({
   transaction,
   durationBaseline,
   addUpperBound = true,
@@ -160,7 +162,18 @@ function EventDisplay({
   const eventIds = data?.data.map(({id}) => id);
 
   const {data: eventData, isFetching} = useApiQuery<EventTransaction>(
-    [`/organizations/${organization.slug}/events/${project.slug}:${selectedEventId}/`],
+    [
+      getApiUrl(
+        '/organizations/$organizationIdOrSlug/events/$projectIdOrSlug:$eventId/',
+        {
+          path: {
+            organizationIdOrSlug: organization.slug,
+            projectIdOrSlug: project.slug,
+            eventId: selectedEventId,
+          },
+        }
+      ),
+    ],
     {staleTime: Infinity, retry: false, enabled: !!selectedEventId && !!project.slug}
   );
 
@@ -170,7 +183,7 @@ function EventDisplay({
     }
   }, [eventIds, selectedEventId]);
 
-  const eventIdIndex = eventIds?.findIndex(eventId => eventId === selectedEventId);
+  const eventIdIndex = eventIds?.indexOf(selectedEventId);
   const hasNext =
     defined(eventIdIndex) && defined(eventIds) && eventIdIndex + 1 < eventIds.length;
   const hasPrev = defined(eventIdIndex) && eventIdIndex - 1 >= 0;
@@ -203,9 +216,9 @@ function EventDisplay({
     organization,
   });
   return (
-    <EventDisplayContainer>
+    <Stack gap="md">
       <div>
-        <StyledControlBar>
+        <Flex justify="between">
           <StyledEventControls>
             <CompactSelect
               size="sm"
@@ -217,19 +230,23 @@ function EventDisplay({
               }))}
               value={selectedEventId}
               onChange={({value}) => setSelectedEventId(value)}
-              triggerLabel={
-                <ButtonLabelWrapper>
-                  <TextOverflow>
-                    {eventSelectLabel}:{' '}
-                    <SelectionTextWrapper>
-                      {getShortEventId(selectedEventId)}
-                    </SelectionTextWrapper>
-                  </TextOverflow>
-                </ButtonLabelWrapper>
-              }
+              trigger={triggerProps => (
+                <OverlayTrigger.Button {...triggerProps}>
+                  {
+                    <ButtonLabelWrapper>
+                      <TextOverflow>
+                        {eventSelectLabel}:{' '}
+                        <SelectionTextWrapper>
+                          {getShortEventId(selectedEventId)}
+                        </SelectionTextWrapper>
+                      </TextOverflow>
+                    </ButtonLabelWrapper>
+                  }
+                </OverlayTrigger.Button>
+              )}
             />
             <LinkButton
-              title={t('Full Event Details')}
+              tooltipProps={{title: t('Full Event Details')}}
               size={BUTTON_SIZE}
               to={fullEventTarget}
               aria-label={t('Full Event Details')}
@@ -260,7 +277,7 @@ function EventDisplay({
               />
             </NavButtons>
           </div>
-        </StyledControlBar>
+        </Flex>
         <ComparisonContentWrapper>
           <Link to={fullEventTarget}>
             <MinimapContainer>
@@ -287,17 +304,11 @@ function EventDisplay({
       </div>
 
       <EventTags event={eventData} projectSlug={project.slug} />
-    </EventDisplayContainer>
+    </Stack>
   );
 }
 
 export {EventDisplay};
-
-const EventDisplayContainer = styled('div')`
-  display: flex;
-  gap: ${space(1)};
-  flex-direction: column;
-`;
 
 const ButtonLabelWrapper = styled('span')`
   width: 100%;
@@ -305,11 +316,6 @@ const ButtonLabelWrapper = styled('span')`
   align-items: center;
   display: inline-grid;
   grid-template-columns: 1fr auto;
-`;
-
-const StyledControlBar = styled('div')`
-  display: flex;
-  justify-content: space-between;
 `;
 
 const StyledEventControls = styled('div')`
@@ -333,25 +339,25 @@ const MinimapContainer = styled('div')`
   height: ${MINIMAP_HEIGHT}px;
   max-height: ${MINIMAP_HEIGHT}px;
   position: relative;
-  border-bottom: 1px solid ${p => p.theme.border};
+  border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
 `;
 
 const ComparisonContentWrapper = styled('div')`
-  border: ${p => `1px solid ${p.theme.border}`};
-  border-radius: ${p => p.theme.borderRadius};
+  border: ${p => `1px solid ${p.theme.tokens.border.primary}`};
+  border-radius: ${p => p.theme.radius.md};
   overflow: hidden;
 `;
 
 const EmptyStateWrapper = styled('div')`
-  border: ${p => `1px solid ${p.theme.border}`};
-  border-radius: ${p => p.theme.borderRadius};
+  border: ${p => `1px solid ${p.theme.tokens.border.primary}`};
+  border-radius: ${p => p.theme.radius.md};
   display: flex;
   justify-content: center;
   align-items: center;
 `;
 
 const SelectionTextWrapper = styled('span')`
-  font-weight: ${p => p.theme.fontWeight.normal};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
 `;
 
 const StyledNavButton = styled(Button)`
@@ -370,13 +376,13 @@ const NavButtons = styled('div')`
 
     &:first-child {
       ${StyledNavButton} {
-        border-radius: ${p => p.theme.borderRadius} 0 0 ${p => p.theme.borderRadius};
+        border-radius: ${p => p.theme.radius.md} 0 0 ${p => p.theme.radius.md};
       }
     }
 
     &:last-child {
       ${StyledNavButton} {
-        border-radius: 0 ${p => p.theme.borderRadius} ${p => p.theme.borderRadius} 0;
+        border-radius: 0 ${p => p.theme.radius.md} ${p => p.theme.radius.md} 0;
       }
     }
   }

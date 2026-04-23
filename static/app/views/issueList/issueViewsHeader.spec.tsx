@@ -11,7 +11,7 @@ import {
   within,
 } from 'sentry-test/reactTestingLibrary';
 
-import IssueViewsHeader from 'sentry/views/issueList/issueViewsHeader';
+import {IssueViewsHeader} from 'sentry/views/issueList/issueViewsHeader';
 
 describe('IssueViewsHeader', () => {
   const view = GroupSearchViewFixture();
@@ -35,7 +35,6 @@ describe('IssueViewsHeader', () => {
 
   const organization = OrganizationFixture({
     access: ['org:read'],
-    features: ['enforce-stacked-navigation'],
   });
 
   const onIssueViewRouterConfig = {

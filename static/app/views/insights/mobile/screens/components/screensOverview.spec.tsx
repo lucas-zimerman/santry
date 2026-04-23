@@ -1,18 +1,13 @@
-import type {Location} from 'history';
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {PageFilterStateFixture} from 'sentry-fixture/pageFilters';
 import {ProjectFixture} from 'sentry-fixture/project';
 
 import {render, screen, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import {useLocation} from 'sentry/utils/useLocation';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useCrossPlatformProject from 'sentry/views/insights/mobile/common/queries/useCrossPlatformProject';
+import {PageFiltersStore} from 'sentry/components/pageFilters/store';
+import {useCrossPlatformProject} from 'sentry/views/insights/mobile/common/queries/useCrossPlatformProject';
 import {ScreensOverview} from 'sentry/views/insights/mobile/screens/components/screensOverview';
 
 jest.mock('sentry/views/insights/mobile/common/queries/useCrossPlatformProject');
-jest.mock('sentry/utils/usePageFilters');
-jest.mock('sentry/utils/useLocation');
 
 describe('ScreensOverview', () => {
   const organization = OrganizationFixture({
@@ -20,32 +15,28 @@ describe('ScreensOverview', () => {
   });
   const project = ProjectFixture();
 
-  jest.mocked(useLocation).mockReturnValue({
-    action: 'PUSH',
-    hash: '',
-    key: '',
-    pathname: '/organizations/org-slug/performance/mobile/mobile-vitals',
-    query: {
-      project: project.id,
-    },
-    search: '',
-    state: undefined,
-  } as Location);
-
-  jest.mocked(usePageFilters).mockReturnValue(
-    PageFilterStateFixture({
-      selection: {
-        datetime: {
-          period: '10d',
-          start: null,
-          end: null,
-          utc: false,
-        },
-        environments: [],
-        projects: [parseInt(project.id, 10)],
+  const initialRouterConfig = {
+    location: {
+      pathname: '/organizations/org-slug/performance/mobile/mobile-vitals',
+      query: {
+        project: project.id,
       },
-    })
-  );
+    },
+    route: '/organizations/:orgId/performance/mobile/mobile-vitals',
+  };
+
+  beforeEach(() => {
+    PageFiltersStore.onInitializeUrlState({
+      projects: [parseInt(project.id, 10)],
+      environments: [],
+      datetime: {
+        period: '10d',
+        start: null,
+        end: null,
+        utc: false,
+      },
+    });
+  });
 
   jest.mocked(useCrossPlatformProject).mockReturnValue({
     project,
@@ -57,14 +48,18 @@ describe('ScreensOverview', () => {
     MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/events/`,
     });
-    render(<ScreensOverview />, {organization});
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/releases/`,
+      body: [],
+    });
+    render(<ScreensOverview />, {organization, initialRouterConfig});
 
     expect(await screen.findByPlaceholderText('Search for Screen')).toBeInTheDocument();
     expect(await screen.findByRole('table')).toBeInTheDocument();
   });
 
-  it('queries both dataset correctly', async () => {
-    const transactionMetricsMock = MockApiClient.addMockResponse({
+  it('queries correctly', async () => {
+    const metricsMock = MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/events/`,
       body: {
         data: [
@@ -76,6 +71,9 @@ describe('ScreensOverview', () => {
             'count()': 10000,
             'avg(measurements.app_start_cold)': 300,
             'avg(measurements.app_start_warm)': 400,
+            'avg(mobile.frozen_frames)': 1,
+            'avg(mobile.frames_delay)': 2,
+            'avg(mobile.slow_frames)': 3,
           },
           {
             transaction: 'Screen B',
@@ -85,6 +83,9 @@ describe('ScreensOverview', () => {
             'count()': 5000,
             'avg(measurements.app_start_cold)': 700,
             'avg(measurements.app_start_warm)': 800,
+            'avg(mobile.frozen_frames)': 4,
+            'avg(mobile.frames_delay)': 5,
+            'avg(mobile.slow_frames)': 6,
           },
         ],
         meta: {
@@ -96,6 +97,9 @@ describe('ScreensOverview', () => {
             'count()': 'integer',
             'avg(measurements.app_start_cold)': 'duration',
             'avg(measurements.app_start_warm)': 'duration',
+            'avg(mobile.frozen_frames)': 'number',
+            'avg(mobile.frames_delay)': 'number',
+            'avg(mobile.slow_frames)': 'number',
           },
           units: {
             transaction: null,
@@ -105,56 +109,11 @@ describe('ScreensOverview', () => {
             'count()': null,
             'avg(measurements.app_start_cold)': 'millisecond',
             'avg(measurements.app_start_warm)': 'millisecond',
-          },
-          isMetricsData: true,
-          isMetricsExtractedData: false,
-          tips: {},
-          datasetReason: 'unchanged',
-          dataset: 'spans',
-        },
-      },
-      match: [
-        MockApiClient.matchQuery({
-          referrer: 'api.insights.mobile-screens-screen-table-metrics',
-        }),
-      ],
-    });
-
-    const spanMetricsMock = MockApiClient.addMockResponse({
-      url: `/organizations/${organization.slug}/events/`,
-      body: {
-        data: [
-          {
-            'project.id': project.id,
-            transaction: 'Screen A',
-            'avg(mobile.frozen_frames)': 1,
-            'avg(mobile.frames_delay)': 2,
-            'avg(mobile.slow_frames)': 3,
-          },
-          {
-            'project.id': project.id,
-            transaction: 'Screen B',
-            'avg(mobile.frozen_frames)': 4,
-            'avg(mobile.frames_delay)': 5,
-            'avg(mobile.slow_frames)': 6,
-          },
-        ],
-        meta: {
-          fields: {
-            'project.id': 'integer',
-            transaction: 'string',
-            'avg(mobile.frozen_frames)': 'number',
-            'avg(mobile.frames_delay)': 'number',
-            'avg(mobile.slow_frames)': 'number',
-          },
-          units: {
-            'project.id': null,
-            transaction: null,
             'avg(mobile.frozen_frames)': null,
             'avg(mobile.frames_delay)': null,
             'avg(mobile.slow_frames)': null,
           },
-          isMetricsData: false,
+          isMetricsData: true,
           isMetricsExtractedData: false,
           tips: {},
           datasetReason: 'unchanged',
@@ -168,12 +127,15 @@ describe('ScreensOverview', () => {
       ],
     });
 
-    render(<ScreensOverview />, {organization});
-    await waitFor(() => {
-      expect(transactionMetricsMock).toHaveBeenCalled();
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/releases/`,
+      body: [],
     });
+
+    render(<ScreensOverview />, {organization, initialRouterConfig});
+
     await waitFor(() => {
-      expect(spanMetricsMock).toHaveBeenCalled();
+      expect(metricsMock).toHaveBeenCalled();
     });
   });
 });

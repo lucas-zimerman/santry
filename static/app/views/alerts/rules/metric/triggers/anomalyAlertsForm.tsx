@@ -1,8 +1,9 @@
 import {Component, Fragment} from 'react';
 import styled from '@emotion/styled';
 
-import {Select} from 'sentry/components/core/select';
-import FieldGroup from 'sentry/components/forms/fieldGroup';
+import {Select} from '@sentry/scraps/select';
+
+import {FieldGroup} from 'sentry/components/forms/fieldGroup';
 import {
   AlertRuleSensitivity,
   AlertRuleThresholdType,
@@ -39,17 +40,15 @@ function SensitivityFormItem({
 }: SensitivityFormItemProps) {
   return (
     <StyledField
-      label={'Level of responsiveness'}
-      id={'sensitivity'}
-      help={
-        'Choose your level of anomaly responsiveness. Higher thresholds means alerts for most anomalies. Lower thresholds means alerts only for larger ones.'
-      }
+      label="Level of responsiveness"
+      id="sensitivity"
+      help="Choose your level of anomaly responsiveness. Higher thresholds means alerts for most anomalies. Lower thresholds means alerts only for larger ones."
       required
     >
       <SelectContainer>
         <Select
           name="sensitivity"
-          inputId={'sensitivity'}
+          inputId="sensitivity"
           value={sensitivity}
           options={[
             {
@@ -80,10 +79,8 @@ function DirectionFormItem({
 }: DirectionFormItemProps) {
   return (
     <StyledField
-      label={'Direction of anomaly movement'}
-      help={
-        'Decide if you want to be alerted to anomalies that are moving above, below, or in both directions in relation to your threshold.'
-      }
+      label="Direction of anomaly movement"
+      help="Decide if you want to be alerted to anomalies that are moving above, below, or in both directions in relation to your threshold."
       required
     >
       <SelectContainer>
@@ -113,7 +110,7 @@ function DirectionFormItem({
   );
 }
 
-class AnomalyDetectionFormField extends Component<Props> {
+export class AnomalyDetectionFormField extends Component<Props> {
   render() {
     const {sensitivity, onSensitivityChange, thresholdType, onThresholdTypeChange} =
       this.props;
@@ -143,4 +140,3 @@ const StyledField = styled(FieldGroup)`
 const SelectContainer = styled('div')`
   flex: 1;
 `;
-export default AnomalyDetectionFormField;

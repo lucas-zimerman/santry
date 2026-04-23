@@ -1,10 +1,14 @@
 import React, {Component, Fragment} from 'react';
-import {ThemeProvider} from '@emotion/react';
-import styled from '@emotion/styled';
+import {ThemeProvider, useTheme} from '@emotion/react';
 import * as Sentry from '@sentry/react';
 import Cookies from 'js-cookie';
 import snakeCase from 'lodash/snakeCase';
 import moment from 'moment-timezone';
+
+import {Alert, type AlertProps} from '@sentry/scraps/alert';
+import {Tag} from '@sentry/scraps/badge';
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {Flex, Grid} from '@sentry/scraps/layout';
 
 import type {ModalRenderProps} from 'sentry/actionCreators/modal';
 import {openModal} from 'sentry/actionCreators/modal';
@@ -16,23 +20,17 @@ import {
   promptsUpdate,
 } from 'sentry/actionCreators/prompts';
 import type {Client} from 'sentry/api';
-import {Alert, type AlertProps} from 'sentry/components/core/alert';
-import {Badge} from 'sentry/components/core/badge';
-import {Button} from 'sentry/components/core/button';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
 import {t, tct} from 'sentry/locale';
-import ConfigStore from 'sentry/stores/configStore';
-import GuideStore from 'sentry/stores/guideStore';
-import {space} from 'sentry/styles/space';
+import {ConfigStore} from 'sentry/stores/configStore';
+import {GuideStore} from 'sentry/stores/guideStore';
 import {DataCategory} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import {isActiveSuperuser} from 'sentry/utils/isActiveSuperuser';
 import {promptIsDismissed} from 'sentry/utils/promptIsDismissed';
 import {useInvertedTheme} from 'sentry/utils/theme/useInvertedTheme';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import withApi from 'sentry/utils/withApi';
+import {withApi} from 'sentry/utils/withApi';
 
 import {
   openForcedTrialModal,
@@ -41,13 +39,13 @@ import {
 } from 'getsentry/actionCreators/modal';
 import type {EventType} from 'getsentry/components/addEventsCTA';
 import AddEventsCTA from 'getsentry/components/addEventsCTA';
-import ProductTrialAlert from 'getsentry/components/productTrial/productTrialAlert';
+import {ProductTrialAlert} from 'getsentry/components/productTrial/productTrialAlert';
 import {getProductForPath} from 'getsentry/components/productTrial/productTrialPaths';
 import {makeLinkToOwnersAndBillingMembers} from 'getsentry/components/profiling/alerts';
-import withSubscription from 'getsentry/components/withSubscription';
+import {withSubscription} from 'getsentry/components/withSubscription';
 import ZendeskLink from 'getsentry/components/zendeskLink';
 import {BILLED_DATA_CATEGORY_INFO} from 'getsentry/constants';
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
 import {
   type BilledDataCategoryInfo,
   type Promotion,
@@ -67,9 +65,9 @@ import {
 import {getCategoryInfoFromPlural} from 'getsentry/utils/dataCategory';
 import {getPendoAccountFields} from 'getsentry/utils/pendo';
 import {claimAvailablePromotion} from 'getsentry/utils/promotionUtils';
-import trackGetsentryAnalytics from 'getsentry/utils/trackGetsentryAnalytics';
-import trackMarketingEvent from 'getsentry/utils/trackMarketingEvent';
-import withPromotions from 'getsentry/utils/withPromotions';
+import {trackGetsentryAnalytics} from 'getsentry/utils/trackGetsentryAnalytics';
+import {trackMarketingEvent} from 'getsentry/utils/trackMarketingEvent';
+import {withPromotions} from 'getsentry/utils/withPromotions';
 
 enum ModalType {
   USAGE_EXCEEDED = 'usage-exceeded',
@@ -95,7 +93,7 @@ function objectFromBilledCategories(callback: (c: BilledDataCategoryInfo) => any
   );
 }
 
-const ALERTS_OFF: Record<EventType, boolean> = objectFromBilledCategories(() => false);
+const ALERTS_OFF = objectFromBilledCategories(() => false);
 
 type SuspensionModalProps = ModalRenderProps & {
   subscription: Subscription;
@@ -107,7 +105,7 @@ function SuspensionModal({Header, Body, Footer, subscription}: SuspensionModalPr
       <Header>{'Action Required'}</Header>
       <Body>
         <Alert.Container>
-          <Alert type="warning">{t('Your account has been suspended')}</Alert>
+          <Alert variant="warning">{t('Your account has been suspended')}</Alert>
         </Alert.Container>
         <p>{t('Your account has been suspended with the following reason:')}</p>
         <ul>
@@ -151,6 +149,7 @@ function NoticeModal({
   whichModal,
   billingPermissions,
 }: NoticeModalProps) {
+  const theme = useTheme();
   const navigate = useNavigate();
   const closeModalAndContinue = (link: string) => {
     closeModal();
@@ -180,7 +179,7 @@ function NoticeModal({
     }
   };
 
-  const alertType = whichModal === ModalType.PAST_DUE ? 'error' : 'warning';
+  const alertType = whichModal === ModalType.PAST_DUE ? 'danger' : 'warning';
 
   let subText: React.ReactNode;
   let body: React.ReactNode;
@@ -203,7 +202,7 @@ function NoticeModal({
     case ModalType.USAGE_EXCEEDED:
       title = t('Usage exceeded');
       body = t(
-        `Your organization has depleted its event capacity for the current usage period and is currently not receiving new events.`
+        'Your organization has depleted its event capacity for the current usage period and is currently not receiving new events.'
       );
       link = normalizeUrl(`/settings/${organization.slug}/billing/overview/`);
       primaryButtonMessage = t('Continue');
@@ -212,10 +211,10 @@ function NoticeModal({
       title = t('Unable to bill your account');
       body = billingPermissions
         ? t(
-            `There was an issue with your payment. Update your payment information to ensure uninterrupted access to Sentry.`
+            'There was an issue with your payment. Update your payment information to ensure uninterrupted access to Sentry.'
           )
         : t(
-            `There was an issue with your payment. Please have the Org Owner or Billing Member update your payment information to ensure continued access to Sentry.`
+            'There was an issue with your payment. Please have the Org Owner or Billing Member update your payment information to ensure continued access to Sentry.'
           );
       link = billingPermissions
         ? normalizeUrl(
@@ -250,7 +249,7 @@ function NoticeModal({
         : t('To ensure uninterrupted service, upgrade your subscription.');
     } else {
       subText = tct(
-        `To ensure uninterrupted service, upgrade your subscription or increase your [budgetTerm] spend limit.`,
+        'To ensure uninterrupted service, upgrade your subscription or increase your [budgetTerm] spend limit.',
         {
           budgetTerm: subscription.planDetails.budgetTerm,
         }
@@ -265,7 +264,7 @@ function NoticeModal({
       </Header>
       <Body>
         <Alert.Container>
-          <Alert type={alertType}>{title}</Alert>
+          <Alert variant={alertType}>{title}</Alert>
         </Alert.Container>
         <p>{body}</p>
         {subText && <p>{subText}</p>}
@@ -275,7 +274,7 @@ function NoticeModal({
         <Button
           priority="primary"
           onClick={() => closeModalAndContinue(link)}
-          style={{marginLeft: space(2)}}
+          style={{marginLeft: theme.space.xl}}
           data-test-id="modal-continue-button"
         >
           {primaryButtonMessage}
@@ -723,7 +722,7 @@ class GSBanner extends Component<Props, State> {
 
   get overageWarningActive(): Record<EventType, boolean> {
     const {subscription} = this.props;
-    // disable warnings if org has on-demand
+    // disable warnings if org has PAYG
     if (
       subscription.hasOverageNotificationsDisabled ||
       subscription.onDemandMaxSpend > 0
@@ -760,9 +759,7 @@ class GSBanner extends Component<Props, State> {
     const {subscription, organization} = this.props;
 
     // can't use as const with ternary
-    const notificationType: 'overage_warning' | 'overage_critical' = isWarning
-      ? 'overage_warning'
-      : 'overage_critical';
+    const notificationType = isWarning ? 'overage_warning' : 'overage_critical';
 
     const props = {
       organization,
@@ -772,14 +769,14 @@ class GSBanner extends Component<Props, State> {
       referrer: `overage-alert-${eventTypes.join('-')}`,
       source: isWarning ? 'quota-warning' : 'quota-overage',
       handleRequestSent: () => this.handleOverageSnooze(eventTypes, isWarning),
-    };
+    } as const;
 
     return <AddEventsCTA {...props} />;
   }
 
   handleOverageSnooze(eventTypes: EventType[], isWarning: boolean) {
     const {organization, api} = this.props;
-    const dismissState: Record<EventType, boolean> = isWarning
+    const dismissState = isWarning
       ? this.state.overageWarningDismissed
       : this.state.overageAlertDismissed;
 
@@ -801,9 +798,7 @@ class GSBanner extends Component<Props, State> {
       });
     }
 
-    const dismissedState: Record<EventType, boolean> = objectFromBilledCategories(
-      () => true
-    );
+    const dismissedState = objectFromBilledCategories(() => true);
     // Suppress all warnings and alerts
     this.setState({
       overageAlertDismissed: dismissedState,
@@ -952,11 +947,15 @@ class GSBanner extends Component<Props, State> {
 
       return (
         <Alert.Container>
-          <BannerAlert
+          <Alert
             system
+            variant="danger"
             data-test-id="banner-alert-past-due"
-            type="muted"
-            trailingItems={<Badge type="warning">{t('Action Required')}</Badge>}
+            trailingItems={
+              <Flex align="center" height="100%">
+                <Tag variant="danger">{t('Action Required')}</Tag>
+              </Flex>
+            }
           >
             {billingPermissions
               ? tct(
@@ -987,7 +986,7 @@ class GSBanner extends Component<Props, State> {
                     ),
                   }
                 )}
-          </BannerAlert>
+          </Alert>
         </Alert.Container>
       );
     }
@@ -1009,18 +1008,16 @@ class GSBanner extends Component<Props, State> {
     // if there are deactivated members, than anyone who doesn't have org:billing will be
     // prevented from accessing this view anyways cause they will be deactivated
     if (isOverMemberLimit && !deactivatedMemberDismissed && this.hasBillingPerms) {
-      const checkoutUrl = `/settings/${organization.slug}/billing/checkout/?referrer=deactivated_member_header`;
+      const checkoutUrl = `/checkout/${organization.slug}/?referrer=deactivated_member_header`;
       const wrappedNumber = <strong>{membersDeactivatedFromLimit}</strong>;
       // only disabling members if the plan allows exactly one member
       return (
         <React.Fragment>
           {productTrialAlerts && productTrialAlerts.length > 0 && productTrialAlerts}
           <Alert.Container>
-            <BannerAlert
-              system
-              type="muted"
+            <InvertedAlert
               trailingItems={
-                <ButtonBar>
+                <Grid flow="column" align="center" gap="md">
                   <LinkButton
                     to={checkoutUrl}
                     onClick={this.handleUpgradeLinkClick}
@@ -1033,17 +1030,19 @@ class GSBanner extends Component<Props, State> {
                     onClick={this.handleSnoozeMemberDeactivatedAlert}
                     size="xs"
                     priority="default"
-                    title={t(
-                      'You can also resolve this warning by removing the deactivated members from your organization'
-                    )}
+                    tooltipProps={{
+                      title: t(
+                        'You can also resolve this warning by removing the deactivated members from your organization'
+                      ),
+                    }}
                   >
                     {t('Snooze')}
                   </Button>
-                </ButtonBar>
+                </Grid>
               }
             >
               {tct(
-                `[firstSentence] [middleSentence] Upgrade your plan to increase your limit.`,
+                '[firstSentence] [middleSentence] Upgrade your plan to increase your limit.',
                 {
                   firstSentence:
                     subscription.totalLicenses === 1
@@ -1061,7 +1060,7 @@ class GSBanner extends Component<Props, State> {
                         }),
                 }
               )}
-            </BannerAlert>
+            </InvertedAlert>
           </Alert.Container>
         </React.Fragment>
       );
@@ -1073,23 +1072,12 @@ class GSBanner extends Component<Props, State> {
 
 export default withPromotions(withApi(withSubscription(GSBanner, {noLoader: true})));
 
-// XXX: We have no alert types with this styling, but for now we would like for
-// it to be differentiated.
-const StyledBannerAlert = styled(Alert)`
-  color: ${p => p.theme.headerBackground};
-  background-color: ${p => p.theme.gray500};
-  border: none;
-`;
-
-function BannerAlert(props: AlertProps) {
+function InvertedAlert(props: Omit<AlertProps, 'system' | 'variant'>) {
   const invertedTheme = useInvertedTheme();
 
-  if (invertedTheme.isChonk) {
-    return (
-      <ThemeProvider theme={invertedTheme}>
-        <Alert {...props} />
-      </ThemeProvider>
-    );
-  }
-  return <StyledBannerAlert {...props} />;
+  return (
+    <ThemeProvider theme={invertedTheme}>
+      <Alert system variant="info" {...props} />
+    </ThemeProvider>
+  );
 }

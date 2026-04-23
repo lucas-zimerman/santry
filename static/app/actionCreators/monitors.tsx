@@ -3,12 +3,13 @@ import * as Sentry from '@sentry/react';
 import {
   addErrorMessage,
   addLoadingMessage,
+  addSuccessMessage,
   clearIndicators,
 } from 'sentry/actionCreators/indicator';
 import type {Client} from 'sentry/api';
 import {t} from 'sentry/locale';
 import type {ObjectStatus} from 'sentry/types/core';
-import type RequestError from 'sentry/utils/requestError/requestError';
+import type {RequestError} from 'sentry/utils/requestError/requestError';
 import type {Monitor, ProcessingErrorType} from 'sentry/views/insights/crons/types';
 
 export async function deleteMonitor(api: Client, orgId: string, monitor: Monitor) {
@@ -63,6 +64,14 @@ export async function updateMonitor(
       {method: 'PUT', data}
     );
     clearIndicators();
+
+    if (data.status !== undefined) {
+      const isEnabled = data.status === 'active';
+      addSuccessMessage(
+        isEnabled ? t('Cron Monitor enabled') : t('Cron Monitor disabled')
+      );
+    }
+
     return resp;
   } catch (err: any) {
     const respError: RequestError = err;
@@ -93,7 +102,7 @@ export async function setEnvironmentIsMuted(
 
   try {
     const resp = await api.requestPromise(
-      `/projects/${orgId}/${monitor.project.slug}/monitors/${monitor.slug}/environments/${environment}`,
+      `/projects/${orgId}/${monitor.project.slug}/monitors/${monitor.slug}/environments/${environment}/`,
       {method: 'PUT', data: {isMuted}}
     );
     clearIndicators();

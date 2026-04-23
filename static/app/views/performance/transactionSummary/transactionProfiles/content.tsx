@@ -1,18 +1,19 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import styled from '@emotion/styled';
 
-import {Button} from 'sentry/components/core/button';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import type {SelectOption} from 'sentry/components/core/compactSelect/types';
-import {SegmentedControl} from 'sentry/components/core/segmentedControl';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {Button} from '@sentry/scraps/button';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import type {SelectOption} from '@sentry/scraps/compactSelect';
+import {Flex} from '@sentry/scraps/layout';
+import {SegmentedControl} from '@sentry/scraps/segmentedControl';
+
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {AggregateFlamegraph} from 'sentry/components/profiling/flamegraph/aggregateFlamegraph';
 import {AggregateFlamegraphSidePanel} from 'sentry/components/profiling/flamegraph/aggregateFlamegraphSidePanel';
 import {AggregateFlamegraphTreeTable} from 'sentry/components/profiling/flamegraph/aggregateFlamegraphTreeTable';
 import {FlamegraphSearch} from 'sentry/components/profiling/flamegraph/flamegraphToolbar/flamegraphSearch';
 import {IconChevron} from 'sentry/icons/iconChevron';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {DeepPartial} from 'sentry/types/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import type {CanvasScheduler} from 'sentry/utils/profiling/canvasScheduler';
@@ -26,8 +27,10 @@ import {FlamegraphThemeProvider} from 'sentry/utils/profiling/flamegraph/flamegr
 import type {Frame} from 'sentry/utils/profiling/frame';
 import {isEventedProfile, isSampledProfile} from 'sentry/utils/profiling/guards/profile';
 import {useAggregateFlamegraphQuery} from 'sentry/utils/profiling/hooks/useAggregateFlamegraphQuery';
+import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import {useLocalStorageState} from 'sentry/utils/useLocalStorageState';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useTransactionSummaryEAP} from 'sentry/views/performance/eap/useTransactionSummaryEAP';
 import {
   FlamegraphProvider,
   useFlamegraph,
@@ -75,8 +78,24 @@ interface TransactionProfilesContentProps {
 
 export function TransactionProfilesContent(props: TransactionProfilesContentProps) {
   const organization = useOrganization();
+  const isEAP = useTransactionSummaryEAP();
+
+  const query = useMemo(() => {
+    if (!isEAP) {
+      return props.query;
+    }
+
+    // EAP and profiles disagree about the attribute for HTTP method. The
+    // transaction summary uses `request.method`, but profiles uses
+    // `http.method`.
+    const search = new MutableSearch(props.query);
+    search.renameFilter('request.method', 'http.method');
+    return search.formatString();
+  }, [props.query, isEAP]);
+
   const {data, status} = useAggregateFlamegraphQuery({
-    query: props.query,
+    query,
+    ...(isEAP ? {dataSource: 'spans' as const} : {}),
   });
 
   const [frameFilter, setFrameFilter] = useLocalStorageState<
@@ -158,7 +177,7 @@ export function TransactionProfilesContent(props: TransactionProfilesContentProp
                   expanded={showSidePanel}
                   setExpanded={setShowSidePanel}
                 />
-                <FlamegraphContainer>
+                <Flex>
                   {visualization === 'flamegraph' ? (
                     <AggregateFlamegraph
                       status={status}
@@ -178,7 +197,7 @@ export function TransactionProfilesContent(props: TransactionProfilesContentProp
                       profileType={PROFILE_TYPE}
                     />
                   )}
-                </FlamegraphContainer>
+                </Flex>
                 {status === 'pending' ? (
                   <RequestStateMessageContainer>
                     <LoadingIndicator />
@@ -232,13 +251,13 @@ function AggregateFlamegraphToolbar(props: AggregateFlamegraphToolbarProps) {
       ];
     }, []);
 
-  const onResetZoom = useCallback(() => {
+  const onResetZoom = () => {
     props.scheduler.dispatch('reset zoom');
     trackAnalytics('profiling_views.aggregate_flamegraph.zoom.reset', {
       organization,
       profile_type: 'transaction aggregate flamegraph',
     });
-  }, [props.scheduler, organization]);
+  };
 
   const onFrameFilterChange = useCallback(
     (value: {value: 'application' | 'system' | 'all'}) => {
@@ -302,16 +321,12 @@ const CollapseExpandButton = styled(Button)`
 
 function IconDoubleChevron(props: React.ComponentProps<typeof IconChevron>) {
   return (
-    <DoubleChevronWrapper>
-      <IconChevron style={{marginRight: `-3px`}} {...props} />
-      <IconChevron style={{marginLeft: `-3px`}} {...props} />
-    </DoubleChevronWrapper>
+    <Flex>
+      <IconChevron style={{marginRight: '-3px'}} {...props} />
+      <IconChevron style={{marginLeft: '-3px'}} {...props} />
+    </Flex>
   );
 }
-
-const DoubleChevronWrapper = styled('div')`
-  display: flex;
-`;
 
 const TransactionProfilesContentContainer = styled('div')`
   display: grid;
@@ -320,8 +335,8 @@ const TransactionProfilesContentContainer = styled('div')`
   grid-template-areas: 'visualization digest';
   grid-template-columns: 1fr min-content;
   flex: 1;
-  border: 1px solid ${p => p.theme.border};
-  border-radius: ${p => p.theme.borderRadius};
+  border: 1px solid ${p => p.theme.tokens.border.primary};
+  border-radius: ${p => p.theme.radius.md};
   max-height: 85vh;
 `;
 
@@ -333,10 +348,6 @@ const ProfileVisualizationContainer = styled('div')`
   position: relative;
 `;
 
-const FlamegraphContainer = styled('div')`
-  display: flex;
-`;
-
 const RequestStateMessageContainer = styled('div')`
   position: absolute;
   left: 0;
@@ -346,21 +357,21 @@ const RequestStateMessageContainer = styled('div')`
   display: flex;
   justify-content: center;
   align-items: center;
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   pointer-events: none;
 `;
 
 const AggregateFlamegraphToolbarContainer = styled('div')`
   display: flex;
   justify-content: space-between;
-  gap: ${space(1)};
-  padding: ${space(1)};
+  gap: ${p => p.theme.space.md};
+  padding: ${p => p.theme.space.md};
   /*
     force height to be the same as profile digest header,
     but subtract 1px for the border that doesnt exist on the header
    */
   height: 41px;
-  border-bottom: 1px solid ${p => p.theme.border};
+  border-bottom: 1px solid ${p => p.theme.tokens.border.primary};
 `;
 
 const ViewSelectContainer = styled('div')`
@@ -372,7 +383,7 @@ const AggregateFlamegraphSearch = styled(FlamegraphSearch)`
 `;
 
 const AggregateFlamegraphSidePanelContainer = styled('div')<{visible: boolean}>`
-  border-left: 1px solid ${p => p.theme.border};
+  border-left: 1px solid ${p => p.theme.tokens.border.primary};
   overflow-y: scroll;
   ${p => !p.visible && 'display: none;'}
 `;

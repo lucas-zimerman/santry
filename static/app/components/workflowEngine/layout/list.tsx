@@ -1,36 +1,69 @@
-import {Flex} from 'sentry/components/core/layout';
+import {Fragment} from 'react';
+
+import {Flex, Stack} from '@sentry/scraps/layout';
+
 import * as Layout from 'sentry/components/layouts/thirds';
-import {useDocumentTitle} from 'sentry/components/sentryDocumentTitle';
+import {NoProjectMessage} from 'sentry/components/noProjectMessage';
+import {PageHeadingQuestionTooltip} from 'sentry/components/pageHeadingQuestionTooltip';
+import {OnboardingBanner} from 'sentry/components/workflowEngine/ui/alertsMonitorsOnboardingBanner';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 
 interface WorkflowEngineListLayoutProps {
   actions: React.ReactNode;
   /** The main content for this page */
   children: React.ReactNode;
+  description: React.ReactNode;
+  docsUrl: string;
+  title: string;
 }
 
 /**
  * Precomposed full-width layout for Automations / Monitors index pages.
  * The `children` are rendered as the main body content.
  */
-function WorkflowEngineListLayout({children, actions}: WorkflowEngineListLayoutProps) {
-  const title = useDocumentTitle();
+export function WorkflowEngineListLayout({
+  children,
+  actions,
+  title,
+  description,
+  docsUrl,
+}: WorkflowEngineListLayoutProps) {
+  const organization = useOrganization();
+  const hasPageFrameFeature = useHasPageFrameFeature();
+
   return (
-    <Layout.Page>
-      <Layout.Header unified>
-        <Layout.HeaderContent>
-          <Layout.Title>{title}</Layout.Title>
-        </Layout.HeaderContent>
-        <Layout.HeaderActions>{actions}</Layout.HeaderActions>
-      </Layout.Header>
-      <Layout.Body>
-        <Layout.Main fullWidth>
-          <Flex direction="column" gap="lg">
-            {children}
-          </Flex>
-        </Layout.Main>
-      </Layout.Body>
-    </Layout.Page>
+    <Stack flex={1}>
+      <NoProjectMessage organization={organization}>
+        {hasPageFrameFeature ? (
+          <Fragment>
+            <TopBar.Slot name="title">
+              {title}
+              <PageHeadingQuestionTooltip docsUrl={docsUrl} title={description} />
+            </TopBar.Slot>
+            <TopBar.Slot name="actions">{actions}</TopBar.Slot>
+          </Fragment>
+        ) : (
+          <Layout.Header unified>
+            <Layout.HeaderContent>
+              <Layout.Title>
+                {title}
+                <PageHeadingQuestionTooltip docsUrl={docsUrl} title={description} />
+              </Layout.Title>
+            </Layout.HeaderContent>
+            <Layout.HeaderActions>{actions}</Layout.HeaderActions>
+          </Layout.Header>
+        )}
+        <Layout.Body>
+          <Layout.Main width="full">
+            <Flex direction="column" gap="lg">
+              <OnboardingBanner />
+              {children}
+            </Flex>
+          </Layout.Main>
+        </Layout.Body>
+      </NoProjectMessage>
+    </Stack>
   );
 }
-
-export default WorkflowEngineListLayout;

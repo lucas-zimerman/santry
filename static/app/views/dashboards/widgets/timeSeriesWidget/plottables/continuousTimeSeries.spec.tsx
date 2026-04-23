@@ -1,6 +1,6 @@
 import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
-import LineSeries from 'sentry/components/charts/series/lineSeries';
+import {LineSeries} from 'sentry/components/charts/series/lineSeries';
 
 import {ContinuousTimeSeries} from './continuousTimeSeries';
 import type {Plottable} from './plottable';
@@ -98,6 +98,17 @@ describe('ContinuousTimeSeries', () => {
 
       expect(plottable.start).toBe(1729796400000);
       expect(plottable.end).toBe(1729798200000);
+    });
+  });
+
+  describe('name', () => {
+    it('name is properly formatted', () => {
+      const timeSeries = TimeSeriesFixture({
+        groupBy: [{key: 'release', value: 'v0.0.2'}],
+      });
+
+      const plottable = new Dots(timeSeries);
+      expect(plottable.name).toBe('eps() : release : v0.0.2');
     });
   });
 });

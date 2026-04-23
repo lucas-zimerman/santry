@@ -3,11 +3,13 @@ import {useTheme, type Theme} from '@emotion/react';
 import type {Location} from 'history';
 
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
-import GridEditable, {
+import {Pagination} from 'sentry/components/pagination';
+import {
   COL_WIDTH_UNDEFINED,
+  GridEditable,
   type GridColumnHeader,
 } from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
@@ -16,7 +18,7 @@ import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
 import {RATE_UNIT_TITLE, RateUnit, type Sort} from 'sentry/utils/discover/fields';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {TransactionCell} from 'sentry/views/insights/cache/components/tables/transactionCell';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
@@ -85,7 +87,7 @@ const COLUMN_ORDER: Column[] = [
     width: COL_WIDTH_UNDEFINED,
   },
   {
-    key: `sum(span.self_time)`,
+    key: 'sum(span.self_time)',
     name: DataTitles.timeSpent,
     width: COL_WIDTH_UNDEFINED,
   },
@@ -94,7 +96,7 @@ const COLUMN_ORDER: Column[] = [
 const SORTABLE_FIELDS = [
   `${EPM}()`,
   `${CACHE_MISS_RATE}()`,
-  `sum(span.self_time)`,
+  'sum(span.self_time)',
   `avg(${CACHE_ITEM_SIZE})`,
 ] as const;
 
@@ -133,6 +135,9 @@ export function TransactionsTable({
       query: {...query, [QueryParameterNames.TRANSACTIONS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...COLUMN_ORDER],
+  });
 
   return (
     <Fragment>
@@ -141,7 +146,7 @@ export function TransactionsTable({
         isLoading={isLoading}
         error={error}
         data={data}
-        columnOrder={COLUMN_ORDER}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -158,6 +163,7 @@ export function TransactionsTable({
             }),
           renderBodyCell: (column, row) =>
             renderBodyCell(column, row, meta, location, organization, theme),
+          onResizeColumn: handleResizeColumn,
         }}
       />
 

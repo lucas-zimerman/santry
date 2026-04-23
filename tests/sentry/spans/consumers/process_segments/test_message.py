@@ -1,16 +1,19 @@
 import uuid
 from hashlib import md5
+from typing import Any
 from unittest import mock
 
 import pytest
+from sentry_conventions.attributes import ATTRIBUTE_NAMES
 
 from sentry.issues.grouptype import PerformanceStreamedSpansGroupTypeExperimental
 from sentry.models.environment import Environment
 from sentry.models.release import Release
-from sentry.spans.consumers.process_segments.message import process_segment
+from sentry.spans.consumers.process_segments.message import _verify_compatibility, process_segment
 from sentry.testutils.cases import TestCase
+from sentry.testutils.helpers.features import Feature
 from sentry.testutils.helpers.options import override_options
-from sentry.testutils.performance_issues.experiments import exclude_experimental_detectors
+from sentry.testutils.issue_detection.experiments import exclude_experimental_detectors
 from tests.sentry.spans.consumers.process import build_mock_span
 
 
@@ -23,12 +26,14 @@ class TestSpansTask(TestCase):
         segment_span = build_mock_span(
             project_id=self.project.id,
             is_segment=True,
-            data={
-                "sentry.browser.name": "Google Chrome",
-                "sentry.transaction": "/api/0/organizations/{organization_id_or_slug}/n-plus-one/",
-                "sentry.transaction.method": "GET",
-                "sentry.transaction.op": "http.server",
-                "sentry.user": "id:1",
+            attributes={
+                "sentry.browser.name": {"value": "Google Chrome"},
+                "sentry.transaction": {
+                    "value": "/api/0/organizations/{organization_id_or_slug}/n-plus-one/"
+                },
+                "sentry.transaction.method": {"value": "GET"},
+                "sentry.transaction.op": {"value": "http.server"},
+                "sentry.user": {"value": "id:1"},
             },
         )
         child_span = build_mock_span(
@@ -37,7 +42,7 @@ class TestSpansTask(TestCase):
             parent_span_id=segment_span["span_id"],
             span_id="940ce942561548b5",
             start_timestamp_ms=1707953018867,
-            start_timestamp_precise=1707953018.867,
+            start_timestamp=1707953018.867,
         )
 
         return [child_span, segment_span]
@@ -54,7 +59,7 @@ class TestSpansTask(TestCase):
             parent_span_id=segment_span["span_id"],
             span_id="940ce942561548b5",
             start_timestamp_ms=1707953018867,
-            start_timestamp_precise=1707953018.867,
+            start_timestamp=1707953018.867,
         )
         cause_span = build_mock_span(
             project_id=self.project.id,
@@ -63,7 +68,7 @@ class TestSpansTask(TestCase):
             parent_span_id="940ce942561548b5",
             span_id="a974da4671bc3857",
             start_timestamp_ms=1707953018867,
-            start_timestamp_precise=1707953018.867,
+            start_timestamp=1707953018.867,
         )
         repeating_span_description = 'SELECT "sentry_organization"."id", "sentry_organization"."name", "sentry_organization"."slug", "sentry_organization"."status", "sentry_organization"."date_added", "sentry_organization"."default_role", "sentry_organization"."is_test", "sentry_organization"."flags" FROM "sentry_organization" WHERE "sentry_organization"."id" = %s LIMIT 21'
 
@@ -75,7 +80,7 @@ class TestSpansTask(TestCase):
                 parent_span_id="940ce942561548b5",
                 span_id=uuid.uuid4().hex[:16],
                 start_timestamp_ms=1707953018869,
-                start_timestamp_precise=1707953018.869,
+                start_timestamp=1707953018.869,
             )
 
         repeating_spans = [repeating_span() for _ in range(7)]
@@ -89,19 +94,19 @@ class TestSpansTask(TestCase):
 
         assert len(processed_spans) == len(spans)
         child_span, segment_span = processed_spans
-        child_data = child_span["data"]
-        segment_data = segment_span["data"]
+        child_attrs = child_span["attributes"] or {}
+        segment_data = segment_span["attributes"] or {}
 
-        assert child_data["sentry.transaction"] == segment_data["sentry.transaction"]
-        assert child_data["sentry.transaction.method"] == segment_data["sentry.transaction.method"]
-        assert child_data["sentry.transaction.op"] == segment_data["sentry.transaction.op"]
-        assert child_data["sentry.user"] == segment_data["sentry.user"]
+        assert child_attrs["sentry.transaction"] == segment_data["sentry.transaction"]
+        assert child_attrs["sentry.transaction.method"] == segment_data["sentry.transaction.method"]
+        assert child_attrs["sentry.transaction.op"] == segment_data["sentry.transaction.op"]
+        assert child_attrs["sentry.user"] == segment_data["sentry.user"]
 
     def test_enrich_spans_no_segment(self) -> None:
         spans = self.generate_basic_spans()
         for span in spans:
             span["is_segment"] = False
-            del span["data"]
+            del span["attributes"]
 
         processed_spans = process_segment(spans)
         assert len(processed_spans) == len(spans)
@@ -123,7 +128,7 @@ class TestSpansTask(TestCase):
             organization_id=self.organization.id,
             version="backend@24.2.0.dev0+699ce0cd1281cc3c7275d0a474a595375c769ae8",
         )
-        assert release.date_added.timestamp() == spans[0]["end_timestamp_precise"]
+        assert release.date_added.timestamp() == spans[0]["end_timestamp"]
 
     @override_options({"spans.process-segments.detect-performance-problems.enable": True})
     @mock.patch("sentry.issues.ingest.send_issue_occurrence_to_eventstream")
@@ -159,7 +164,7 @@ class TestSpansTask(TestCase):
             parent_span_id="b35b839c02985f33",
             span_id="940ce942561548b5",
             start_timestamp_ms=1707953018867,
-            start_timestamp_precise=1707953018.867,
+            start_timestamp=1707953018.867,
         )
         cause_span = build_mock_span(
             project_id=self.project.id,
@@ -169,7 +174,7 @@ class TestSpansTask(TestCase):
             parent_span_id="940ce942561548b5",
             span_id="a974da4671bc3857",
             start_timestamp_ms=1707953018867,
-            start_timestamp_precise=1707953018.867,
+            start_timestamp=1707953018.867,
         )
         repeating_span_description = 'SELECT "sentry_organization"."id", "sentry_organization"."name", "sentry_organization"."slug", "sentry_organization"."status", "sentry_organization"."date_added", "sentry_organization"."default_role", "sentry_organization"."is_test", "sentry_organization"."flags" FROM "sentry_organization" WHERE "sentry_organization"."id" = %s LIMIT 21'
 
@@ -182,7 +187,7 @@ class TestSpansTask(TestCase):
                 parent_span_id="940ce942561548b5",
                 span_id=uuid.uuid4().hex[:16],
                 start_timestamp_ms=1707953018869,
-                start_timestamp_precise=1707953018.869,
+                start_timestamp=1707953018.869,
             )
 
         repeating_spans = [repeating_span() for _ in range(7)]
@@ -226,9 +231,9 @@ class TestSpansTask(TestCase):
             project_id=self.project.id,
             is_segment=True,
             span_op="http.client",
-            data={
-                "sentry.op": "http.client",
-                "sentry.category": "http",
+            attributes={
+                "sentry.op": {"value": "http.client"},
+                "sentry.category": {"value": "http"},
             },
         )
         spans = process_segment([span])
@@ -236,3 +241,232 @@ class TestSpansTask(TestCase):
 
         signals = [args[0][1] for args in mock_track.call_args_list]
         assert signals == ["has_transactions", "has_insights_http"]
+        assert "has_insights_agent_monitoring" not in signals
+
+    @mock.patch("sentry.spans.consumers.process_segments.message.set_project_flag_and_signal")
+    def test_record_signals_agents_via_gen_ai_op_name(self, mock_track):
+        """Test that spans with gen_ai.operation.name attribute trigger agents insight."""
+        span = build_mock_span(
+            project_id=self.project.id,
+            is_segment=True,
+            span_op="http.client",
+            attributes={
+                "sentry.op": {"value": "http.client"},
+                "gen_ai.operation.name": {"value": "chat"},
+            },
+        )
+        spans = process_segment([span])
+        assert len(spans) == 1
+
+        signals = [args[0][1] for args in mock_track.call_args_list]
+        assert signals == ["has_transactions", "has_insights_agent_monitoring"]
+
+    def test_segment_name_propagation(self) -> None:
+        child_span, segment_span = self.generate_basic_spans()
+        segment_span["name"] = "my segment name"
+
+        processed_spans = process_segment([child_span, segment_span])
+
+        assert len(processed_spans) == 2
+        child_span, segment_span = processed_spans
+        segment_attributes = segment_span["attributes"] or {}
+        assert segment_attributes["sentry.segment.name"] == {
+            "type": "string",
+            "value": "my segment name",
+        }
+        child_attributes = child_span["attributes"] or {}
+        assert child_attributes["sentry.segment.name"] == {
+            "type": "string",
+            "value": "my segment name",
+        }
+
+    def test_segment_name_propagation_when_name_missing(self) -> None:
+        child_span, segment_span = self.generate_basic_spans()
+        del segment_span["name"]
+
+        processed_spans = process_segment([child_span, segment_span])
+
+        assert len(processed_spans) == 2
+        child_span, segment_span = processed_spans
+        segment_attributes = segment_span["attributes"] or {}
+        assert segment_attributes.get("sentry.segment.name") is None
+        child_attributes = child_span["attributes"] or {}
+        assert child_attributes.get("sentry.segment.name") is None
+
+    @mock.patch("sentry.spans.consumers.process_segments.message.record_segment_name")
+    def test_segment_name_normalization_with_feature(
+        self, mock_record_segment_name: mock.MagicMock
+    ):
+        _, segment_span = self.generate_basic_spans()
+        segment_span["name"] = "/foo/2fd4e1c67a2d28fced849ee1bb76e7391b93eb12/user/123/0"
+
+        with self.feature("organizations:normalize_segment_names_in_span_enrichment"):
+            processed_spans = process_segment([segment_span])
+
+        assert processed_spans[0]["name"] == "/foo/*/user/*/0"
+        mock_record_segment_name.assert_called_once()
+
+    @mock.patch("sentry.spans.consumers.process_segments.message.record_segment_name")
+    def test_segment_name_normalization_without_feature(
+        self, mock_record_segment_name: mock.MagicMock
+    ):
+        _, segment_span = self.generate_basic_spans()
+        segment_span["name"] = "/foo/2fd4e1c67a2d28fced849ee1bb76e7391b93eb12/user/123/0"
+
+        with Feature({"organizations:normalize_segment_names_in_span_enrichment": False}):
+            processed_spans = process_segment([segment_span])
+
+        assert (
+            processed_spans[0]["name"] == "/foo/2fd4e1c67a2d28fced849ee1bb76e7391b93eb12/user/123/0"
+        )
+        mock_record_segment_name.assert_not_called()
+
+    def test_segment_name_normalization_checks_source(self) -> None:
+        _, segment_span = self.generate_basic_spans()
+        segment_span["name"] = "/foo/2fd4e1c67a2d28fced849ee1bb76e7391b93eb12/user/123/0"
+        segment_span["attributes"][ATTRIBUTE_NAMES.SENTRY_SPAN_SOURCE] = {
+            "type": "string",
+            "value": "route",
+        }
+
+        with self.feature("organizations:normalize_segment_names_in_span_enrichment"):
+            processed_spans = process_segment([segment_span])
+
+        assert (
+            processed_spans[0]["name"] == "/foo/2fd4e1c67a2d28fced849ee1bb76e7391b93eb12/user/123/0"
+        )
+
+
+def test_verify_compatibility() -> None:
+    spans: list[dict[str, Any]] = [
+        # regular span:
+        {"data": {"foo": 1}},
+        # valid compat span:
+        {"data": {"foo": 1}, "attributes": {"foo": {"value": 1}}},
+        # invalid compat spans:
+        {"data": {"foo": 1}, "attributes": {"value": {"foo": "2"}}},
+        {"data": {"bar": 1}, "attributes": None},
+        {"data": {"baz": 1}, "attributes": {}},
+        {"data": {"zap": 1}, "attributes": {"zap": {"no_value": "1"}}},
+        {"data": {"abc": 1}, "attributes": {"abc": None}},
+    ]
+    result = _verify_compatibility(spans)
+    assert len(result) == len(spans)
+    assert [v is None for v in result] == [True, True, False, False, False, False, False]
+
+
+@exclude_experimental_detectors
+class TestSkipEnrichmentKillswitch(TestCase):
+    def setUp(self) -> None:
+        self.project = self.create_project()
+
+    @mock.patch(
+        "sentry.spans.consumers.process_segments.message.TreeEnricher.enrich_spans",
+        wraps=None,
+    )
+    def test_skip_enrichment_by_project_id(self, mock_enrich: mock.MagicMock) -> None:
+        """Test that enrichment is skipped and spans are still returned when project_id matches killswitch."""
+        segment_span = build_mock_span(
+            project_id=self.project.id,
+            is_segment=True,
+        )
+        child_span = build_mock_span(
+            project_id=self.project.id,
+            parent_span_id=segment_span["span_id"],
+        )
+
+        with override_options(
+            {"spans.process-segments.skip-enrichment-projects": [self.project.id]}
+        ):
+            processed_spans = process_segment([child_span, segment_span])
+
+        mock_enrich.assert_not_called()
+        assert len(processed_spans) == 2
+
+    @mock.patch(
+        "sentry.spans.consumers.process_segments.message.TreeEnricher.enrich_spans",
+    )
+    def test_no_skip_enrichment_for_other_project(self, mock_enrich: mock.MagicMock) -> None:
+        """Test that enrichment is not skipped when project_id does not match the option."""
+        mock_enrich.return_value = (None, [])
+        segment_span = build_mock_span(
+            project_id=self.project.id,
+            is_segment=True,
+        )
+        child_span = build_mock_span(
+            project_id=self.project.id,
+            parent_span_id=segment_span["span_id"],
+        )
+
+        with override_options(
+            {"spans.process-segments.skip-enrichment-projects": [self.project.id + 1]}
+        ):
+            process_segment([child_span, segment_span])
+
+        mock_enrich.assert_called_once()
+
+    @mock.patch(
+        "sentry.spans.consumers.process_segments.message.TreeEnricher.enrich_spans",
+        wraps=None,
+    )
+    def test_skip_enrichment_flag(self, mock_enrich: mock.MagicMock) -> None:
+        """Test that enrichment is skipped when skip_enrichment=True is passed."""
+        segment_span = build_mock_span(
+            project_id=self.project.id,
+            is_segment=True,
+        )
+        child_span = build_mock_span(
+            project_id=self.project.id,
+            parent_span_id=segment_span["span_id"],
+        )
+
+        processed_spans = process_segment([child_span, segment_span], skip_enrichment=True)
+
+        mock_enrich.assert_not_called()
+        assert len(processed_spans) == 2
+
+    @mock.patch(
+        "sentry.spans.consumers.process_segments.message.TreeEnricher.enrich_spans",
+    )
+    def test_no_skip_enrichment_when_flag_is_false(self, mock_enrich: mock.MagicMock) -> None:
+        """Test that enrichment runs normally when skip_enrichment=False."""
+        mock_enrich.return_value = (None, [])
+        segment_span = build_mock_span(
+            project_id=self.project.id,
+            is_segment=True,
+        )
+        child_span = build_mock_span(
+            project_id=self.project.id,
+            parent_span_id=segment_span["span_id"],
+        )
+
+        process_segment([child_span, segment_span], skip_enrichment=False)
+
+        mock_enrich.assert_called_once()
+
+
+@exclude_experimental_detectors
+class TestSegmentDropKillswitch(TestCase):
+    def setUp(self) -> None:
+        self.project = self.create_project()
+
+    def test_drop_segment_by_org_id(self) -> None:
+        """Test that segments are dropped when org_id matches killswitch."""
+        segment_span = build_mock_span(
+            project_id=self.project.id,
+            is_segment=True,
+        )
+        child_span = build_mock_span(
+            project_id=self.project.id,
+            parent_span_id=segment_span["span_id"],
+        )
+
+        with override_options(
+            {
+                "spans.process-segments.drop-segments": [
+                    {"org_id": str(self.project.organization_id)}
+                ]
+            }
+        ):
+            processed_spans = process_segment([child_span, segment_span])
+            assert len(processed_spans) == 0

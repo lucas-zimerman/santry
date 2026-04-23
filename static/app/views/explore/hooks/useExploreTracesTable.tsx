@@ -1,36 +1,47 @@
-import {useMemo} from 'react';
+import type {UseQueryResult} from '@tanstack/react-query';
 
+import type {CaseInsensitive} from 'sentry/components/searchQueryBuilder/hooks';
+import type {ApiResponse} from 'sentry/utils/api/apiFetch';
+import type {QueryError} from 'sentry/utils/discover/genericDiscoverQuery';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {useLocation} from 'sentry/utils/useLocation';
-import {useTraces} from 'sentry/views/explore/hooks/useTraces';
+import {
+  type TraceResults,
+  useTracesApiOptions,
+} from 'sentry/views/explore/hooks/useTraces';
 
 interface UseExploreTracesTableOptions {
-  enabled: boolean;
   limit: number;
   query: string;
+  queryExtras?: {
+    caseInsensitive?: CaseInsensitive;
+    logQuery?: string[];
+    metricQuery?: string[];
+    spanQuery?: string[];
+  };
 }
 
-export interface TracesTableResult {
-  result: ReturnType<typeof useTraces>;
-}
+export type TracesTableResult = {
+  error: QueryError | null;
+  result: UseQueryResult<ApiResponse<TraceResults>, Error>;
+};
 
-export function useExploreTracesTable({
-  enabled,
+export function useExploreTracesTableApiOptions({
   limit,
   query,
-}: UseExploreTracesTableOptions): TracesTableResult {
+  queryExtras,
+}: UseExploreTracesTableOptions) {
   const location = useLocation();
   const cursor = decodeScalar(location.query.cursor);
 
-  const result = useTraces({
-    enabled,
+  return useTracesApiOptions({
     query,
     limit,
     sort: '-timestamp',
     cursor,
+    caseInsensitive: queryExtras?.caseInsensitive,
+    logQuery: queryExtras?.logQuery,
+    metricQuery: queryExtras?.metricQuery,
+    spanQuery: queryExtras?.spanQuery,
   });
-
-  return useMemo(() => {
-    return {result};
-  }, [result]);
 }

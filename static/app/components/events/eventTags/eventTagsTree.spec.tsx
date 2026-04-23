@@ -1,7 +1,5 @@
 import {EventFixture} from 'sentry-fixture/event';
-import {LocationFixture} from 'sentry-fixture/locationFixture';
 import {OrganizationFixture} from 'sentry-fixture/organization';
-import {RouterFixture} from 'sentry-fixture/routerFixture';
 
 import {initializeOrg} from 'sentry-test/initializeOrg';
 import {
@@ -76,12 +74,10 @@ describe('EventTagsTree', () => {
   it('renders tag tree', async () => {
     render(<EventTags projectSlug={project.slug} event={event} />, {
       organization,
-      deprecatedRouterMocks: true,
     });
     expect(mockDetailedProject).toHaveBeenCalled();
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-    tags.forEach(({value}) => {
+    expect(await screen.findByText(tags[0]!.value)).toBeInTheDocument();
+    tags.slice(1).forEach(({value}) => {
       expect(screen.getByText(value)).toBeInTheDocument();
     });
 
@@ -132,12 +128,9 @@ describe('EventTagsTree', () => {
     });
     render(<EventTags projectSlug={project.slug} event={releaseEvent} />, {
       organization,
-      deprecatedRouterMocks: true,
     });
     expect(mockDetailedProject).toHaveBeenCalled();
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-    const versionText = screen.getByText<
+    const versionText = await screen.findByText<
       HTMLElement & {parentElement: HTMLAnchorElement}
     >(releaseVersion);
     const anchorLink = versionText.parentElement;
@@ -157,7 +150,7 @@ describe('EventTagsTree', () => {
       validateLink: () => {
         const linkElement = screen.getByRole('link', {name: 'abc123'});
         const href = linkElement.attributes.getNamedItem('href');
-        expect(href?.value).toContain(`/organizations/org-slug/insights/summary/`);
+        expect(href?.value).toContain('/organizations/org-slug/insights/summary/');
         expect(href?.value).toContain(`project=${project.id}`);
         expect(href?.value).toContain('transaction=abc123');
         expect(href?.value).toContain(`referrer=${referrer}`);
@@ -190,12 +183,9 @@ describe('EventTagsTree', () => {
       const uniqueTagsEvent = EventFixture({tags: [tag], projectID: project.id});
       render(<EventTags projectSlug={project.slug} event={uniqueTagsEvent} />, {
         organization,
-        deprecatedRouterMocks: true,
       });
       expect(mockDetailedProject).toHaveBeenCalled();
-      expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-      const dropdown = screen.getByLabelText('Tag Actions Menu');
+      const dropdown = await screen.findByLabelText('Tag Actions Menu');
       await userEvent.click(dropdown);
       expect(screen.getByLabelText(labelText)).toBeInTheDocument();
       await (validateLink as () => Promise<void>)();
@@ -238,13 +228,10 @@ describe('EventTagsTree', () => {
     });
     render(<EventTags projectSlug={project.slug} event={errorTagEvent} />, {
       organization,
-      deprecatedRouterMocks: true,
     });
     expect(mockDetailedProject).toHaveBeenCalled();
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
     // Should only be one dropdown, others have errors
-    const dropdown = screen.getByLabelText('Tag Actions Menu');
+    const dropdown = await screen.findByLabelText('Tag Actions Menu');
     expect(dropdown).toBeInTheDocument();
 
     const errorRows = screen.queryAllByTestId('tag-tree-row-errors');
@@ -261,12 +248,9 @@ describe('EventTagsTree', () => {
     });
     render(<EventTags projectSlug={project.slug} event={uniqueTagsEvent} />, {
       organization,
-      deprecatedRouterMocks: true,
     });
     expect(mockDetailedProject).toHaveBeenCalled();
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-    expect(screen.getByText('boring-tag', {selector: 'div'})).toBeInTheDocument();
+    expect(await screen.findByText('boring-tag', {selector: 'div'})).toBeInTheDocument();
     expect(screen.getByText('boring tag')).toBeInTheDocument();
     expect(screen.queryByText('null tag')).not.toBeInTheDocument();
     expect(screen.queryByText('undefined tag')).not.toBeInTheDocument();
@@ -287,14 +271,11 @@ describe('EventTagsTree', () => {
     });
     render(<EventTags projectSlug={highlightProject.slug} event={highlightsEvent} />, {
       organization,
-      deprecatedRouterMocks: true,
     });
     expect(mockHighlightProject).toHaveBeenCalled();
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-    const normalTagRow = screen
-      .getByText('useless-tag', {selector: 'div'})
-      .closest('div[data-test-id=tag-tree-row]') as HTMLElement;
+    const normalTagRow = (
+      await screen.findByText('useless-tag', {selector: 'div'})
+    ).closest('div[data-test-id=tag-tree-row]') as HTMLElement;
     const normalTagDropdown = within(normalTagRow).getByLabelText('Tag Actions Menu');
     await userEvent.click(normalTagDropdown);
     expect(screen.getByLabelText('Add to event highlights')).toBeInTheDocument();
@@ -327,14 +308,11 @@ describe('EventTagsTree', () => {
     });
     render(<EventTags projectSlug={highlightProject.slug} event={highlightsEvent} />, {
       organization: readAccessOrganization,
-      deprecatedRouterMocks: true,
     });
     expect(mockHighlightProject).toHaveBeenCalled();
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-    const normalTagRow = screen
-      .getByText('useless-tag', {selector: 'div'})
-      .closest('div[data-test-id=tag-tree-row]') as HTMLElement;
+    const normalTagRow = (
+      await screen.findByText('useless-tag', {selector: 'div'})
+    ).closest('div[data-test-id=tag-tree-row]') as HTMLElement;
     const normalTagDropdown = within(normalTagRow).getByLabelText('Tag Actions Menu');
     await userEvent.click(normalTagDropdown);
     expect(screen.queryByLabelText('Add to event highlights')).not.toBeInTheDocument();
@@ -344,22 +322,20 @@ describe('EventTagsTree', () => {
     const highlightsEvent = EventFixture({
       tags: [{key: 'useless-tag', value: 'not so much'}],
     });
-    const issueDetailsRouter = RouterFixture({
-      location: LocationFixture({
-        pathname: `/organizations/${organization.slug}/issues/${event.groupID}/`,
-      }),
-    });
 
     render(<EventTags projectSlug={project.slug} event={highlightsEvent} />, {
       organization,
-      router: issueDetailsRouter,
-      deprecatedRouterMocks: true,
+      initialRouterConfig: {
+        location: {
+          pathname: `/organizations/${organization.slug}/issues/${event.groupID}/`,
+          query: {},
+        },
+        route: '/organizations/:orgId/issues/:groupId/',
+      },
     });
-    expect(await screen.findByTestId('loading-indicator')).not.toBeInTheDocument();
-
-    const normalTagRow = screen
-      .getByText('useless-tag', {selector: 'div'})
-      .closest('div[data-test-id=tag-tree-row]') as HTMLElement;
+    const normalTagRow = (
+      await screen.findByText('useless-tag', {selector: 'div'})
+    ).closest('div[data-test-id=tag-tree-row]') as HTMLElement;
     const normalTagDropdown = within(normalTagRow).getByLabelText('Tag Actions Menu');
     await userEvent.click(normalTagDropdown);
     expect(await screen.findByLabelText('Tag breakdown')).toBeInTheDocument();

@@ -3,20 +3,55 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import orjson
+from drf_spectacular.utils import extend_schema
+from rest_framework import serializers, status
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.request import Request
 from rest_framework.response import Response
 
+from sentry import features
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
+from sentry.api.helpers.deprecation import deprecated
+from sentry.api.serializers.rest_framework import CamelSnakeSerializer
+from sentry.apidocs.constants import (
+    RESPONSE_BAD_REQUEST,
+    RESPONSE_FORBIDDEN,
+    RESPONSE_NOT_FOUND,
+    RESPONSE_UNAUTHORIZED,
+)
+from sentry.apidocs.examples.autofix_examples import AutofixExamples
+from sentry.apidocs.parameters import GlobalParams, IssueParams
+from sentry.apidocs.utils import inline_sentry_response_serializer
+from sentry.constants import CELL_API_DEPRECATION_DATE
 from sentry.integrations.models.repository_project_path_config import RepositoryProjectPathConfig
 from sentry.issues.auto_source_code_config.code_mapping import get_sorted_code_mapping_configs
 from sentry.issues.endpoints.bases.group import GroupAiEndpoint
 from sentry.models.group import Group
+from sentry.models.organization import Organization
 from sentry.models.repository import Repository
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.seer.autofix.autofix import trigger_autofix
-from sentry.seer.autofix.utils import get_autofix_state
+from sentry.seer.autofix.autofix_agent import (
+    AutofixStep,
+    NoSeerQuotaException,
+    get_autofix_explorer_state,
+    trigger_autofix_explorer,
+    trigger_coding_agent_handoff,
+    trigger_push_changes,
+)
+from sentry.seer.autofix.coding_agent import (
+    poll_claude_code_agents,
+    poll_github_copilot_agents,
+)
+from sentry.seer.autofix.constants import AutofixReferrer
+from sentry.seer.autofix.types import AutofixPostResponse, AutofixStateResponse
+from sentry.seer.autofix.utils import (
+    AutofixStoppingPoint,
+    CodingAgentProviderType,
+    get_autofix_state,
+)
 from sentry.seer.models import SeerPermissionError
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.users.services.user.service import user_service
@@ -24,43 +59,349 @@ from sentry.utils.cache import cache
 
 logger = logging.getLogger(__name__)
 
-from rest_framework.request import Request
+
+class AutofixRequestSerializer(CamelSnakeSerializer):
+    event_id = serializers.CharField(
+        required=False,
+        help_text="Run issue fix on a specific event. If not provided, the recommended event for the issue will be used.",
+    )
+    instruction = serializers.CharField(
+        required=False,
+        help_text="Optional custom instruction to guide the issue fix process.",
+        allow_blank=True,
+    )
+    pr_to_comment_on_url = serializers.URLField(
+        required=False, help_text="URL of a pull request where the issue fix should add comments."
+    )
+    stopping_point = serializers.ChoiceField(
+        required=False,
+        choices=["root_cause", "solution", "code_changes", "open_pr"],
+        help_text="Where the issue fix process should stop. If not provided, will run to root cause.",
+    )
 
 
-@region_silo_endpoint
+class ExplorerAutofixRequestSerializer(CamelSnakeSerializer):
+    """Serializer for Explorer-based autofix requests."""
+
+    step = serializers.ChoiceField(
+        required=False,
+        choices=[
+            "root_cause",
+            "solution",
+            "code_changes",
+            "open_pr",
+            "impact_assessment",
+            "triage",
+            "coding_agent_handoff",
+        ],
+        default="root_cause",
+        help_text="Which autofix step to run.",
+    )
+    stopping_point = serializers.ChoiceField(
+        required=False,
+        choices=["root_cause", "solution", "code_changes", "open_pr"],
+        help_text="Where the issue fix process should stop. If not provided, will run to root cause.",
+    )
+    run_id = serializers.IntegerField(
+        required=False,
+        help_text="Existing run ID to continue. If not provided, starts a new run.",
+    )
+    integration_id = serializers.IntegerField(
+        required=False,
+        help_text="Coding agent integration ID. Required for coding_agent_handoff step (unless provider is specified).",
+    )
+    provider = serializers.CharField(
+        required=False,
+        help_text="Coding agent provider (e.g., 'github_copilot'). Alternative to integration_id for user-authenticated providers.",
+    )
+    intelligence_level = serializers.ChoiceField(
+        required=False,
+        choices=["low", "medium", "high"],
+        default="medium",
+        help_text="The intelligence level to use.",
+    )
+    user_context = serializers.CharField(
+        required=False,
+        max_length=1000,
+        help_text="Optional user context to append to the step prompt.",
+        allow_blank=True,
+    )
+    repo_name = serializers.CharField(
+        required=False,
+        help_text="Optional repository name for which to create the pull request. Do not pass a repository name to create pull requests in all relevant repositories.",
+    )
+    insert_index = serializers.IntegerField(
+        required=False,
+        help_text="Block index to insert at. When provided, truncates blocks after this point for retry-from-step.",
+    )
+
+    def validate(self, data: dict[str, Any]) -> dict[str, Any]:
+        stopping_point = data.get("stopping_point", None)
+        # Stopping points take precedence and forces full automation from `root_cause`
+        if stopping_point:
+            data["step"] = "root_cause"
+        return data
+
+
+@cell_silo_endpoint
+@extend_schema(tags=["Seer"])
 class GroupAutofixEndpoint(GroupAiEndpoint):
     publish_status = {
-        "POST": ApiPublishStatus.EXPERIMENTAL,
-        "GET": ApiPublishStatus.EXPERIMENTAL,
+        "POST": ApiPublishStatus.PUBLIC,
+        "GET": ApiPublishStatus.PUBLIC,
     }
     owner = ApiOwner.ML_AI
     enforce_rate_limit = True
-    rate_limits = {
-        "POST": {
-            RateLimitCategory.IP: RateLimit(limit=25, window=60),
-            RateLimitCategory.USER: RateLimit(limit=25, window=60),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=100, window=60 * 60),  # 1 hour
-        },
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=1024, window=60),
-            RateLimitCategory.USER: RateLimit(limit=1024, window=60),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=8192, window=60),
-        },
-    }
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "POST": {
+                RateLimitCategory.IP: RateLimit(limit=25, window=60),
+                RateLimitCategory.USER: RateLimit(limit=25, window=60),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=100, window=60 * 60),  # 1 hour
+            },
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=1024, window=60),
+                RateLimitCategory.USER: RateLimit(limit=1024, window=60),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=8192, window=60),
+            },
+        }
+    )
 
+    def _should_use_explorer(self, request: Request, organization: Organization) -> bool:
+        """Check if explorer mode should be used based on query params and feature flags."""
+        if request.GET.get("mode") != "explorer":
+            return False
+
+        feature_names = [
+            # Access to seer explorer
+            "organizations:seer-explorer",
+            # Access to seer explorer powered autofix
+            "organizations:autofix-on-explorer",
+        ]
+
+        batch_features = features.batch_has(
+            feature_names,
+            organization=organization,
+            actor=request.user,
+        )
+
+        if batch_features is None:
+            return False
+
+        org_features = batch_features.get(f"organization:{organization.id}", {})
+        for feature_name in feature_names:
+            if bool(org_features.get(feature_name)):
+                return True
+
+        return False
+
+    @extend_schema(
+        operation_id="Start Seer Issue Fix",
+        parameters=[
+            GlobalParams.ORG_ID_OR_SLUG,
+            IssueParams.ISSUES_OR_GROUPS,
+            IssueParams.ISSUE_ID,
+        ],
+        request=AutofixRequestSerializer,
+        responses={
+            202: inline_sentry_response_serializer("AutofixPostResponse", AutofixPostResponse),
+            400: RESPONSE_BAD_REQUEST,
+            401: RESPONSE_UNAUTHORIZED,
+            403: RESPONSE_FORBIDDEN,
+            404: RESPONSE_NOT_FOUND,
+        },
+        examples=AutofixExamples.AUTOFIX_POST_RESPONSE,
+    )
+    @deprecated(CELL_API_DEPRECATION_DATE, url_names=["sentry-api-0-group-autofix"])
     def post(self, request: Request, group: Group) -> Response:
-        data = orjson.loads(request.body)
+        """
+        Trigger a Seer Issue Fix run for a specific issue.
+
+        The issue fix process can:
+        - Identify the root cause of the issue
+        - Propose a solution
+        - Generate code changes
+        - Create a pull request with the fix
+
+        The process runs asynchronously, and you can get the state using the GET endpoint.
+        """
+        if self._should_use_explorer(request, group.organization):
+            return self._post_explorer(request, group)
+        return self._post_legacy(request, group)
+
+    def _post_explorer(self, request: Request, group: Group) -> Response:
+        """Handle POST for Explorer-based autofix."""
+        serializer = ExplorerAutofixRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        step = data.get("step", "root_cause")
+        stopping_point = data.get("stopping_point")
+        run_id = data.get("run_id")
+
+        # Handle third-party coding agent handoff separately
+        if step == "coding_agent_handoff":
+            integration_id = data.get("integration_id")
+            provider = data.get("provider")
+            if not run_id or (not integration_id and not provider):
+                return Response(
+                    {
+                        "detail": "run_id and either integration_id or provider are required for coding_agent_handoff"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if integration_id and provider:
+                return Response(
+                    {"detail": "Cannot specify both integration_id and provider"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            result = trigger_coding_agent_handoff(
+                group=group,
+                run_id=run_id,
+                referrer=AutofixReferrer.GROUP_AUTOFIX_ENDPOINT,
+                integration_id=integration_id,
+                provider=provider,
+                user_id=request.user.id if request.user else None,
+            )
+            return Response(result, status=status.HTTP_202_ACCEPTED)
+
+        if step == "open_pr":
+            if not run_id:
+                return Response(
+                    {"detail": "run_id is required for open_pr"}, status=status.HTTP_400_BAD_REQUEST
+                )
+            repo_name = data.get("repo_name")
+            try:
+                trigger_push_changes(
+                    group,
+                    run_id,
+                    referrer=AutofixReferrer.GROUP_AUTOFIX_ENDPOINT,
+                    repo_name=repo_name,
+                )
+            except SeerPermissionError:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+            return Response({"run_id": run_id}, status=status.HTTP_202_ACCEPTED)
+
+        # Handle all built-in Seer steps
+        try:
+            run_id = trigger_autofix_explorer(
+                group=group,
+                step=AutofixStep(step),
+                referrer=AutofixReferrer.GROUP_AUTOFIX_ENDPOINT,
+                stopping_point=AutofixStoppingPoint(stopping_point) if stopping_point else None,
+                run_id=run_id,
+                intelligence_level=data["intelligence_level"],
+                user_context=data.get("user_context"),
+                insert_index=data.get("insert_index"),
+            )
+            return Response({"run_id": run_id}, status=status.HTTP_202_ACCEPTED)
+        except NoSeerQuotaException:
+            return Response("No budget for Seer Autofix.", status=status.HTTP_402_PAYMENT_REQUIRED)
+        except SeerPermissionError as e:
+            raise PermissionDenied(str(e))
+
+    def _post_legacy(self, request: Request, group: Group) -> Response:
+        """Handle POST for legacy autofix."""
+        serializer = AutofixRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+
+        stopping_point = data.get("stopping_point")
+        stopping_point = AutofixStoppingPoint(stopping_point) if stopping_point else None
 
         return trigger_autofix(
             group=group,
             # This event_id is the event that the user is looking at when they click the "Fix" button
-            event_id=data.get("event_id", None),
+            event_id=data.get("event_id"),
             user=request.user,
-            instruction=data.get("instruction", None),
-            pr_to_comment_on_url=data.get("pr_to_comment_on_url", None),
+            referrer=AutofixReferrer.GROUP_AUTOFIX_ENDPOINT,
+            instruction=data.get("instruction"),
+            pr_to_comment_on_url=data.get("pr_to_comment_on_url"),
+            stopping_point=stopping_point,
         )
 
+    @extend_schema(
+        operation_id="Retrieve Seer Issue Fix State",
+        parameters=[
+            GlobalParams.ORG_ID_OR_SLUG,
+            IssueParams.ISSUES_OR_GROUPS,
+            IssueParams.ISSUE_ID,
+        ],
+        responses={
+            200: inline_sentry_response_serializer("AutofixStateResponse", AutofixStateResponse),
+            401: RESPONSE_UNAUTHORIZED,
+            403: RESPONSE_FORBIDDEN,
+            404: RESPONSE_NOT_FOUND,
+        },
+        examples=AutofixExamples.AUTOFIX_GET_RESPONSE,
+    )
+    @deprecated(CELL_API_DEPRECATION_DATE, url_names=["sentry-api-0-group-autofix"])
     def get(self, request: Request, group: Group) -> Response:
+        """
+        Retrieve the current detailed state of an issue fix process for a specific issue including:
+
+        - Current status
+        - Steps performed and their outcomes
+        - Repository information and permissions
+        - Root Cause Analysis
+        - Proposed Solution
+        - Generated code changes
+
+        This endpoint although documented is still experimental and the payload may change in the future.
+        """
+        if self._should_use_explorer(request, group.organization):
+            return self._get_explorer(request, group)
+        return self._get_legacy(request, group)
+
+    def _get_explorer(self, request: Request, group: Group) -> Response:
+        """Handle GET for Explorer-based autofix."""
+        try:
+            state = get_autofix_explorer_state(group.organization, group.id)
+        except SeerPermissionError as e:
+            raise PermissionDenied(str(e))
+
+        if state is None:
+            return Response({"autofix": None})
+
+        if state.coding_agents and request.user.id:
+            agent_providers = {a.provider for a in state.coding_agents.values()}
+            if CodingAgentProviderType.GITHUB_COPILOT_AGENT in agent_providers:
+                poll_github_copilot_agents(
+                    coding_agents=state.coding_agents, user_id=request.user.id
+                )
+            if CodingAgentProviderType.CLAUDE_CODE_AGENT in agent_providers:
+                poll_claude_code_agents(
+                    coding_agents=state.coding_agents,
+                    organization_id=group.organization.id,
+                )
+
+        # Return the Explorer state directly - frontend will handle the format
+        return Response(
+            {
+                "autofix": {
+                    "run_id": state.run_id,
+                    "status": state.status,
+                    "blocks": [block.dict() for block in state.blocks],
+                    "updated_at": state.updated_at,
+                    "pending_user_input": (
+                        state.pending_user_input.dict() if state.pending_user_input else None
+                    ),
+                    "repo_pr_states": {
+                        repo: pr_state.dict() for repo, pr_state in state.repo_pr_states.items()
+                    },
+                    "coding_agents": {
+                        agent_id: agent.dict() for agent_id, agent in state.coding_agents.items()
+                    },
+                }
+            }
+        )
+
+    def _get_legacy(self, request: Request, group: Group) -> Response:
+        """Handle GET for legacy autofix."""
         access_check_cache_key = f"autofix_access_check:{group.id}"
         access_check_cache_value = cache.get(access_check_cache_key)
 
@@ -84,6 +425,13 @@ class GroupAutofixEndpoint(GroupAiEndpoint):
             )
 
             raise PermissionDenied("You are not authorized to access this autofix state")
+
+        if autofix_state and autofix_state.coding_agents and request.user.id:
+            agent_providers = {a.provider for a in autofix_state.coding_agents.values()}
+            if CodingAgentProviderType.GITHUB_COPILOT_AGENT in agent_providers:
+                poll_github_copilot_agents(autofix_state, user_id=request.user.id)
+            if CodingAgentProviderType.CLAUDE_CODE_AGENT in agent_providers:
+                poll_claude_code_agents(autofix_state=autofix_state)
 
         if check_repo_access:
             cache.set(access_check_cache_key, True, timeout=60)  # 1 minute timeout

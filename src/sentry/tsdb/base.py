@@ -188,7 +188,7 @@ class BaseTSDB(Service):
         self.__legacy_rollups = legacy_rollups
 
     def validate_arguments(
-        self, models: list[TSDBModel], environment_ids: Iterable[int | None]
+        self, models: Sequence[TSDBModel], environment_ids: Iterable[int | None]
     ) -> None:
         if any(e is not None for e in environment_ids):
             unsupported_models = set(models) - self.models_with_environment_support
@@ -488,7 +488,6 @@ class BaseTSDB(Service):
         group_on_time: bool = True,
         project_ids: Sequence[int] | None = None,
     ) -> Mapping[TSDBKey, int]:
-
         raise NotImplementedError
 
     def get_sums(

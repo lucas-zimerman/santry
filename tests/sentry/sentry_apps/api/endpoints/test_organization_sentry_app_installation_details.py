@@ -4,13 +4,23 @@ import responses
 from django.urls import reverse
 
 from sentry import audit_log
-from sentry.constants import SentryAppInstallationStatus
+from sentry.analytics.events.sentry_app_installation_updated import (
+    SentryAppInstallationUpdatedEvent,
+)
+from sentry.analytics.events.sentry_app_uninstalled import SentryAppUninstalledEvent
+from sentry.constants import ObjectStatus, SentryAppInstallationStatus
+from sentry.deletions.tasks.scheduled import run_scheduled_deletions_control
 from sentry.models.auditlogentry import AuditLogEntry
+from sentry.notifications.models.notificationaction import ActionTarget
+from sentry.sentry_apps.models.sentry_app_installation import SentryAppInstallation
 from sentry.sentry_apps.token_exchange.grant_exchanger import GrantExchanger
 from sentry.testutils.cases import APITestCase
+from sentry.testutils.helpers.analytics import assert_last_analytics_event
+from sentry.testutils.outbox import outbox_runner
 from sentry.testutils.silo import control_silo_test
 from sentry.users.services.user.service import user_service
 from sentry.utils import json
+from sentry.workflow_engine.models.action import Action
 
 
 class SentryAppInstallationDetailsTest(APITestCase):
@@ -61,7 +71,11 @@ class GetSentryAppInstallationDetailsTest(SentryAppInstallationDetailsTest):
 
         assert response.status_code == 200, response.content
         assert response.data == {
-            "app": {"uuid": self.unpublished_app.uuid, "slug": self.unpublished_app.slug},
+            "app": {
+                "uuid": self.unpublished_app.uuid,
+                "slug": self.unpublished_app.slug,
+                "sentryAppId": self.unpublished_app.id,
+            },
             "organization": {"slug": self.org.slug, "id": self.org.id},
             "uuid": self.installation2.uuid,
             "status": "pending",
@@ -76,7 +90,11 @@ class GetSentryAppInstallationDetailsTest(SentryAppInstallationDetailsTest):
 
         assert response.status_code == 200, response.content
         assert response.data == {
-            "app": {"uuid": self.unpublished_app.uuid, "slug": self.unpublished_app.slug},
+            "app": {
+                "uuid": self.unpublished_app.uuid,
+                "slug": self.unpublished_app.slug,
+                "sentryAppId": self.unpublished_app.id,
+            },
             "organization": {"slug": self.org.slug, "id": self.org.id},
             "uuid": self.installation2.uuid,
             "code": self.installation2.api_grant.code,
@@ -106,12 +124,35 @@ class DeleteSentryAppInstallationDetailsTest(SentryAppInstallationDetailsTest):
         assert AuditLogEntry.objects.filter(
             event=audit_log.get_event_id("SENTRY_APP_UNINSTALL")
         ).exists()
-        record.assert_called_with(
-            "sentry_app.uninstalled",
-            user_id=self.user.id,
-            organization_id=self.org.id,
-            sentry_app=self.installation2.sentry_app.slug,
+        assert_last_analytics_event(
+            record,
+            SentryAppUninstalledEvent(
+                user_id=self.user.id,
+                organization_id=self.org.id,
+                sentry_app=self.installation2.sentry_app.slug,
+            ),
         )
+
+        action = self.create_action(
+            type=Action.Type.SENTRY_APP,
+            config={
+                "target_identifier": str(self.installation2.sentry_app_id),
+                "target_type": ActionTarget.SENTRY_APP,
+            },
+        )
+        dcg = self.create_data_condition_group(organization=self.org)
+        self.create_data_condition_group_action(action=action, condition_group=dcg)
+
+        with self.tasks():
+            run_scheduled_deletions_control()
+
+        with outbox_runner():
+            pass
+
+        action.refresh_from_db()
+        assert action.status == ObjectStatus.DISABLED
+
+        assert not SentryAppInstallation.objects.filter(id=self.installation2.id).exists()
 
         response_body = json.loads(responses.calls[0].request.body)
 
@@ -155,11 +196,13 @@ class MarkInstalledSentryAppInstallationsTest(SentryAppInstallationDetailsTest):
         assert response.status_code == 200
         assert response.data["status"] == "installed"
 
-        record.assert_called_with(
-            "sentry_app_installation.updated",
-            sentry_app_installation_id=self.installation.id,
-            sentry_app_id=self.installation.sentry_app.id,
-            organization_id=self.installation.organization_id,
+        assert_last_analytics_event(
+            record,
+            SentryAppInstallationUpdatedEvent(
+                sentry_app_installation_id=self.installation.id,
+                sentry_app_id=self.installation.sentry_app.id,
+                organization_id=self.installation.organization_id,
+            ),
         )
         self.installation.refresh_from_db()
         assert self.installation.status == SentryAppInstallationStatus.INSTALLED

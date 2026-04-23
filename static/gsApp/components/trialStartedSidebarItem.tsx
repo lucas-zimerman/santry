@@ -1,94 +1,90 @@
-import {Component} from 'react';
-import type {Theme} from '@emotion/react';
-import {css, withTheme} from '@emotion/react';
+import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
 import styled from '@emotion/styled';
-import {motion} from 'framer-motion';
+
+import {Button} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
 
 import type {Client} from 'sentry/api';
-import {Button} from 'sentry/components/core/button';
 import {Hovercard} from 'sentry/components/hovercard';
 import {IconBusiness} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
-import testableTransition from 'sentry/utils/testableTransition';
-import withApi from 'sentry/utils/withApi';
-import {prefersStackedNav} from 'sentry/views/nav/prefersStackedNav';
+import {useOnClickOutside} from 'sentry/utils/useOnClickOutside';
+import {withApi} from 'sentry/utils/withApi';
 
-import TrialRequestedActions from 'getsentry/actions/trialRequestedActions';
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
-import TrialRequestedStore from 'getsentry/stores/trialRequestedStore';
+import {TrialRequestedActions} from 'getsentry/actions/trialRequestedActions';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
+import {TrialRequestedStore} from 'getsentry/stores/trialRequestedStore';
 import type {Subscription} from 'getsentry/types';
 import {hasJustStartedPlanTrial} from 'getsentry/utils/billing';
-import TrialBadge from 'getsentry/views/subscriptionPage/trial/badge';
+import {TrialBadge} from 'getsentry/views/subscriptionPage/trial/badge';
 
 type Props = {
   api: Client;
   children: React.ReactNode;
   organization: Organization;
   subscription: Subscription;
-  theme: Theme;
   className?: string;
 };
 
-type State = {
-  animationComplete: boolean;
-  trialRequested: boolean;
-};
-
-class TrialStartedSidebarItem extends Component<Props, State> {
-  state: State = {
-    animationComplete: !!hasJustStartedPlanTrial(this.props.subscription),
-    trialRequested: TrialRequestedStore.getTrialRequstedState(),
-  };
-
-  componentWillUnmount() {
-    this.unsubscribe();
-  }
-
-  unsubscribe = TrialRequestedStore.listen(
-    () => this.setState({trialRequested: TrialRequestedStore.getTrialRequstedState()}),
-    undefined
+function TrialStartedSidebarItem({subscription, organization, children}: Props) {
+  const [animationComplete, setAnimationComplete] = useState<boolean>(
+    !!hasJustStartedPlanTrial(subscription)
+  );
+  const [trialRequested, setTrialRequested] = useState<boolean>(
+    TrialRequestedStore.getTrialRequstedState()
   );
 
-  dismissNotification = () => {
-    SubscriptionStore.clearStartedTrial(this.props.organization.slug);
+  useEffect(() => {
+    const unsubscribe = TrialRequestedStore.listen(
+      () => setTrialRequested(TrialRequestedStore.getTrialRequstedState()),
+      undefined
+    );
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const dismissNotification = () => {
+    SubscriptionStore.clearStartedTrial(organization.slug);
     TrialRequestedActions.clearNotification();
   };
+  // Dismiss trial started when user clicks outside of trial requested or started hovercard
+  const hovercardBodyRef = useRef<HTMLDivElement>(null);
+  useOnClickOutside(hovercardBodyRef, dismissNotification);
 
-  renderTrialStartedHovercardBody() {
+  const renderTrialStartedHovercardBody = () => {
     return (
-      <HovercardBody>
+      <HovercardBody ref={hovercardBodyRef}>
         <HovercardHeader>
           <div>{t('Trial Started')}</div>
-          <TrialBadge
-            subscription={this.props.subscription}
-            organization={this.props.organization}
-          />
+          <TrialBadge subscription={subscription} organization={organization} />
         </HovercardHeader>
         <p>{t('Check out these great new features')}</p>
 
         <Bullets>
-          <IconBusiness gradient />
+          <IconBusiness />
           {t('Application Insights')}
-          <IconBusiness gradient />
+          <IconBusiness />
           {t('Dashboards')}
-          <IconBusiness gradient />
+          <IconBusiness />
           {t('Advanced Discover Queries')}
-          <IconBusiness gradient />
+          <IconBusiness />
           {t('Additional Integrations')}
         </Bullets>
 
-        <Button onClick={this.dismissNotification} size="xs">
-          {t('Awesome, got it!')}
-        </Button>
+        <Flex justify="end">
+          <Button onClick={dismissNotification} size="xs">
+            {t('Awesome, got it!')}
+          </Button>
+        </Flex>
       </HovercardBody>
     );
-  }
+  };
 
-  renderTrialRequestedHovercardBody() {
+  const renderTrialRequestedHovercardBody = () => {
     return (
-      <HovercardBody>
+      <HovercardBody ref={hovercardBodyRef}>
         <HovercardHeader>{t('Trial Requested')}</HovercardHeader>
         <p>
           {t(
@@ -96,157 +92,62 @@ class TrialStartedSidebarItem extends Component<Props, State> {
           )}
         </p>
 
-        <Button onClick={this.dismissNotification} size="xs">
-          {t('Awesome, got it!')}
-        </Button>
+        <Flex justify="end">
+          <Button onClick={dismissNotification} size="xs">
+            {t('Awesome, got it!')}
+          </Button>
+        </Flex>
       </HovercardBody>
     );
-  }
+  };
 
-  renderWithHovercard(hovercardBody: React.ReactNode) {
-    const prefersNewNav = prefersStackedNav(this.props.organization);
-
+  const renderWithHovercard = (hovercardBody: React.ReactNode) => {
     return (
-      <StyledHovercard
-        forceVisible
-        position="right"
-        body={hovercardBody}
-        prefersNewNav={prefersNewNav}
-      >
-        {this.props.children}
+      <StyledHovercard forceVisible position="right" body={hovercardBody}>
+        {children}
       </StyledHovercard>
     );
-  }
+  };
 
-  get trialRequestedOrStarted() {
-    const {trialRequested} = this.state;
-    return hasJustStartedPlanTrial(this.props.subscription) || trialRequested;
-  }
+  const trialRequestedOrStarted = useMemo(() => {
+    return hasJustStartedPlanTrial(subscription) || trialRequested;
+  }, [subscription, trialRequested]);
 
-  render() {
-    const {animationComplete, trialRequested} = this.state;
-    const {className, theme} = this.props;
-
-    const animate =
-      animationComplete && !this.trialRequestedOrStarted
-        ? 'dismissed'
-        : this.trialRequestedOrStarted
-          ? 'started'
-          : 'initial';
-
-    let children = this.props.children;
-
-    if (animationComplete) {
-      if (hasJustStartedPlanTrial(this.props.subscription)) {
-        children = this.renderWithHovercard(this.renderTrialStartedHovercardBody());
-      } else if (trialRequested) {
-        children = this.renderWithHovercard(this.renderTrialRequestedHovercardBody());
-      }
+  useEffect(() => {
+    if (trialRequestedOrStarted && !animationComplete) {
+      const timer = setTimeout(() => setAnimationComplete(true), 1850);
+      return () => clearTimeout(timer);
     }
+    return undefined;
+  }, [trialRequestedOrStarted, animationComplete]);
 
-    const prefersNewNav = prefersStackedNav(this.props.organization);
+  let wrappedChildren = children;
 
-    const content = (
-      <Wrapper
-        className={className}
-        initial={animate}
-        onAnimationComplete={() =>
-          setTimeout(() => this.setState({animationComplete: true}), 500)
-        }
-        animate={animate}
-        variants={{
-          initial: {
-            backgroundImage: `linear-gradient(-45deg, ${theme.purple400} 0%, transparent 0%)`,
-          },
-          started: {
-            backgroundImage: `linear-gradient(-45deg, ${theme.purple400} 100%, transparent 0%)`,
-
-            // We flip the gradient direction so that on dismiss we can animate in the
-            // opposite direction.
-            transitionEnd: {
-              backgroundImage: `linear-gradient(45deg, ${theme.purple400} 100%, transparent 0%)`,
-            },
-
-            color: theme.button.primary.color,
-
-            transition: testableTransition({
-              duration: 0.35,
-              delay: 1,
-            }),
-          },
-          dismissed: {
-            backgroundImage: `linear-gradient(-45deg, ${theme.purple400} 0%, transparent 0%)`,
-          },
-        }}
-      >
-        {children}
-      </Wrapper>
-    );
-
-    if (prefersNewNav) {
-      return content;
+  if (animationComplete) {
+    if (hasJustStartedPlanTrial(subscription)) {
+      wrappedChildren = renderWithHovercard(renderTrialStartedHovercardBody());
+    } else if (trialRequested) {
+      wrappedChildren = renderWithHovercard(renderTrialRequestedHovercardBody());
     }
-
-    return <BoxShadowHider>{content}</BoxShadowHider>;
   }
+
+  return <Fragment>{wrappedChildren}</Fragment>;
 }
-
-const startedStyle = (theme: Theme) => css`
-  transition: box-shadow 200ms;
-
-  button,
-  button:hover {
-    color: inherit;
-  }
-
-  &:hover a {
-    color: ${theme.button.primary.color};
-  }
-
-  &:hover {
-    box-shadow: 0 0 8px ${theme.purple400};
-  }
-`;
-
-const Wrapper = styled(motion.div)`
-  margin: 0 -20px 0 -5px;
-  padding: 0 20px 0 5px;
-  border-radius: 4px 0 0 4px;
-  ${p => p.animate === 'started' && startedStyle(p.theme)}
-
-  /* This is needed to fix positioning of the hovercard, since it wraps a
-   * inline span, the span has no size and the position is incorrectly
-   * computed, causing the hovercard to appear far from the nav item */
-  span[aria-describedby] {
-    display: block;
-  }
-`;
-
-const BoxShadowHider = styled('div')`
-  margin: -20px;
-  padding: 20px;
-  overflow: hidden;
-`;
 
 // We specifically set the z-index lower than the modal here, since it will be
 // common to start a trial with the upsell modal open.
-const StyledHovercard = styled(Hovercard)<{prefersNewNav: boolean}>`
+const StyledHovercard = styled(Hovercard)`
   width: 310px;
   z-index: ${p => p.theme.zIndex.modal - 1};
-  ${p =>
-    !p.prefersNewNav &&
-    css`
-      margin-left: 30px;
-    `}
 `;
 
 const HovercardBody = styled('div')`
   h1 {
-    font-size: ${p => p.theme.fontSize.lg};
-    margin-bottom: ${space(1.5)};
+    font-size: ${p => p.theme.font.size.lg};
+    margin-bottom: ${p => p.theme.space.lg};
   }
   p {
-    font-size: ${p => p.theme.fontSize.md};
+    font-size: ${p => p.theme.font.size.md};
   }
 `;
 
@@ -254,16 +155,16 @@ const Bullets = styled('div')`
   display: grid;
   grid-template-columns: max-content 1fr;
   grid-auto-rows: max-content;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   align-items: center;
-  font-size: ${p => p.theme.fontSize.md};
-  margin-bottom: ${space(2)};
+  font-size: ${p => p.theme.font.size.md};
+  margin-bottom: ${p => p.theme.space.xl};
 `;
 
 const HovercardHeader = styled('h1')`
   display: flex;
-  gap: ${space(1)};
+  gap: ${p => p.theme.space.md};
   align-items: center;
 `;
 
-export default withApi(withTheme(TrialStartedSidebarItem));
+export default withApi(TrialStartedSidebarItem);

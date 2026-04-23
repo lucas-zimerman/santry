@@ -10,11 +10,12 @@ from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import Endpoint, region_silo_endpoint
+from sentry.api.base import Endpoint, cell_silo_endpoint
 from sentry.integrations.jira_server.utils import handle_assignee_change, handle_status_change
 from sentry.integrations.services.integration.model import RpcIntegration
 from sentry.integrations.services.integration.service import integration_service
 from sentry.integrations.utils.scope import clear_tags_and_context
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.shared_integrations.exceptions import ApiError
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 from sentry.utils import jwt, metrics
@@ -49,20 +50,22 @@ def get_integration_from_token(token: str | None) -> RpcIntegration:
     return integration
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class JiraServerIssueUpdatedWebhook(Endpoint):
     owner = ApiOwner.INTEGRATIONS
     publish_status = {
         "POST": ApiPublishStatus.PRIVATE,
     }
 
-    rate_limits = {
-        "POST": {
-            RateLimitCategory.IP: RateLimit(limit=100, window=1),
-            RateLimitCategory.USER: RateLimit(limit=100, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=100, window=1),
-        },
-    }
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "POST": {
+                RateLimitCategory.IP: RateLimit(limit=100, window=1),
+                RateLimitCategory.USER: RateLimit(limit=100, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=100, window=1),
+            },
+        }
+    )
 
     authentication_classes = ()
     permission_classes = ()
@@ -97,7 +100,6 @@ class JiraServerIssueUpdatedWebhook(Endpoint):
         except (ApiError, ObjectDoesNotExist) as err:
             extra.update({"token": token, "error": str(err)})
             logger.info("sync-failed", extra=extra)
-            logger.exception("Invalid token.")
             return self.respond(status=400)
         else:
             return self.respond()

@@ -1,5 +1,8 @@
-import {Button} from 'sentry/components/core/button';
-import {ExternalLink} from 'sentry/components/core/link';
+import {Fragment} from 'react';
+
+import {Button} from '@sentry/scraps/button';
+import {ExternalLink} from '@sentry/scraps/link';
+
 import {OnboardingCodeSnippet} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCodeSnippet';
 import type {
   DocsParams,
@@ -7,9 +10,10 @@ import type {
 } from 'sentry/components/onboarding/gettingStartedDoc/types';
 import {IconCopy} from 'sentry/icons/iconCopy';
 import {t, tct} from 'sentry/locale';
+import type {ProjectKey} from 'sentry/types/project';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {getSourceMapsWizardSnippet} from 'sentry/utils/getSourceMapsWizardSnippet';
-import useCopyToClipboard from 'sentry/utils/useCopyToClipboard';
+import {useCopyToClipboard} from 'sentry/utils/useCopyToClipboard';
 
 export function getUploadSourceMapsStep({
   guideLink,
@@ -78,41 +82,101 @@ export function getUploadSourceMapsStep({
   };
 }
 
-function CopyRulesButton({rules}: {rules: string}) {
-  const {onClick} = useCopyToClipboard({text: rules});
+const SENTRY_FOR_AI_BASE_URL =
+  'https://github.com/getsentry/sentry-for-ai/blob/main/skills';
+
+function CopyPromptButton({prompt}: {prompt: string}) {
+  const {copy} = useCopyToClipboard();
   return (
-    <Button size="xs" icon={<IconCopy />} onClick={onClick}>
-      {t('Copy Rules')}
+    <Button
+      size="xs"
+      icon={<IconCopy />}
+      onClick={() => copy(prompt, {successMessage: t('Prompt copied to clipboard')})}
+    >
+      {t('Copy Prompt')}
     </Button>
   );
 }
 
-export function getAIRulesForCodeEditorStep({rules}: {rules: string}): OnboardingStep {
+export function getAISetupStep({skillPath}: {skillPath: string}): OnboardingStep {
+  const skillUrl = `${SENTRY_FOR_AI_BASE_URL}/${skillPath}/SKILL.md`;
+  const prompt = `Read and follow: ${skillUrl}`;
+
   return {
     collapsible: true,
-    title: t('AI Rules for Code Editors (Optional)'),
-    trailingItems: <CopyRulesButton rules={rules} />,
+    title: t('AI-Assisted Setup (Optional)'),
+    trailingItems: <CopyPromptButton prompt={prompt} />,
     content: [
       {
         type: 'text',
-        text: tct(
-          'Sentry provides a set of rules you can use to help your LLM use Sentry correctly. Copy this file and add it to your projects rules configuration. When created as a rules file this should be placed alongside other editor specific rule files. For example, if you are using Cursor, place this file in the [code:.cursorrules] directory.',
-          {
-            code: <code />,
-          }
+        text: t(
+          'If you want your AI coding assistant to help you set up Sentry, copy this prompt and paste it into your agent:'
         ),
       },
       {
         type: 'code',
         tabs: [
           {
-            label: 'Markdown',
-            language: 'md',
-            filename: 'rules.md',
-            code: rules,
+            label: 'Prompt',
+            language: 'text',
+            code: prompt,
           },
         ],
       },
     ],
   };
+}
+
+function CopyDsnButton({
+  dsn,
+  onCopyDsn,
+}: {
+  dsn: ProjectKey['dsn'];
+  onCopyDsn?: () => void;
+}) {
+  const {copy} = useCopyToClipboard();
+
+  return (
+    <Button
+      size="xs"
+      icon={<IconCopy />}
+      onClick={() =>
+        copy(dsn.public, {successMessage: t('DSN copied to clipboard')}).then(onCopyDsn)
+      }
+    >
+      {t('Copy DSN')}
+    </Button>
+  );
+}
+
+export function injectCopyDsnButtonIntoFirstConfigureStep({
+  configureSteps,
+  dsn,
+  onCopyDsn,
+}: {
+  configureSteps: OnboardingStep[];
+  dsn: ProjectKey['dsn'];
+  onCopyDsn?: () => void;
+}): OnboardingStep[] {
+  const [firstStep, ...otherSteps] = configureSteps;
+
+  if (!firstStep) {
+    return configureSteps;
+  }
+
+  const copyDsnButton = <CopyDsnButton dsn={dsn} onCopyDsn={onCopyDsn} />;
+
+  const firstStepWithDsnButton: OnboardingStep = {
+    ...firstStep,
+    trailingItems: firstStep.trailingItems ? (
+      <Fragment>
+        {copyDsnButton}
+        {firstStep.trailingItems}
+      </Fragment>
+    ) : (
+      copyDsnButton
+    ),
+  };
+
+  return [firstStepWithDsnButton, ...otherSteps];
 }

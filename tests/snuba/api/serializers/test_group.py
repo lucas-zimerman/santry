@@ -22,7 +22,6 @@ from sentry.notifications.types import NotificationSettingsOptionEnum
 from sentry.silo.base import SiloMode
 from sentry.testutils.cases import APITestCase, PerformanceIssueTestCase, SnubaTestCase
 from sentry.testutils.helpers.datetime import before_now
-from sentry.testutils.helpers.features import with_feature
 from sentry.testutils.silo import assume_test_silo_mode
 from sentry.types.group import PriorityLevel
 from sentry.users.models.user_option import UserOption
@@ -406,9 +405,9 @@ class GroupSerializerSnubaTest(APITestCase, SnubaTestCase):
         assert result["count"] == "3"
         # result is rounded down to nearest second
         assert result["lastSeen"] == self.min_ago.replace(microsecond=0)
-        assert result["firstSeen"] == group_env.first_seen
+        assert result["firstSeen"] == group_env2.first_seen
         assert group_env2.first_seen is not None
-        assert group_env2.first_seen > group_env.first_seen
+        assert group_env2.first_seen < group_env.first_seen
         assert result["userCount"] == 3
 
         result = serialize(
@@ -471,13 +470,6 @@ class GroupSerializerSnubaTest(APITestCase, SnubaTestCase):
         assert result["id"] == str(group.id)
 
     def test_issue_category(self) -> None:
-        group = self.create_group(type=PerformanceNPlusOneGroupType.type_id)
-        result = serialize(group, self.user, serializer=GroupSerializerSnuba())
-
-        assert result["issueCategory"] == GroupCategory.PERFORMANCE.name.lower()
-
-    @with_feature("organizations:issue-taxonomy")
-    def test_issue_category_v2(self) -> None:
         group = self.create_group(type=PerformanceNPlusOneGroupType.type_id)
         result = serialize(group, self.user, serializer=GroupSerializerSnuba())
 

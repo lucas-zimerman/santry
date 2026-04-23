@@ -4,10 +4,12 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.response import Response
+from sentry_protos.snuba.v1.trace_item_attribute_pb2 import AttributeKey, AttributeValue
+from sentry_protos.snuba.v1.trace_item_filter_pb2 import ComparisonFilter, TraceItemFilter
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.serializers import EventSerializer, SimpleEventSerializer, serialize
 from sentry.api.serializers.models.event import SimpleEventSerializerResponse
@@ -18,26 +20,29 @@ from sentry.apidocs.parameters import CursorQueryParam, EventParams, GlobalParam
 from sentry.apidocs.utils import inline_sentry_response_serializer
 from sentry.exceptions import InvalidParams
 from sentry.models.project import Project
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.services import eventstore
 from sentry.snuba.events import Columns
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
 @extend_schema(tags=["Events"])
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectEventsEndpoint(ProjectEndpoint):
     owner = ApiOwner.ISSUES
     publish_status = {
         "GET": ApiPublishStatus.PUBLIC,
     }
     enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=60, window=60, concurrent_limit=1),
-            RateLimitCategory.USER: RateLimit(limit=60, window=60, concurrent_limit=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=60, window=60, concurrent_limit=2),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=60, window=60, concurrent_limit=1),
+                RateLimitCategory.USER: RateLimit(limit=60, window=60, concurrent_limit=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=60, window=60, concurrent_limit=2),
+            }
         }
-    }
+    )
 
     @extend_schema(
         operation_id="List a Project's Error Events",
@@ -69,8 +74,18 @@ class ProjectEventsEndpoint(ProjectEndpoint):
 
         query = request.GET.get("query")
         conditions = []
+        eap_conditions = TraceItemFilter()
         if query:
             conditions.append([["positionCaseInsensitive", ["message", f"'{query}'"]], "!=", 0])
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            eap_conditions = TraceItemFilter(
+                comparison_filter=ComparisonFilter(
+                    key=AttributeKey(name="message", type=AttributeKey.TYPE_STRING),
+                    op=ComparisonFilter.OP_LIKE,
+                    value=AttributeValue(val_str=f"%{escaped}%"),
+                    ignore_case=True,
+                )
+            )
 
         try:
             start, end = get_date_range_from_params(
@@ -92,6 +107,7 @@ class ProjectEventsEndpoint(ProjectEndpoint):
         data_fn = partial(
             eventstore.backend.get_events,
             filter=event_filter,
+            eap_conditions=eap_conditions,
             referrer="api.project-events",
             tenant_ids={"organization_id": project.organization_id},
         )

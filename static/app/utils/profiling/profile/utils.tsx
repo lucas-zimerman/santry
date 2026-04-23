@@ -5,7 +5,7 @@ import {defined} from 'sentry/utils';
 import type {FlamegraphFrame} from 'sentry/utils/profiling/flamegraphFrame';
 import {Frame} from 'sentry/utils/profiling/frame';
 
-type FrameIndex = Record<string | number, Frame>;
+export type FrameIndex = Record<string | number, Frame>;
 
 export function createContinuousProfileFrameIndex(
   frames: Profiling.SentryContinousProfileChunk['profile']['frames'],
@@ -216,35 +216,6 @@ export function memoizeByReference<Arguments, Value>(
   };
 }
 
-export function memoizeVariadicByReference<
-  T extends (...args: any[]) => V,
-  V = ReturnType<T>,
->(fn: T): (...t: Parameters<T>) => V {
-  let cache: Cache<Parameters<T>, V> | null = null;
-
-  return function memoizeByReferenceCallback(...args: Parameters<T>): V {
-    // If this is the first run then eval the fn and cache the result
-    if (!cache) {
-      cache = {args, value: fn(...args)};
-      return cache.value;
-    }
-    // If args match by reference, then return cached value
-    if (
-      cache.args.length === args.length &&
-      cache.args.length !== 0 &&
-      args.length !== 0 &&
-      args.every((arg, i) => arg === cache?.args[i])
-    ) {
-      return cache.value;
-    }
-
-    // Else eval the fn and store the new value
-    cache.args = args;
-    cache.value = fn(...args);
-    return cache.value;
-  };
-}
-
 export function wrapWithSpan<T>(
   parentSpan: Span | undefined,
   fn: () => T,
@@ -358,7 +329,7 @@ export function sortProfileSamples<S extends SortableProfileSample>(
   frames: Readonly<Profiling.SentrySampledProfile['profile']['frames']>,
   frameFilter?: (i: number) => boolean
 ) {
-  const frameIds = [...new Array(frames.length).keys()].sort((a, b) => {
+  const frameIds = [...Array.from({length: frames.length}).keys()].sort((a, b) => {
     const frameA = frames[a]!;
     const frameB = frames[b]!;
 
@@ -393,13 +364,10 @@ export function sortProfileSamples<S extends SortableProfileSample>(
     return 0;
   });
 
-  const framesMapping = frameIds.reduce(
-    (acc, frameId, idx) => {
-      acc[frameId] = idx;
-      return acc;
-    },
-    {} as Record<string, number>
-  );
+  const framesMapping = frameIds.reduce<Record<string, number>>((acc, frameId, idx) => {
+    acc[frameId] = idx;
+    return acc;
+  }, {});
 
   return [...samples].sort((a, b) => {
     // same stack id, these are the same

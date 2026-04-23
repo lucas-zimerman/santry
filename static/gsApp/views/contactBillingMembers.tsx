@@ -1,21 +1,22 @@
 import {Fragment} from 'react';
+import {useQuery} from '@tanstack/react-query';
 
-import EmptyMessage from 'sentry/components/emptyMessage';
-import Panel from 'sentry/components/panels/panel';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
+import {Panel} from 'sentry/components/panels/panel';
 import {IconWarning} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
 import type {Member} from 'sentry/types/organization';
-import {useApiQuery} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
+import {apiOptions} from 'sentry/utils/api/apiOptions';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 function HelpfulMembers() {
   const organization = useOrganization();
-  const {data: billingMembers} = useApiQuery<Member[]>(
-    [
-      `/organizations/${organization.slug}/members/`,
-      {query: {query: 'scope:"org:billing"'}},
-    ],
-    {staleTime: 0}
+  const {data: billingMembers} = useQuery(
+    apiOptions.as<Member[]>()('/organizations/$organizationIdOrSlug/members/', {
+      path: {organizationIdOrSlug: organization.slug},
+      query: {query: 'scope:"org:billing"'},
+      staleTime: 0,
+    })
   );
 
   if (!billingMembers || billingMembers.length === 0) {
@@ -36,23 +37,13 @@ function HelpfulMembers() {
   );
 }
 
-function ContactBillingMembers() {
+export function ContactBillingMembers() {
   return (
     <Panel data-test-id="permission-denied">
-      <EmptyMessage
-        title={t('Insufficient Access')}
-        icon={<IconWarning size="xl" />}
-        description={
-          <Fragment>
-            <p>
-              {t("You don't have access to manage billing and subscription details.")}
-            </p>
-            <HelpfulMembers />
-          </Fragment>
-        }
-      />
+      <EmptyMessage title={t('Insufficient Access')} icon={<IconWarning />}>
+        <p>{t("You don't have access to manage billing and subscription details.")}</p>
+        <HelpfulMembers />
+      </EmptyMessage>
     </Panel>
   );
 }
-
-export default ContactBillingMembers;

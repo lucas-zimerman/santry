@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {getThreadPoolInfoContext} from 'sentry/components/events/contexts/knownContext/threadPoolInfo';
 
 const MOCK_THREAD_POOL_INFO_CONTEXT = {
@@ -83,8 +83,8 @@ describe('ThreadPoolInfoContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'threadpool_info'}
-        alias={'threadpool_info'}
+        type="threadpool_info"
+        alias="threadpool_info"
         value={{...MOCK_THREAD_POOL_INFO_CONTEXT, max_worker_threads: ''}}
       />
     );

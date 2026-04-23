@@ -53,7 +53,7 @@ from sentry.users.models.user import User
 from sentry.users.services.user.model import RpcUser
 
 if TYPE_CHECKING:
-    from sentry.api.serializers.models.organization import OrganizationSerializerResponse
+    from sentry.api.serializers.models.organization import OrganizationSummarySerializerResponse
 
 STATUS_LABELS = {
     ObjectStatus.ACTIVE: "active",
@@ -63,6 +63,7 @@ STATUS_LABELS = {
 }
 
 STATS_PERIOD_CHOICES = {
+    "90d": StatsPeriod(90, timedelta(days=1)),
     "30d": StatsPeriod(30, timedelta(hours=24)),
     "14d": StatsPeriod(14, timedelta(hours=24)),
     "7d": StatsPeriod(7, timedelta(hours=24)),
@@ -74,13 +75,13 @@ _PROJECT_SCOPE_PREFIX = "projects:"
 
 LATEST_DEPLOYS_KEY: Final = "latestDeploys"
 UNUSED_ON_FRONTEND_FEATURES: Final = "unusedFeatures"
+ORGANIZATION_KEY: Final = "organization"
 
 
 # These features are not used on the frontend,
 # and add a lot of latency ~100-300ms per flag for large organizations
 # so we exclude them from the response if the unusedFeatures collapse parameter is set
 PROJECT_FEATURES_NOT_USED_ON_FRONTEND = {
-    "profiling-ingest-unsampled-profiles",
     "discard-transaction",
     "first-event-severity-calculation",
     "alert-filters",
@@ -257,6 +258,14 @@ def get_has_logs(project: Project) -> bool:
     return True
 
 
+# Determines hasTraceMetrics based on SENTRY_MODE for SAAS use flags, otherwise (single tenant and self hosted) skip onboarding
+# This is because has_trace_metrics is currently set via the outcomes consumer, which doesn't run in all envs.
+def get_has_trace_metrics(project: Project) -> bool:
+    if settings.SENTRY_MODE == SentryMode.SAAS:
+        return bool(project.flags.has_trace_metrics)
+    return True
+
+
 class _ProjectSerializerOptionalBaseResponse(TypedDict, total=False):
     stats: Any
     transactionStats: Any
@@ -292,10 +301,10 @@ class ProjectSerializerBaseResponse(_ProjectSerializerOptionalBaseResponse):
     hasInsightsVitals: bool
     hasInsightsCaches: bool
     hasInsightsQueues: bool
-    hasInsightsLlmMonitoring: bool
     hasInsightsAgentMonitoring: bool
     hasInsightsMCP: bool
     hasLogs: bool
+    hasTraceMetrics: bool
 
 
 class ProjectSerializerResponse(ProjectSerializerBaseResponse):
@@ -562,10 +571,10 @@ class ProjectSerializer(Serializer):
             "hasInsightsVitals": bool(obj.flags.has_insights_vitals),
             "hasInsightsCaches": bool(obj.flags.has_insights_caches),
             "hasInsightsQueues": bool(obj.flags.has_insights_queues),
-            "hasInsightsLlmMonitoring": bool(obj.flags.has_insights_llm_monitoring),
             "hasInsightsAgentMonitoring": bool(obj.flags.has_insights_agent_monitoring),
             "hasInsightsMCP": bool(obj.flags.has_insights_mcp),
             "hasLogs": get_has_logs(obj),
+            "hasTraceMetrics": get_has_trace_metrics(obj),
             "isInternal": obj.is_internal_project(),
             "isPublic": obj.public,
             # Projects don't have avatar uploads, but we need to maintain the payload shape for
@@ -799,10 +808,10 @@ class ProjectSummarySerializer(ProjectWithTeamSerializer):
             hasInsightsVitals=bool(obj.flags.has_insights_vitals),
             hasInsightsCaches=bool(obj.flags.has_insights_caches),
             hasInsightsQueues=bool(obj.flags.has_insights_queues),
-            hasInsightsLlmMonitoring=bool(obj.flags.has_insights_llm_monitoring),
             hasInsightsAgentMonitoring=bool(obj.flags.has_insights_agent_monitoring),
             hasInsightsMCP=bool(obj.flags.has_insights_mcp),
             hasLogs=get_has_logs(obj),
+            hasTraceMetrics=get_has_trace_metrics(obj),
             platform=obj.platform,
             platforms=attrs["platforms"],
             latestRelease=attrs["latest_release"],
@@ -943,7 +952,7 @@ class DetailedProjectResponse(ProjectWithTeamResponseDict):
     secondaryGroupingExpiry: int
     secondaryGroupingConfig: str | None
     fingerprintingRules: str
-    organization: OrganizationSerializerResponse
+    organization: OrganizationSummarySerializerResponse
     plugins: list[Plugin]
     platforms: list[str]
     processingIssues: int
@@ -954,9 +963,10 @@ class DetailedProjectResponse(ProjectWithTeamResponseDict):
     symbolSources: str
     isDynamicallySampled: bool
     tempestFetchScreenshots: NotRequired[bool]
-    tempestFetchDumps: NotRequired[bool]
     autofixAutomationTuning: NotRequired[str]
     seerScannerAutomation: NotRequired[bool]
+    seerNightshiftTweaks: NotRequired[Any]
+    scmSourceContextEnabled: NotRequired[bool]
     debugFilesRole: NotRequired[str | None]
 
 
@@ -971,7 +981,16 @@ class DetailedProjectSerializer(ProjectWithTeamSerializer):
         for option in queryset.iterator():
             options_by_project[option.project_id][option.key] = option.value
 
-        orgs = {d["id"]: d for d in serialize(list({i.organization for i in item_list}), user)}
+        if self._collapse(ORGANIZATION_KEY):
+            orgs = {
+                str(i.organization_id): {
+                    "id": str(i.organization_id),
+                    "slug": i.organization.slug,
+                }
+                for i in item_list
+            }
+        else:
+            orgs = {d["id"]: d for d in serialize(list({i.organization for i in item_list}), user)}
 
         # Only fetch the latest release version key for each project to cut down on response size
         latest_release_versions = _get_project_to_release_version_mapping(item_list)
@@ -1106,14 +1125,19 @@ class DetailedProjectSerializer(ProjectWithTeamSerializer):
             "seerScannerAutomation": self.get_value_with_default(
                 attrs, "sentry:seer_scanner_automation"
             ),
+            "seerNightshiftTweaks": self.get_value_with_default(
+                attrs, "sentry:seer_nightshift_tweaks"
+            ),
             "debugFilesRole": attrs["options"].get("sentry:debug_files_role"),
+            "scmSourceContextEnabled": self.get_value_with_default(
+                attrs, "sentry:scm_source_context_enabled"
+            ),
         }
 
-        if has_tempest_access(obj.organization, user):
+        if has_tempest_access(obj.organization):
             data["tempestFetchScreenshots"] = attrs["options"].get(
                 "sentry:tempest_fetch_screenshots", False
             )
-            data["tempestFetchDumps"] = attrs["options"].get("sentry:tempest_fetch_dumps", False)
 
         return data
 
@@ -1143,6 +1167,9 @@ class DetailedProjectSerializer(ProjectWithTeamSerializer):
             f"filters:{FilterTypes.LOG_MESSAGES}": "\n".join(
                 options.get(f"sentry:{FilterTypes.LOG_MESSAGES}", [])
             ),
+            f"filters:{FilterTypes.TRACE_METRIC_NAMES}": "\n".join(
+                options.get(f"sentry:{FilterTypes.TRACE_METRIC_NAMES}", [])
+            ),
             "feedback:branding": options.get("feedback:branding", "1") == "1",
             "sentry:feedback_user_report_notifications": bool(
                 self.get_value_with_default(attrs, "sentry:feedback_user_report_notifications")
@@ -1159,7 +1186,38 @@ class DetailedProjectSerializer(ProjectWithTeamSerializer):
             "sentry:toolbar_allowed_origins": "\n".join(
                 self.get_value_with_default(attrs, "sentry:toolbar_allowed_origins") or []
             ),
+            "sentry:preprod_size_status_checks_enabled": options.get(
+                "sentry:preprod_size_status_checks_enabled", True
+            ),
+            "sentry:preprod_size_status_checks_rules": options.get(
+                "sentry:preprod_size_status_checks_rules"
+            ),
+            "sentry:preprod_snapshot_status_checks_enabled": options.get(
+                "sentry:preprod_snapshot_status_checks_enabled", True
+            ),
+            "sentry:preprod_snapshot_status_checks_fail_on_added": options.get(
+                "sentry:preprod_snapshot_status_checks_fail_on_added", False
+            ),
+            "sentry:preprod_snapshot_status_checks_fail_on_removed": options.get(
+                "sentry:preprod_snapshot_status_checks_fail_on_removed", True
+            ),
             "quotas:spike-protection-disabled": options.get("quotas:spike-protection-disabled"),
+            "sentry:preprod_size_enabled_query": options.get("sentry:preprod_size_enabled_query"),
+            "sentry:preprod_distribution_enabled_query": options.get(
+                "sentry:preprod_distribution_enabled_query"
+            ),
+            "sentry:preprod_size_enabled_by_customer": self.get_value_with_default(
+                attrs, "sentry:preprod_size_enabled_by_customer"
+            ),
+            "sentry:preprod_distribution_enabled_by_customer": self.get_value_with_default(
+                attrs, "sentry:preprod_distribution_enabled_by_customer"
+            ),
+            "sentry:preprod_distribution_pr_comments_enabled_by_customer": self.get_value_with_default(
+                attrs, "sentry:preprod_distribution_pr_comments_enabled_by_customer"
+            ),
+            "sentry:preprod_snapshot_pr_comments_enabled": self.get_value_with_default(
+                attrs, "sentry:preprod_snapshot_pr_comments_enabled"
+            ),
         }
 
     def get_value_with_default(self, attrs, key):

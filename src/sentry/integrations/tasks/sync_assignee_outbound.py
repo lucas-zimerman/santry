@@ -1,5 +1,7 @@
 from typing import Any
 
+from taskbroker_client.retry import Retry
+
 from sentry import analytics, features
 from sentry.constants import ObjectStatus
 from sentry.integrations.analytics import IntegrationIssueAssigneeSyncedEvent
@@ -20,27 +22,17 @@ from sentry.shared_integrations.exceptions import (
 )
 from sentry.silo.base import SiloMode
 from sentry.tasks.base import instrumented_task, retry
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import integrations_tasks
-from sentry.taskworker.retry import Retry
 from sentry.users.models.user import User
 from sentry.users.services.user.service import user_service
 
 
 @instrumented_task(
     name="sentry.integrations.tasks.sync_assignee_outbound",
-    queue="integrations",
-    default_retry_delay=60 * 5,
-    max_retries=5,
-    silo_mode=SiloMode.REGION,
-    taskworker_config=TaskworkerConfig(
-        namespace=integrations_tasks,
-        processing_deadline_duration=30,
-        retry=Retry(
-            times=5,
-            delay=60 * 5,
-        ),
-    ),
+    namespace=integrations_tasks,
+    processing_deadline_duration=30,
+    retry=Retry(times=5, delay=60 * 5),
+    silo_mode=SiloMode.CELL,
 )
 @retry(
     exclude=(

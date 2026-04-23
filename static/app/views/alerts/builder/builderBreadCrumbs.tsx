@@ -1,5 +1,5 @@
 import type {Crumb} from 'sentry/components/breadcrumbs';
-import Breadcrumbs from 'sentry/components/breadcrumbs';
+import {Breadcrumbs} from 'sentry/components/breadcrumbs';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import {makeAlertsPathname} from 'sentry/views/alerts/pathnames';
@@ -11,7 +11,7 @@ interface Props {
   alertName?: string;
 }
 
-function BuilderBreadCrumbs({title, alertName, projectSlug, organization}: Props) {
+export function BuilderBreadCrumbs({title, alertName, projectSlug, organization}: Props) {
   const crumbs: Crumb[] = [
     {
       to: makeAlertsPathname({
@@ -40,5 +40,3 @@ function BuilderBreadCrumbs({title, alertName, projectSlug, organization}: Props
 
   return <Breadcrumbs crumbs={crumbs} />;
 }
-
-export default BuilderBreadCrumbs;

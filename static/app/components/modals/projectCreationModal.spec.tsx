@@ -11,8 +11,8 @@ import {
   ModalFooter,
 } from 'sentry/components/globalModal/components';
 import ProjectCreationModal from 'sentry/components/modals/projectCreationModal';
-import OrganizationStore from 'sentry/stores/organizationStore';
-import TeamStore from 'sentry/stores/teamStore';
+import {OrganizationStore} from 'sentry/stores/organizationStore';
+import {TeamStore} from 'sentry/stores/teamStore';
 
 describe('Project Creation Modal', () => {
   const closeModal = jest.fn();
@@ -115,7 +115,7 @@ describe('Project Creation Modal', () => {
       await screen.findByText('Name your project and assign it a team')
     ).toBeInTheDocument();
     await userEvent.type(
-      screen.getByPlaceholderText('project-name'),
+      screen.getByPlaceholderText('project-slug'),
       'test-react-project'
     );
 

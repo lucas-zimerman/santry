@@ -1,6 +1,5 @@
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,11 +7,12 @@ import responses
 from django.utils import timezone
 
 from fixtures.gitlab import GitLabTestCase
-from sentry.integrations.gitlab.integration import GitlabIntegration, GitlabOpenPRCommentWorkflow
+from sentry.integrations.gitlab.integration import GitlabIntegration
 from sentry.integrations.source_code_management.tasks import pr_comment_workflow
 from sentry.models.commit import Commit
 from sentry.models.group import Group
 from sentry.models.groupowner import GroupOwner, GroupOwnerType
+from sentry.models.options.organization_option import OrganizationOption
 from sentry.models.pullrequest import (
     CommentType,
     PullRequest,
@@ -35,9 +35,6 @@ class GitlabCommentTestCase(GitLabTestCase):
             GitlabIntegration, integration=self.integration, org_id=self.organization.id
         )
         self.pr_comment_workflow = self.installation.get_pr_comment_workflow()
-        self.open_pr_comment_workflow = cast(
-            GitlabOpenPRCommentWorkflow, self.installation.get_open_pr_comment_workflow()
-        )
         self.another_integration = self.create_integration(
             organization=self.organization, external_id="1", provider="github"
         )
@@ -346,6 +343,9 @@ class TestCommentWorkflow(GitlabCommentTestCase):
         self.app_id = "app_1"
         self.pr = self.create_pr_issues()
         self.cache_key = DEBOUNCE_PR_COMMENT_CACHE_KEY(self.pr.id)
+        OrganizationOption.objects.set_value(
+            organization=self.organization, key="sentry:gitlab_pr_bot", value=True
+        )
 
     @patch(
         "sentry.integrations.gitlab.integration.GitlabPRCommentWorkflow.get_top_5_issues_by_count"

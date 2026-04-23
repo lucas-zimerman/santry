@@ -1,33 +1,31 @@
-import {Fragment, useCallback, useEffect, useState, type CSSProperties} from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import {closestCorners, DndContext, useDraggable, useDroppable} from '@dnd-kit/core';
 import {css, Global, useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import {AnimatePresence, motion, type MotionNodeAnimationOptions} from 'framer-motion';
-import cloneDeep from 'lodash/cloneDeep';
 import omit from 'lodash/omit';
 
-import {
-  SIDEBAR_COLLAPSED_WIDTH,
-  SIDEBAR_EXPANDED_WIDTH,
-  SIDEBAR_MOBILE_HEIGHT,
-} from 'sentry/components/sidebar/constants';
+import {Flex} from '@sentry/scraps/layout';
+
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {t} from 'sentry/locale';
-import PreferencesStore from 'sentry/stores/preferencesStore';
-import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import {space} from 'sentry/styles/space';
 import {CustomMeasurementsProvider} from 'sentry/utils/customMeasurements/customMeasurementsProvider';
-import type {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {MetricsCardinalityProvider} from 'sentry/utils/performance/contexts/metricsCardinality';
 import {MEPSettingProvider} from 'sentry/utils/performance/contexts/metricsEnhancedSetting';
 import {useDimensions} from 'sentry/utils/useDimensions';
 import {useLocation} from 'sentry/utils/useLocation';
-import useMedia from 'sentry/utils/useMedia';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {useMedia} from 'sentry/utils/useMedia';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {
   DisplayType,
-  WidgetType,
   type DashboardDetails,
   type DashboardFilters,
   type Widget,
@@ -43,19 +41,16 @@ import {
   WIDGET_PREVIEW_DRAG_ID,
   type WidgetDragPositioning,
 } from 'sentry/views/dashboards/widgetBuilder/components/common/draggableUtils';
-import WidgetBuilderFilterBar from 'sentry/views/dashboards/widgetBuilder/components/filtersBar';
-import WidgetBuilderSlideout from 'sentry/views/dashboards/widgetBuilder/components/widgetBuilderSlideout';
-import WidgetPreview from 'sentry/views/dashboards/widgetBuilder/components/widgetPreview';
+import {WidgetBuilderFilterBar} from 'sentry/views/dashboards/widgetBuilder/components/filtersBar';
+import {WidgetBuilderSlideout} from 'sentry/views/dashboards/widgetBuilder/components/widgetBuilderSlideout';
+import {WidgetPreview} from 'sentry/views/dashboards/widgetBuilder/components/widgetPreview';
 import {
   useWidgetBuilderContext,
   WidgetBuilderProvider,
 } from 'sentry/views/dashboards/widgetBuilder/contexts/widgetBuilderContext';
+import type {OnDataFetchedParams} from 'sentry/views/dashboards/widgetCard';
 import {DashboardsMEPProvider} from 'sentry/views/dashboards/widgetCard/dashboardsMEPContext';
-import {TraceItemAttributeProvider} from 'sentry/views/explore/contexts/traceItemAttributeContext';
-import {isLogsEnabled} from 'sentry/views/explore/logs/isLogsEnabled';
-import {TraceItemDataset} from 'sentry/views/explore/types';
-import {useNavContext} from 'sentry/views/nav/context';
-import {usePrefersStackedNav} from 'sentry/views/nav/usePrefersStackedNav';
+import {useTopOffset} from 'sentry/views/navigation/useTopOffset';
 import {MetricsDataSwitcher} from 'sentry/views/performance/landing/metricsDataSwitcher';
 
 export interface ThresholdMetaState {
@@ -73,31 +68,7 @@ type WidgetBuilderV2Props = {
   setOpenWidgetTemplates: (openWidgetTemplates: boolean) => void;
 };
 
-function TraceItemAttributeProviderFromDataset({children}: {children: React.ReactNode}) {
-  const {state} = useWidgetBuilderContext();
-  const organization = useOrganization();
-
-  let enabled = false;
-  let traceItemType = TraceItemDataset.SPANS;
-
-  if (state.dataset === WidgetType.SPANS) {
-    enabled = organization.features.includes('visibility-explore-view');
-    traceItemType = TraceItemDataset.SPANS;
-  }
-
-  if (state.dataset === WidgetType.LOGS) {
-    enabled = isLogsEnabled(organization);
-    traceItemType = TraceItemDataset.LOGS;
-  }
-
-  return (
-    <TraceItemAttributeProvider traceItemType={traceItemType} enabled={enabled}>
-      {children}
-    </TraceItemAttributeProvider>
-  );
-}
-
-function WidgetBuilderV2({
+export function WidgetBuilderV2({
   isOpen,
   onClose,
   onSave,
@@ -121,14 +92,22 @@ function WidgetBuilderV2({
     DEFAULT_WIDGET_DRAG_POSITIONING
   );
 
-  const {navParentRef} = useNavContext();
-  // Check if we have a valid nav reference
-  const hasValidNav = Boolean(navParentRef?.current);
-  const prefersStackedNav = usePrefersStackedNav();
+  const navigationElementRef = useRef<HTMLDivElement>(null);
 
-  const hasNewNav = hasValidNav && prefersStackedNav;
+  useEffect(() => {
+    if (navigationElementRef.current) return;
 
-  const dimensions = useDimensions({elementRef: navParentRef});
+    const navigationElement = document.querySelector(
+      'nav[aria-label="Primary Navigation"]'
+    )?.parentElement;
+    if (navigationElement) {
+      navigationElementRef.current = navigationElement as HTMLDivElement;
+    }
+  }, []);
+
+  const {contentTop} = useTopOffset();
+
+  const dimensions = useDimensions({elementRef: navigationElementRef});
 
   const handleDragEnd = ({over}: any) => {
     setTranslate(snapPreviewToCorners(over));
@@ -145,21 +124,25 @@ function WidgetBuilderV2({
     }));
   };
 
-  const handleWidgetDataFetched = useCallback(
-    (tableData: TableDataWithTitle[]) => {
-      const tableMeta = {...tableData[0]!.meta};
+  const handleWidgetDataFetched = useCallback((results: OnDataFetchedParams) => {
+    let dataType: string | undefined;
+    let dataUnit: string | undefined;
+
+    if (results.tableResults?.length) {
+      const tableMeta = {...results.tableResults[0]!.meta};
       const keys = Object.keys(tableMeta);
       const field = keys[0]!;
-      const dataType = tableMeta[field];
-      const dataUnit = tableMeta.units?.[field];
+      dataType = tableMeta[field];
+      dataUnit = tableMeta.units?.[field];
+    } else if (results.timeseriesResultsTypes) {
+      const keys = Object.keys(results.timeseriesResultsTypes);
+      dataType = results.timeseriesResultsTypes[keys[0]!];
+      const rawUnit = results.timeseriesResultsUnits?.[keys[0]!];
+      dataUnit = rawUnit ?? undefined;
+    }
 
-      const newState = cloneDeep(thresholdMetaState);
-      newState.dataType = dataType;
-      newState.dataUnit = dataUnit;
-      setThresholdMetaState(newState);
-    },
-    [thresholdMetaState]
-  );
+    setThresholdMetaState({dataType, dataUnit});
+  }, []);
 
   // reset the drag position when the draggable preview is not visible
   useEffect(() => {
@@ -168,11 +151,8 @@ function WidgetBuilderV2({
     }
   }, [isPreviewDraggable]);
 
-  const preferences = useLegacyStore(PreferencesStore);
-  const sidebarCollapsed = !!preferences.collapsed;
-
   return (
-    <Fragment>
+    <AnimatePresence>
       {isOpen && (
         <Fragment>
           <Global
@@ -183,85 +163,72 @@ function WidgetBuilderV2({
             `}
           />
           <Backdrop style={{opacity: 0.5, pointerEvents: 'auto'}} />
-          <AnimatePresence>
-            {isOpen && (
-              <WidgetBuilderProvider>
-                <CustomMeasurementsProvider
-                  organization={organization}
-                  selection={selection}
-                >
-                  <TraceItemAttributeProviderFromDataset>
-                    <ContainerWithoutSidebar
-                      sidebarCollapsed={sidebarCollapsed}
-                      style={
-                        hasNewNav
-                          ? isMediumScreen
-                            ? {
-                                left: 0,
-                                top: `${dimensions.height ?? 0}px`,
-                                willChange: 'top',
-                              }
-                            : {
-                                left: `${dimensions.width ?? 0}px`,
-                                top: 0,
-                                willChange: 'left',
-                              }
-                          : undefined
-                      }
+          <WidgetBuilderProvider>
+            <CustomMeasurementsProvider organization={organization} selection={selection}>
+              <ContainerWithoutSidebar
+                style={
+                  navigationElementRef.current
+                    ? isMediumScreen
+                      ? {
+                          left: 0,
+                          top: contentTop,
+                          willChange: 'top',
+                        }
+                      : {
+                          left: `${dimensions.width ?? 0}px`,
+                          top: contentTop,
+                          willChange: 'left',
+                        }
+                    : undefined
+                }
+              >
+                <WidgetBuilderContainer>
+                  <SlideoutContainer>
+                    <WidgetBuilderSlideout
+                      onClose={() => {
+                        onClose();
+                        setTranslate(DEFAULT_WIDGET_DRAG_POSITIONING);
+                      }}
+                      onSave={onSave}
+                      onQueryConditionChange={setQueryConditionsValid}
+                      dashboard={dashboard}
+                      dashboardFilters={dashboardFilters}
+                      setIsPreviewDraggable={setIsPreviewDraggable}
+                      isWidgetInvalid={!queryConditionsValid}
+                      openWidgetTemplates={openWidgetTemplates}
+                      setOpenWidgetTemplates={setOpenWidgetTemplates}
+                      onDataFetched={handleWidgetDataFetched}
+                      thresholdMetaState={thresholdMetaState}
+                    />
+                  </SlideoutContainer>
+                  {(!isSmallScreen || isPreviewDraggable) && (
+                    <DndContext
+                      onDragEnd={handleDragEnd}
+                      onDragMove={handleDragMove}
+                      collisionDetection={closestCorners}
                     >
-                      <WidgetBuilderContainer>
-                        <SlideoutContainer>
-                          <WidgetBuilderSlideout
-                            isOpen={isOpen}
-                            onClose={() => {
-                              onClose();
-                              setTranslate(DEFAULT_WIDGET_DRAG_POSITIONING);
-                            }}
-                            onSave={onSave}
-                            onQueryConditionChange={setQueryConditionsValid}
-                            dashboard={dashboard}
-                            dashboardFilters={dashboardFilters}
-                            setIsPreviewDraggable={setIsPreviewDraggable}
-                            isWidgetInvalid={!queryConditionsValid}
-                            openWidgetTemplates={openWidgetTemplates}
-                            setOpenWidgetTemplates={setOpenWidgetTemplates}
-                            onDataFetched={handleWidgetDataFetched}
-                            thresholdMetaState={thresholdMetaState}
-                          />
-                        </SlideoutContainer>
-                        {(!isSmallScreen || isPreviewDraggable) && (
-                          <DndContext
-                            onDragEnd={handleDragEnd}
-                            onDragMove={handleDragMove}
-                            collisionDetection={closestCorners}
-                          >
-                            <SurroundingWidgetContainer>
-                              <WidgetPreviewContainer
-                                dashboardFilters={dashboardFilters}
-                                dashboard={dashboard}
-                                dragPosition={translate}
-                                isDraggable={isPreviewDraggable}
-                                isWidgetInvalid={!queryConditionsValid}
-                                onDataFetched={handleWidgetDataFetched}
-                                openWidgetTemplates={openWidgetTemplates}
-                              />
-                            </SurroundingWidgetContainer>
-                          </DndContext>
-                        )}
-                      </WidgetBuilderContainer>
-                    </ContainerWithoutSidebar>
-                  </TraceItemAttributeProviderFromDataset>
-                </CustomMeasurementsProvider>
-              </WidgetBuilderProvider>
-            )}
-          </AnimatePresence>
+                      <Flex justify="center" align="center" width="100%" height="100%">
+                        <WidgetPreviewContainer
+                          dashboardFilters={dashboardFilters}
+                          dashboard={dashboard}
+                          dragPosition={translate}
+                          isDraggable={isPreviewDraggable}
+                          isWidgetInvalid={!queryConditionsValid}
+                          onDataFetched={handleWidgetDataFetched}
+                          openWidgetTemplates={openWidgetTemplates}
+                        />
+                      </Flex>
+                    </DndContext>
+                  )}
+                </WidgetBuilderContainer>
+              </ContainerWithoutSidebar>
+            </CustomMeasurementsProvider>
+          </WidgetBuilderProvider>
         </Fragment>
       )}
-    </Fragment>
+    </AnimatePresence>
   );
 }
-
-export default WidgetBuilderV2;
 
 export function WidgetPreviewContainer({
   dashboardFilters,
@@ -277,7 +244,7 @@ export function WidgetPreviewContainer({
   isWidgetInvalid: boolean;
   dragPosition?: WidgetDragPositioning;
   isDraggable?: boolean;
-  onDataFetched?: (tableData: TableDataWithTitle[]) => void;
+  onDataFetched?: (results: OnDataFetchedParams) => void;
   openWidgetTemplates?: boolean;
 }) {
   const {state} = useWidgetBuilderContext();
@@ -346,9 +313,9 @@ export function WidgetPreviewContainer({
   };
 
   const animatedProps: MotionNodeAnimationOptions = {
-    initial: {opacity: 0, x: '100%', y: 0},
-    animate: {opacity: 1, x: 0, y: 0},
-    exit: {opacity: 0, x: '100%', y: 0},
+    initial: {opacity: 0, transform: 'translateX(100%) translateY(0)'},
+    animate: {opacity: 1, transform: 'translateX(0) translateY(0)'},
+    exit: {opacity: 0, transform: 'translateX(100%) translateY(0)'},
     transition: animationTransitionSettings,
   };
 
@@ -381,7 +348,8 @@ export function WidgetPreviewContainer({
                     width: isDragEnabled ? DRAGGABLE_PREVIEW_WIDTH_PX : undefined,
                     height: getPreviewHeight(),
                     outline: isDragEnabled
-                      ? `${space(1)} solid ${theme.border}`
+                      ? // eslint-disable-next-line @sentry/scraps/use-semantic-token
+                        `8px solid ${theme.tokens.border.primary}`
                       : undefined,
                   }}
                 >
@@ -448,7 +416,7 @@ const fullPageCss = css`
 const Backdrop = styled('div')`
   ${fullPageCss};
   z-index: ${p => p.theme.zIndex.widgetBuilderDrawer};
-  background: ${p => p.theme.black};
+  background: ${p => p.theme.colors.black};
   will-change: opacity;
   transition: opacity 200ms;
   pointer-events: none;
@@ -458,9 +426,9 @@ const Backdrop = styled('div')`
 const SampleWidgetCard = styled(motion.div)`
   width: 100%;
   min-width: 100%;
-  border: 1px dashed ${p => p.theme.gray300};
-  border-radius: ${p => p.theme.borderRadius};
-  background-color: ${p => p.theme.background};
+  border: 1px dashed ${p => p.theme.colors.gray400};
+  background-color: ${p => p.theme.tokens.background.primary};
+  border-radius: ${p => p.theme.radius.md};
   z-index: ${p => p.theme.zIndex.initial};
   position: relative;
 
@@ -478,7 +446,7 @@ const SampleWidgetCard = styled(motion.div)`
   }
 `;
 
-const DraggableWidgetContainer = styled(`div`)`
+const DraggableWidgetContainer = styled('div')`
   align-content: center;
   z-index: ${p => p.theme.zIndex.initial};
   position: relative;
@@ -492,19 +460,15 @@ const DraggableWidgetContainer = styled(`div`)`
   }
 `;
 
-const ContainerWithoutSidebar = styled('div')<{
-  sidebarCollapsed: boolean;
-}>`
+const ContainerWithoutSidebar = styled('div')`
   z-index: ${p => p.theme.zIndex.widgetBuilderDrawer};
   position: fixed;
   top: 0;
-  left: ${p => (p.sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH)};
   right: 0;
   bottom: 0;
 
   @media (max-width: ${p => p.theme.breakpoints.md}) {
     left: 0;
-    top: ${SIDEBAR_MOBILE_HEIGHT};
   }
 `;
 
@@ -521,11 +485,11 @@ const DroppableGrid = styled('div')`
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
   position: fixed;
-  gap: ${space(4)};
-  margin: ${space(2)};
+  gap: ${p => p.theme.space['3xl']};
+  margin: ${p => p.theme.space.xl};
   top: ${SIDEBAR_HEIGHT}px;
-  right: ${space(2)};
-  bottom: ${space(2)};
+  right: ${p => p.theme.space.xl};
+  bottom: ${p => p.theme.space.xl};
   left: 0;
 `;
 
@@ -536,34 +500,26 @@ const TemplateWidgetPreviewPlaceholder = styled('div')`
   justify-content: center;
   width: 100%;
   height: 95%;
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
   font-style: italic;
-  font-size: ${p => p.theme.fontSize.md};
-  font-weight: ${p => p.theme.fontWeight.normal};
+  font-size: ${p => p.theme.font.size.md};
+  font-weight: ${p => p.theme.font.weight.sans.regular};
 `;
 
 const WidgetPreviewPlaceholder = styled('div')`
   width: 100%;
   height: 100%;
-  padding: ${space(2)};
+  padding: ${p => p.theme.space.xl};
 `;
 
 const SlideoutContainer = styled('div')`
   height: 100%;
 `;
 
-const SurroundingWidgetContainer = styled('div')`
-  width: 100%;
-  height: 100%;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-`;
-
 const FilterBarContainer = styled(motion.div)`
-  margin-top: ${space(1)};
-  background-color: ${p => p.theme.background};
-  border-radius: ${p => p.theme.borderRadius};
+  margin-top: ${p => p.theme.space.md};
+  background-color: ${p => p.theme.tokens.background.primary};
+  border-radius: ${p => p.theme.radius.md};
 
   @media (min-width: ${p => p.theme.breakpoints.sm}) {
     width: 40vw;

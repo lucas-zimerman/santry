@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from sentry import features
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectPermission
 from sentry.apidocs.parameters import GlobalParams
 from sentry.grouping.grouptype import ErrorGroupType
@@ -89,7 +89,7 @@ class WebVitalsUserIssueFormatter(BaseUserIssueFormatter):
         vital = self.data.get("vital", "")
         transaction = self.data.get("transaction", "")
         a_or_an = "an" if vital in ["lcp", "fcp", "inp"] else "a"
-        return f"{transaction} has {a_or_an} {vital.upper()} score of {self.data.get("score")}"
+        return f"{transaction} has {a_or_an} {vital.upper()} score of {self.data.get('score')}"
 
     def create_fingerprint(self) -> list[str]:
         vital = self.data.get("vital", "")
@@ -106,6 +106,7 @@ class WebVitalsUserIssueFormatter(BaseUserIssueFormatter):
             "transaction": transaction,
             "web_vital": vital,
             "score": str(self.data.get("score")),
+            vital: str(self.data.get("value", "")),
         }
 
     def get_evidence(self) -> tuple[dict, list[IssueEvidence]]:
@@ -113,11 +114,13 @@ class WebVitalsUserIssueFormatter(BaseUserIssueFormatter):
         score = self.data.get("score")
         transaction = self.data.get("transaction", "")
         trace_id = self.data.get("traceId")
+        vital_value = self.data.get("value")
 
         evidence_data = {
             "transaction": transaction,
             "vital": vital,
             "score": score,
+            vital: vital_value,
         }
 
         evidence_display = [
@@ -134,6 +137,11 @@ class WebVitalsUserIssueFormatter(BaseUserIssueFormatter):
             IssueEvidence(
                 name="Score",
                 value=str(score),
+                important=True,
+            ),
+            IssueEvidence(
+                name=vital.upper(),
+                value=str(vital_value),
                 important=True,
             ),
         ]
@@ -166,6 +174,7 @@ class ProjectUserIssueRequestSerializer(serializers.Serializer):
 class WebVitalsIssueDataSerializer(ProjectUserIssueRequestSerializer):
     score = serializers.IntegerField(required=True, min_value=0, max_value=100)
     vital = serializers.ChoiceField(required=True, choices=["lcp", "fcp", "cls", "inp", "ttfb"])
+    value = serializers.IntegerField(required=True)
 
 
 class ProjectUserIssuePermission(ProjectPermission):
@@ -181,13 +190,13 @@ class ProjectUserIssueResponseSerializer(serializers.Serializer):
     event_id = serializers.CharField(required=True)
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectUserIssueEndpoint(ProjectEndpoint):
     permission_classes = (ProjectUserIssuePermission,)
     publish_status = {
         "POST": ApiPublishStatus.EXPERIMENTAL,
     }
-    owner = ApiOwner.VISIBILITY
+    owner = ApiOwner.DATA_BROWSING
 
     def get_formatter(self, data: dict) -> BaseUserIssueFormatter:
         if data.get("issueType") == WebVitalsGroup.slug:
@@ -204,8 +213,6 @@ class ProjectUserIssueEndpoint(ProjectEndpoint):
             "organizations:performance-web-vitals-seer-suggestions",
             organization,
             actor=request.user,
-        ) and features.has(
-            "organizations:issue-web-vitals-ingest", organization, actor=request.user
         )
 
     @extend_schema(

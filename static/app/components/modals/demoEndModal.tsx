@@ -2,18 +2,20 @@ import {useCallback, useMemo} from 'react';
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
+import {Button, LinkButton} from '@sentry/scraps/button';
+
 import {fetchGuides} from 'sentry/actionCreators/guides';
 import type {ModalRenderProps} from 'sentry/actionCreators/modal';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import ModalTask from 'sentry/components/onboardingWizard/modalTask';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
+import {ModalTask} from 'sentry/components/onboardingWizard/modalTask';
 import {IconClose} from 'sentry/icons/iconClose';
 import {t} from 'sentry/locale';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
 // tour is a string that tells which tour the user is completing in the walkthrough
 type Props = ModalRenderProps & {tour: string};
@@ -92,7 +94,7 @@ export default function DemoEndingModal({tour, closeModal, CloseButton}: Props) 
 
   const handleMoreTours = () => {
     closeModal?.();
-    SidebarPanelStore.togglePanel(SidebarPanelKey.ONBOARDING_WIZARD);
+    OnboardingDrawerStore.toggle(OnboardingDrawerKey.ONBOARDING_WIZARD);
     trackAnalytics('growth.end_modal_more_tours', {
       organization: null,
     });
@@ -121,7 +123,7 @@ export default function DemoEndingModal({tour, closeModal, CloseButton}: Props) 
         <LinkButton
           priority="primary"
           external
-          href={'https://sentry.io/signup/'}
+          href="https://sentry.io/signup/"
           onClick={() => {
             trackAnalytics('growth.end_modal_signup', {
               organization: null,

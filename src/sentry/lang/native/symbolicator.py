@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 from urllib.parse import urljoin
 
 import orjson
@@ -15,6 +16,7 @@ from django.conf import settings
 from requests.exceptions import RequestException
 
 from sentry import options
+from sentry.attachments.base import CachedAttachment
 from sentry.lang.native.sources import (
     get_internal_artifact_lookup_source,
     get_internal_source,
@@ -24,6 +26,7 @@ from sentry.lang.native.sources import (
 from sentry.lang.native.utils import Backoff
 from sentry.models.project import Project
 from sentry.net.http import Session
+from sentry.objectstore import get_attachments_session, get_symbolicator_url
 from sentry.utils import metrics
 
 MAX_ATTEMPTS = 3
@@ -41,6 +44,18 @@ class SymbolicatorPlatform(Enum):
     jvm = "jvm"
     js = "js"
     native = "native"
+
+
+class FrameOrder(Enum):
+    """The order in which stack frames are sent to
+    and returned from Symbolicator."""
+
+    # Caller frames come before callee frames. This is the
+    # order in which stack frames are stored in events.
+    caller_first = "caller_first"
+    # Callee frames come before caller frames. This is the
+    # order in which stack frames are usually displayed.
+    callee_first = "callee_first"
 
 
 @dataclass(frozen=True)
@@ -99,11 +114,21 @@ class Symbolicator:
         self.project = project
         self.event_id = event_id
 
-    def _process(self, task_name: str, path: str, **kwargs):
+    def _process(
+        self,
+        task_name: str,
+        path: str,
+        kwargs_cb: Callable[[], dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """
         This function will submit a symbolication task to a Symbolicator and handle
         polling it using the `SymbolicatorSession`.
         It will also correctly handle `TaskIdNotFound` and `ServiceUnavailable` errors.
+
+        `kwargs_cb`, if provided, is called on every new task submission and its result
+        is merged over `kwargs`. Use this for values that must be fresh on each
+        (re)submission, such as expiring tokens.
         """
         session = SymbolicatorSession(
             url=self.base_url,
@@ -122,7 +147,8 @@ class Symbolicator:
                 try:
                     if not task_id:
                         # We are submitting a new task to Symbolicator
-                        json_response = session.create_task(path, **kwargs)
+                        create_kwargs = {**kwargs, **(kwargs_cb() if kwargs_cb else {})}
+                        json_response = session.create_task(path, **create_kwargs)
                     else:
                         # The task has already been submitted to Symbolicator and we are polling
                         json_response = session.query_task(task_id)
@@ -166,46 +192,97 @@ class Symbolicator:
                 # Otherwise, we are done processing, yay
                 return json_response
 
-    def process_minidump(self, platform, minidump, rewrite_first_module):
+    def process_minidump(
+        self, platform: str, minidump: CachedAttachment, rewrite_first_module: list[Any]
+    ):
         (sources, process_response) = sources_for_symbolication(self.project)
         scraping_config = get_scraping_config(self.project)
+
+        if minidump.stored_id:
+            session = get_attachments_session(self.project.organization_id, self.project.id)
+            storage_url = get_symbolicator_url(session, minidump.stored_id)
+            json: dict[str, Any] = {
+                "platform": platform,
+                "sources": sources,
+                "scraping": scraping_config,
+                "options": {"dif_candidates": True},
+                "symbolicate": {
+                    "type": "minidump",
+                    "storage_url": storage_url,
+                    "rewrite_first_module": rewrite_first_module,
+                },
+            }
+
+            def cb() -> dict[str, Any]:
+                json["symbolicate"]["storage_token"] = session.mint_token()
+                return {"json": json}
+
+            res = self._process("process_minidump", "symbolicate-any", kwargs_cb=cb)
+            return process_response(res)
+
         data = {
             "platform": orjson.dumps(platform).decode(),
             "sources": orjson.dumps(sources).decode(),
             "scraping": orjson.dumps(scraping_config).decode(),
-            "rewrite_first_module": orjson.dumps(rewrite_first_module).decode(),
             "options": '{"dif_candidates": true}',
+            "rewrite_first_module": orjson.dumps(rewrite_first_module).decode(),
         }
+        files = {"upload_file_minidump": minidump.load_data(self.project)}
 
-        res = self._process(
-            "process_minidump",
-            "minidump",
-            data=data,
-            files={"upload_file_minidump": minidump},
-        )
+        res = self._process("process_minidump", "minidump", data=data, files=files)
         return process_response(res)
 
-    def process_applecrashreport(self, platform, report):
+    def process_applecrashreport(self, platform: str, report: CachedAttachment):
         (sources, process_response) = sources_for_symbolication(self.project)
         scraping_config = get_scraping_config(self.project)
+
+        if report.stored_id:
+            session = get_attachments_session(self.project.organization_id, self.project.id)
+            storage_url = get_symbolicator_url(session, report.stored_id)
+            json: dict[str, Any] = {
+                "platform": platform,
+                "sources": sources,
+                "scraping": scraping_config,
+                "options": {"dif_candidates": True},
+                "symbolicate": {
+                    "type": "applecrashreport",
+                    "storage_url": storage_url,
+                },
+            }
+
+            def cb() -> dict[str, Any]:
+                json["symbolicate"]["storage_token"] = session.mint_token()
+                return {"json": json}
+
+            res = self._process("process_applecrashreport", "symbolicate-any", kwargs_cb=cb)
+            return process_response(res)
+
         data = {
             "platform": orjson.dumps(platform).decode(),
             "sources": orjson.dumps(sources).decode(),
             "scraping": orjson.dumps(scraping_config).decode(),
             "options": '{"dif_candidates": true}',
         }
+        files = {"apple_crash_report": report.load_data(self.project)}
 
-        res = self._process(
-            "process_applecrashreport",
-            "applecrashreport",
-            data=data,
-            files={"apple_crash_report": report},
-        )
+        res = self._process("process_applecrashreport", "applecrashreport", data=data, files=files)
         return process_response(res)
 
     def process_payload(
-        self, platform, stacktraces, modules, signal=None, apply_source_context=True
+        self, platform, stacktraces, modules, frame_order, signal=None, apply_source_context=True
     ):
+        """
+        Process a native event by symbolicating its frames.
+
+        :param platform: The event's platform. This should be either unset or one of "objc", "cocoa", "swift", "native", "c", "csharp".
+        :param stacktraces: The event's stacktraces. Frames must contain an `instruction_address`.
+                            Frames are expected to be ordered according to the frame_order (see below).
+        :param modules: ProGuard modules and source bundles. They must contain a `uuid` and have a
+                        `type` of either "proguard" or "source".
+        :param frame_order: The order of frames within stacktraces. See the documentation of `FrameOrder`.
+        :param signal: A numeric crash signal value. This is optional.
+        :param apply_source_context: Whether to add source context to frames.
+        """
         (sources, process_response) = sources_for_symbolication(self.project)
         scraping_config = get_scraping_config(self.project)
         json = {
@@ -214,6 +291,7 @@ class Symbolicator:
             "options": {
                 "dif_candidates": True,
                 "apply_source_context": apply_source_context,
+                "frame_order": frame_order.value,
             },
             "stacktraces": stacktraces,
             "modules": modules,
@@ -226,7 +304,22 @@ class Symbolicator:
         res = self._process("symbolicate_stacktraces", "symbolicate", json=json)
         return process_response(res)
 
-    def process_js(self, platform, stacktraces, modules, release, dist, apply_source_context=True):
+    def process_js(
+        self, platform, stacktraces, modules, release, dist, frame_order, apply_source_context=True
+    ):
+        """
+        Process a JS event by remapping its frames with sourcemaps.
+
+        :param platform: The event's platform. This should be unset, "javascript", or "node".
+        :param stacktraces: The event's stacktraces. Frames must contain a `function` and a `module`.
+                            Frames are expected to be ordered according to the frame_order (see below).
+        :param modules: Minified source files/sourcemaps Thy must contain a `type` field with value "sourcemap",
+                        a `code_file`, and a `debug_id`.
+        :param release: The event's release.
+        :param dist: The event's dist.
+        :param frame_order: The order of frames within stacktraces. See the documentation of `FrameOrder`.
+        :param apply_source_context: Whether to add source context to frames.
+        """
         source = get_internal_artifact_lookup_source(self.project)
         scraping_config = get_scraping_config(self.project)
 
@@ -235,7 +328,10 @@ class Symbolicator:
             "source": source,
             "stacktraces": stacktraces,
             "modules": modules,
-            "options": {"apply_source_context": apply_source_context},
+            "options": {
+                "apply_source_context": apply_source_context,
+                "frame_order": frame_order.value,
+            },
             "scraping": scraping_config,
         }
 
@@ -254,6 +350,7 @@ class Symbolicator:
         modules,
         release_package,
         classes,
+        frame_order,
         apply_source_context=True,
     ):
         """
@@ -263,10 +360,12 @@ class Symbolicator:
         :param platform: The event's platform. This should be either unset or "java".
         :param exceptions: The event's exceptions. These must contain a `type` and a `module`.
         :param stacktraces: The event's stacktraces. Frames must contain a `function` and a `module`.
+                            Frames are expected to be ordered according to the frame_order (see below).
         :param modules: ProGuard modules and source bundles. They must contain a `uuid` and have a
                         `type` of either "proguard" or "source".
         :param release_package: The name of the release's package. This is optional.
                                 Used for determining whether frames are in-app.
+        :param frame_order: The order of frames within stacktraces. See the documentation of `FrameOrder`.
         :param apply_source_context: Whether to add source context to frames.
         """
         source = get_internal_source(self.project)
@@ -278,7 +377,10 @@ class Symbolicator:
             "stacktraces": stacktraces,
             "modules": modules,
             "classes": classes,
-            "options": {"apply_source_context": apply_source_context},
+            "options": {
+                "apply_source_context": apply_source_context,
+                "frame_order": frame_order.value,
+            },
         }
 
         if release_package is not None:

@@ -5,6 +5,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
+import sentry_sdk
 from sentry_sdk.tracing import NoOpSpan, Span, Transaction
 
 from sentry.integrations.tasks.kick_off_status_syncs import kick_off_status_syncs
@@ -68,6 +69,8 @@ def update_status(group: Group, status_change: StatusChangeMessageData) -> None:
             substatus=new_substatus,
             activity_type=activity_type,
             activity_data=status_change.get("activity_data"),
+            detector_id=status_change.get("detector_id"),
+            update_date=status_change.get("update_date"),
         )
         remove_group_from_inbox(group, action=GroupInboxRemoveAction.RESOLVED)
         kick_off_status_syncs.apply_async(
@@ -92,6 +95,8 @@ def update_status(group: Group, status_change: StatusChangeMessageData) -> None:
             substatus=new_substatus,
             activity_type=activity_type,
             activity_data=status_change.get("activity_data"),
+            detector_id=status_change.get("detector_id"),
+            update_date=status_change.get("update_date"),
         )
         remove_group_from_inbox(group, action=GroupInboxRemoveAction.IGNORED)
         kick_off_status_syncs.apply_async(
@@ -101,7 +106,6 @@ def update_status(group: Group, status_change: StatusChangeMessageData) -> None:
         # Update the group status, priority, and add the group to the inbox
         manage_issue_states(group=group, group_inbox_reason=GroupInboxReason.ESCALATING)
     elif new_status == GroupStatus.UNRESOLVED:
-        activity_type = None
         if new_substatus == GroupSubStatus.REGRESSED:
             activity_type = ActivityType.SET_REGRESSION
             group_inbox_reason = GroupInboxReason.REGRESSION
@@ -114,9 +118,9 @@ def update_status(group: Group, status_change: StatusChangeMessageData) -> None:
             else:
                 activity_type = ActivityType.SET_UNRESOLVED
 
-        # We don't support setting the UNRESOLVED status with substatus NEW as it
-        # is automatically set on creation. All other issues should be set to ONGOING.
-        if activity_type is None:
+        else:
+            # We don't support setting the UNRESOLVED status with substatus NEW as it
+            # is automatically set on creation. All other issues should be set to ONGOING.
             logger.error(
                 "group.update_status.invalid_substatus",
                 extra={**log_extra},
@@ -130,6 +134,8 @@ def update_status(group: Group, status_change: StatusChangeMessageData) -> None:
             activity_type=activity_type,
             from_substatus=group.substatus,
             activity_data=status_change.get("activity_data"),
+            detector_id=status_change.get("detector_id"),
+            update_date=status_change.get("update_date"),
         )
         add_group_to_inbox(group, group_inbox_reason)
         kick_off_status_syncs.apply_async(
@@ -240,6 +246,7 @@ def _get_status_change_kwargs(payload: Mapping[str, Any]) -> Mapping[str, Any]:
         "new_substatus": payload.get("new_substatus", None),
         "detector_id": payload.get("detector_id", None),
         "activity_data": payload.get("activity_data", None),
+        "update_date": payload.get("update_date", None),
     }
 
     process_occurrence_data(data)
@@ -286,6 +293,8 @@ def process_status_change_message(
             )
             return None
         txn.set_tag("group_id", group.id)
+
+    sentry_sdk.set_tag("group_type", group.issue_type.slug)
 
     with metrics.timer(
         "occurrence_consumer._process_message.status_change.update_group_status",

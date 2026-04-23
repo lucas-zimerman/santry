@@ -1,27 +1,34 @@
 import styled from '@emotion/styled';
 
-import EmptyMessage from 'sentry/components/emptyMessage';
+import {EmptyMessage} from 'sentry/components/emptyMessage';
 import {IconSearch} from 'sentry/icons';
-import {space} from 'sentry/styles/space';
+import type {IconVariant} from 'sentry/icons/svgIcon';
 
 type Props = {
   children?: React.ReactNode;
   className?: string;
   small?: boolean;
+  variant?: IconVariant;
   withIcon?: boolean;
 };
 
-function EmptyStateWarning({small = false, withIcon = true, children, className}: Props) {
+export function EmptyStateWarning({
+  small = false,
+  variant = 'muted',
+  withIcon = true,
+  children,
+  className,
+}: Props) {
   return small ? (
     <EmptyMessage className={className}>
       <SmallMessage>
-        {withIcon && <StyledIconSearch color="gray300" size="lg" />}
+        {withIcon && <StyledIconSearch variant={variant} size="lg" />}
         {children}
       </SmallMessage>
     </EmptyMessage>
   ) : (
     <EmptyStreamWrapper data-test-id="empty-state" className={className}>
-      {withIcon && <IconSearch color="gray300" legacySize="54px" />}
+      {withIcon && <IconSearch variant={variant} legacySize="54px" />}
       {children}
     </EmptyStreamWrapper>
   );
@@ -30,7 +37,7 @@ function EmptyStateWarning({small = false, withIcon = true, children, className}
 export const EmptyStreamWrapper = styled('div')`
   text-align: center;
   font-size: 22px;
-  padding: ${space(4)} ${space(2)};
+  padding: ${p => p.theme.space['3xl']} ${p => p.theme.space.xl};
 
   p {
     line-height: 1.2;
@@ -41,20 +48,18 @@ export const EmptyStreamWrapper = styled('div')`
   }
 
   > svg {
-    margin-bottom: ${space(2)};
+    margin-bottom: ${p => p.theme.space.xl};
   }
 `;
 
 const SmallMessage = styled('div')`
   display: flex;
   align-items: center;
-  color: ${p => p.theme.subText};
-  font-size: ${p => p.theme.fontSize.xl};
+  color: ${p => p.theme.tokens.content.secondary};
+  font-size: ${p => p.theme.font.size.xl};
   line-height: 1em;
 `;
 
 const StyledIconSearch = styled(IconSearch)`
-  margin-right: ${space(1)};
+  margin-right: ${p => p.theme.space.md};
 `;
-
-export default EmptyStateWarning;

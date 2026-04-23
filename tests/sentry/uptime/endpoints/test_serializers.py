@@ -26,6 +26,10 @@ class UptimeDetectorSerializerTest(UptimeTestCase):
             "timeoutMs": uptime_subscription.timeout_ms,
             "owner": None,
             "traceSampling": False,
+            "recoveryThreshold": detector.config["recovery_threshold"],
+            "downtimeThreshold": detector.config["downtime_threshold"],
+            "assertion": None,
+            "responseCaptureEnabled": True,
         }
 
     def test_default_name(self) -> None:
@@ -52,6 +56,10 @@ class UptimeDetectorSerializerTest(UptimeTestCase):
             "timeoutMs": uptime_subscription.timeout_ms,
             "owner": None,
             "traceSampling": False,
+            "recoveryThreshold": detector.config["recovery_threshold"],
+            "downtimeThreshold": detector.config["downtime_threshold"],
+            "assertion": None,
+            "responseCaptureEnabled": True,
         }
 
     def test_owner(self) -> None:
@@ -80,6 +88,10 @@ class UptimeDetectorSerializerTest(UptimeTestCase):
                 "type": "user",
             },
             "traceSampling": False,
+            "recoveryThreshold": detector.config["recovery_threshold"],
+            "downtimeThreshold": detector.config["downtime_threshold"],
+            "assertion": None,
+            "responseCaptureEnabled": True,
         }
 
     def test_trace_sampling(self) -> None:
@@ -88,6 +100,14 @@ class UptimeDetectorSerializerTest(UptimeTestCase):
         result = serialize(detector, serializer=UptimeDetectorSerializer())
 
         assert result["traceSampling"] is True
+
+    def test_custom_thresholds(self) -> None:
+        """Test that custom threshold values are properly serialized."""
+        detector = self.create_uptime_detector(recovery_threshold=2, downtime_threshold=5)
+        result = serialize(detector, serializer=UptimeDetectorSerializer())
+
+        assert result["recoveryThreshold"] == 2
+        assert result["downtimeThreshold"] == 5
 
     def test_bulk_detector_id_lookup(self) -> None:
         """Test that detector IDs are properly included when serializing multiple monitors."""

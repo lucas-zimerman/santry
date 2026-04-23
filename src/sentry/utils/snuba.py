@@ -9,7 +9,6 @@ import re
 import time
 from collections import namedtuple
 from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -40,11 +39,13 @@ from sentry.models.projectkey import ProjectKey
 from sentry.models.release import Release
 from sentry.models.releases.release_project import ReleaseProject
 from sentry.net.http import connection_from_url
+from sentry.services.eventstore.query_preprocessing import get_all_merged_group_ids
 from sentry.snuba.dataset import Dataset
 from sentry.snuba.events import Columns
 from sentry.snuba.query_sources import QuerySource
 from sentry.snuba.referrer import validate_referrer
 from sentry.utils import json, metrics
+from sentry.utils.concurrent import ContextPropagatingThreadPoolExecutor
 from sentry.utils.dates import outside_retention_with_modified_start
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ def log_snuba_info(content):
         with open(SNUBA_INFO_FILE, "a") as file:
             file.writelines(content)
     else:
-        print(content)  # NOQA: only prints when an env variable is set
+        print(content)  # noqa: S002, T201 -- only prints when an env variable is set
 
 
 SNUBA_INFO = (
@@ -351,6 +352,15 @@ class UnqualifiedQueryError(SnubaError):
     """
 
 
+class EmptyGroupIdIntersectionError(SnubaError):
+    """
+    Raised by SnubaQueryParams when the intersection of `group_id` IN-constraints
+    is empty, meaning the query cannot match any rows. Callers that want to treat
+    this as "no results" (rather than a failure) should catch it explicitly;
+    otherwise it propagates as a generic SnubaError to preserve existing behavior.
+    """
+
+
 class UnexpectedResponseError(SnubaError):
     """
     Exception raised when the Snuba API server returns an unexpected response
@@ -613,7 +623,7 @@ def get_snuba_column_name(name, dataset=Dataset.Events):
         if dataset == Dataset.Events:
             return name
         else:
-            return f"tags[{name.replace("[", "").replace("]", "").replace('"', "")}]"
+            return f"tags[{name.replace('[', '').replace(']', '').replace('"', '')}]"
 
     measurement_name = get_measurement_name(name)
     span_op_breakdown_name = get_span_op_breakdown_name(name)
@@ -651,9 +661,9 @@ def get_function_index(column_expr, depth=0):
             # The assumption here is that a list that follows a string means
             # the string is a function name
             if isinstance(column_expr[i], str) and isinstance(column_expr[i + 1], (tuple, list)):
-                assert column_expr[i] in SAFE_FUNCTIONS or SAFE_FUNCTION_RE.match(
+                assert column_expr[i] in SAFE_FUNCTIONS or SAFE_FUNCTION_RE.match(column_expr[i]), (
                     column_expr[i]
-                ), column_expr[i]
+                )
                 index = i
                 break
             else:
@@ -892,8 +902,8 @@ class SnubaQueryParams:
     def __init__(
         self,
         dataset=None,
-        start=None,
-        end=None,
+        start: datetime | None = None,
+        end: datetime | None = None,
         groupby=None,
         conditions=None,
         filter_keys=None,
@@ -921,6 +931,72 @@ class SnubaQueryParams:
         self.referrer = referrer
         self.is_grouprelease = is_grouprelease
         self.kwargs = kwargs
+
+        # Groups can be merged together, but snuba is immutable(ish). In order to
+        # account for merges, here we expand queries to include all group IDs that have
+        # been merged together.
+
+        if self.dataset in {
+            Dataset.Events,
+            Dataset.IssuePlatform,
+        }:
+            self._preprocess_group_id_redirects()
+
+    def _preprocess_group_id_redirects(self):
+        # Conditions are a series of "AND" statements. For "group_id", to dedupe,
+        # we pre-collapse these. This helps us reduce the size of queries.
+        in_groups = None
+        out_groups: set[int | str] = set()
+        if "group_id" in self.filter_keys:
+            self.filter_keys = self.filter_keys.copy()
+            in_groups = set(self.filter_keys["group_id"])
+            del self.filter_keys["group_id"]
+
+        new_conditions = []
+
+        for triple in self.conditions:
+            if triple[0] != "group_id":
+                new_conditions.append(triple)
+                continue
+
+            op = triple[1]
+            # IN statements need to intersect
+            if op == "IN":
+                new_in_groups = set(triple[2])
+                if in_groups is not None:
+                    new_in_groups = in_groups.intersection(new_in_groups)
+                in_groups = new_in_groups
+            elif op == "=":
+                new_in_groups = {triple[2]}
+                if in_groups is not None:
+                    new_in_groups = in_groups.intersection(new_in_groups)
+                in_groups = new_in_groups
+            # NOT IN statements can union and be differenced at the end
+            elif op == "NOT IN":
+                out_groups.update(triple[2])
+            elif op == "!=":
+                out_groups.add(triple[2])
+
+        out_groups = get_all_merged_group_ids(out_groups)
+        triple = None
+        # If there is an "IN" statement, we don't need a "NOT IN" statement. We can
+        # just subtract the NOT IN groups from the IN groups.
+        if in_groups is not None:
+            in_groups.difference_update(out_groups)
+
+            # An "group_id IN ()" clause breaks clickhouse.
+            # Better to make the exception (& expectations) clear.
+            if len(in_groups) > 0:
+                triple = ["group_id", "IN", get_all_merged_group_ids(in_groups)]
+            else:
+                raise EmptyGroupIdIntersectionError("Found empty intersection of group_ids")
+        elif len(out_groups) > 0:
+            triple = ["group_id", "NOT IN", out_groups]
+
+        if triple is not None:
+            new_conditions.append(triple)
+
+        self.conditions = new_conditions
 
 
 def raw_query(
@@ -1176,7 +1252,7 @@ def _bulk_snuba_query(snuba_requests: Sequence[SnubaRequest]) -> ResultSet:
         span.set_tag("snuba.num_queries", len(snuba_requests_list))
 
         if len(snuba_requests_list) > 1:
-            with ThreadPoolExecutor(
+            with ContextPropagatingThreadPoolExecutor(
                 thread_name_prefix=__name__,
                 max_workers=10,
             ) as query_thread_pool:
@@ -1222,7 +1298,7 @@ def _bulk_snuba_query(snuba_requests: Sequence[SnubaRequest]) -> ResultSet:
                         log_snuba_info("{}.err: {}".format(referrer, body["error"]))
             except ValueError:
                 if response.status != 200:
-                    logger.exception(
+                    logger.warning(
                         "snuba.query.invalid-json",
                         extra={"response.data": response.data},
                     )
@@ -1440,8 +1516,8 @@ def _raw_snql_query(request: Request, headers: Mapping[str, str]) -> urllib3.res
 
 def query(
     dataset=None,
-    start=None,
-    end=None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     groupby=None,
     conditions=None,
     filter_keys=None,
@@ -1585,7 +1661,7 @@ def resolve_column(dataset) -> Callable:
             if dataset == Dataset.Events:
                 return col
             else:
-                return f"tags[{col.replace("[", "").replace("]", "").replace('"', "")}]"
+                return f"tags[{col.replace('[', '').replace(']', '').replace('"', '')}]"
 
         return f"tags[{col}]"
 

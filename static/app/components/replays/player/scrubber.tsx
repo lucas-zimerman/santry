@@ -1,16 +1,13 @@
 import {css} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import RangeSlider from 'sentry/components/forms/controls/rangeSlider';
-import SliderAndInputWrapper from 'sentry/components/forms/controls/rangeSlider/sliderAndInputWrapper';
-import ZoomTriangles from 'sentry/components/replays/player/zoomTrianges';
+import {ZoomTriangles} from 'sentry/components/replays/player/zoomTrianges';
 import {useReplayContext} from 'sentry/components/replays/replayContext';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import divide from 'sentry/utils/number/divide';
-import toPercent from 'sentry/utils/number/toPercent';
+import {divide} from 'sentry/utils/number/divide';
+import {toPercent} from 'sentry/utils/number/toPercent';
 import {useReplayReader} from 'sentry/utils/replays/playback/providers/replayReaderProvider';
-import useCurrentHoverTime from 'sentry/utils/replays/playback/providers/useCurrentHoverTime';
+import {useCurrentHoverTime} from 'sentry/utils/replays/playback/providers/useCurrentHoverTime';
 
 type Props = {
   className?: string;
@@ -37,13 +34,13 @@ function Scrubber({className, showZoomIndicators = false}: Props) {
       </Meter>
       {showZoomIndicators ? <ZoomTriangles /> : null}
       <RangeWrapper>
-        <Range
+        <StyledRange
+          type="range"
           name="replay-timeline"
           min={0}
           max={durationMs}
           value={Math.round(currentTime)}
-          onChange={value => setCurrentTime(value || 0)}
-          showLabel={false}
+          onChange={e => setCurrentTime(e.currentTarget.valueAsNumber || 0)}
           aria-label={t('Seek slider')}
         />
       </RangeWrapper>
@@ -56,7 +53,7 @@ const Meter = styled('div')`
   height: 100%;
   width: 100%;
   pointer-events: none;
-  background: ${p => p.theme.gray200};
+  background: ${p => p.theme.tokens.background.secondary};
 `;
 
 const RangeWrapper = styled('div')`
@@ -64,29 +61,28 @@ const RangeWrapper = styled('div')`
   width: 100%;
 `;
 
-const Range = styled(RangeSlider)`
-  & * {
-    height: 100% !important;
+const StyledRange = styled('input')`
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+  opacity: 0;
+
+  &::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    height: 0px;
+    width: 0px;
   }
-  input {
-    margin: 0;
-    cursor: pointer;
-    opacity: 0;
-
-    &::-webkit-slider-thumb {
-      height: 0px;
-      width: 0px;
-    }
-
-    &::-moz-range-thumb {
-      height: 0px;
-      width: 0px;
-    }
-
-    &::-ms-thumb {
-      height: 0px;
-      width: 0px;
-    }
+  &::-moz-range-thumb {
+    height: 0px;
+    width: 0px;
+  }
+  &::-ms-thumb {
+    height: 0px;
+    width: 0px;
   }
 `;
 
@@ -125,9 +121,7 @@ export const TimelineScrubber = styled(Scrubber)`
     height: 20px;
   }
 
-  ${RangeWrapper},
-  ${Range},
-  ${SliderAndInputWrapper} {
+  ${RangeWrapper} {
     height: 100%;
   }
 
@@ -140,33 +134,26 @@ export const TimelineScrubber = styled(Scrubber)`
    */
   ${PlaybackTimeValue},
   ${MouseTrackingValue} {
-    border-right: ${space(0.25)} solid ${p => p.theme.purple300};
+    border-right: ${p => p.theme.space['2xs']} solid
+      ${p => p.theme.tokens.graphics.accent.vibrant};
   }
 `;
 
 export const PlayerScrubber = styled(Scrubber)`
-  height: ${space(0.5)};
+  height: ${p => p.theme.space.xs};
 
   ${Meter} {
-    border-radius: ${p => p.theme.borderRadius};
-    background: ${p => p.theme.translucentInnerBorder};
+    border-radius: ${p => p.theme.radius.md};
   }
 
   ${RangeWrapper} {
     height: 32px;
     top: -14px;
   }
-  ${Range},
-  ${SliderAndInputWrapper} {
-    height: 100%;
-  }
-  input {
-    margin: 0;
-  }
 
   ${PlaybackTimeValue} {
-    background: ${p => p.theme.purple200};
-    border-radius: ${p => p.theme.borderRadius};
+    background: ${p => p.theme.tokens.background.accent.vibrant};
+    border-radius: ${p => p.theme.radius.md};
 
     /**
      * Draw the circle (appears on hover) to mark the currentTime of the video
@@ -175,13 +162,13 @@ export const PlayerScrubber = styled(Scrubber)`
      *           PlaybackTimeValue @ 20s
      */
     :after {
-      background: ${p => p.theme.purple300};
+      background: ${p => p.theme.tokens.background.accent.vibrant};
     }
   }
 
   ${MouseTrackingValue} {
-    background: ${p => p.theme.translucentBorder};
-    border-radius: ${p => p.theme.borderRadius};
+    background: ${p => p.theme.tokens.graphics.neutral.muted};
+    border-radius: ${p => p.theme.radius.md};
 
     /**
      * Draw a square so users can see their mouse position when it is left or right of the currentTime
@@ -191,14 +178,14 @@ export const PlayerScrubber = styled(Scrubber)`
      *      MouseTrackingValue @ 10s
      */
     :after {
-      background: ${p => p.theme.gray400};
+      background: ${p => p.theme.tokens.graphics.neutral.muted};
     }
   }
 
   ${PlaybackTimeValue}:after,
   ${MouseTrackingValue}:after {
-    --size: ${space(2)};
-    --borderWidth: ${space(0.25)};
+    --size: ${p => p.theme.space.xl};
+    --borderWidth: ${p => p.theme.space['2xs']};
     content: '';
     display: block;
     width: var(--size);
@@ -206,7 +193,7 @@ export const PlayerScrubber = styled(Scrubber)`
     pointer-events: none;
     box-sizing: content-box;
     border-radius: var(--size);
-    border: solid ${p => p.theme.white};
+    border: solid ${p => p.theme.tokens.border.onVibrant.light};
     border-width: var(--borderWidth);
     position: absolute;
     top: 0;

@@ -3,7 +3,7 @@ import {OrganizationFixture} from 'sentry-fixture/organization';
 import {SubscriptionFixture} from 'getsentry-test/fixtures/subscription';
 import {renderHookWithProviders, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import SubscriptionStore from 'getsentry/stores/subscriptionStore';
+import {SubscriptionStore} from 'getsentry/stores/subscriptionStore';
 
 import {useMetricDetectorLimit} from './useMetricDetectorLimit';
 
@@ -115,7 +115,7 @@ describe('useMetricDetectorLimit', () => {
       '/organizations/org-slug/detectors/',
       expect.objectContaining({
         query: expect.objectContaining({
-          query: 'type:metric',
+          query: '!type:issue_stream type:metric',
           per_page: 1,
         }),
       })

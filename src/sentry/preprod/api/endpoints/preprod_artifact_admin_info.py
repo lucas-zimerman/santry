@@ -1,24 +1,29 @@
+from __future__ import annotations
+
 import logging
 
+from django.db.models import F
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import analytics
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import Endpoint, region_silo_endpoint
+from sentry.api.base import Endpoint, internal_cell_silo_endpoint
 from sentry.api.permissions import StaffPermission
 from sentry.preprod.analytics import PreprodArtifactApiAdminGetInfoEvent
 from sentry.preprod.models import (
     InstallablePreprodArtifact,
     PreprodArtifact,
     PreprodArtifactSizeMetrics,
+    PreprodComparisonApproval,
 )
+from sentry.preprod.snapshots.models import PreprodSnapshotComparison, PreprodSnapshotMetrics
 
 logger = logging.getLogger(__name__)
 
 
-@region_silo_endpoint
+@internal_cell_silo_endpoint
 class PreprodArtifactAdminInfoEndpoint(Endpoint):
     owner = ApiOwner.EMERGE_TOOLS
     permission_classes = (StaffPermission,)
@@ -26,7 +31,7 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
         "GET": ApiPublishStatus.PRIVATE,
     }
 
-    def get(self, request: Request, preprod_artifact_id: str) -> Response:
+    def get(self, request: Request, head_artifact_id: str) -> Response:
         """
         Get comprehensive info for a preprod artifact
         ````````````````````````````````````````````
@@ -46,10 +51,10 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
         #"""
 
         try:
-            preprod_artifact_id_int = int(preprod_artifact_id)
+            head_artifact_id_int = int(head_artifact_id)
         except ValueError:
             return Response(
-                {"error": f"Invalid preprod artifact ID: {preprod_artifact_id}"}, status=400
+                {"error": f"Invalid preprod artifact ID: {head_artifact_id}"}, status=400
             )
 
         try:
@@ -58,10 +63,11 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
                 "project__organization",
                 "commit_comparison",
                 "build_configuration",
-            ).get(id=preprod_artifact_id_int)
+                "mobile_app_info",
+            ).get(id=head_artifact_id_int)
         except PreprodArtifact.DoesNotExist:
             return Response(
-                {"error": f"Preprod artifact {preprod_artifact_id_int} not found"}, status=404
+                {"error": f"Preprod artifact {head_artifact_id_int} not found"}, status=404
             )
 
         analytics.record(
@@ -69,17 +75,64 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
                 organization_id=preprod_artifact.project.organization_id,
                 project_id=preprod_artifact.project.id,
                 user_id=request.user.id,
-                artifact_id=preprod_artifact_id,
+                artifact_id=head_artifact_id,
             )
         )
 
         size_metrics = list(
-            PreprodArtifactSizeMetrics.objects.filter(preprod_artifact_id=preprod_artifact_id_int)
+            PreprodArtifactSizeMetrics.objects.filter(preprod_artifact_id=head_artifact_id_int)
         )
 
         installable_artifacts = list(
-            InstallablePreprodArtifact.objects.filter(preprod_artifact_id=preprod_artifact_id_int)
+            InstallablePreprodArtifact.objects.filter(preprod_artifact_id=head_artifact_id_int)
         )
+
+        snapshot_metrics = PreprodSnapshotMetrics.objects.filter(
+            preprod_artifact_id=head_artifact_id_int
+        ).first()
+
+        snapshot_comparison = None
+        if snapshot_metrics:
+            snapshot_comparison = (
+                PreprodSnapshotComparison.objects.filter(head_snapshot_metrics=snapshot_metrics)
+                .order_by("-date_added")
+                .values(
+                    "id",
+                    "state",
+                    "error_code",
+                    "error_message",
+                    "images_added",
+                    "images_removed",
+                    "images_changed",
+                    "images_unchanged",
+                    "images_renamed",
+                    "extras",
+                    "date_added",
+                    "date_updated",
+                    base_artifact_id=F("base_snapshot_metrics__preprod_artifact_id"),
+                )
+                .first()
+            )
+
+        snapshot_approval = (
+            PreprodComparisonApproval.objects.filter(
+                preprod_artifact_id=head_artifact_id_int,
+                preprod_feature_type=PreprodComparisonApproval.FeatureType.SNAPSHOTS,
+            )
+            .order_by("-date_added")
+            .values(
+                "id",
+                "approval_status",
+                "approved_at",
+                "approved_by_id",
+                "extras",
+                "date_added",
+                "date_updated",
+            )
+            .first()
+        )
+
+        mobile_app_info = preprod_artifact.get_mobile_app_info()
 
         artifact_info = {
             "id": preprod_artifact.id,
@@ -104,9 +157,9 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
             # App information
             "app_info": {
                 "app_id": preprod_artifact.app_id,
-                "app_name": preprod_artifact.app_name,
-                "build_version": preprod_artifact.build_version,
-                "build_number": preprod_artifact.build_number,
+                "app_name": mobile_app_info.app_name if mobile_app_info else None,
+                "build_version": mobile_app_info.build_version if mobile_app_info else None,
+                "build_number": mobile_app_info.build_number if mobile_app_info else None,
                 "main_binary_identifier": preprod_artifact.main_binary_identifier,
             },
             # File information
@@ -228,6 +281,19 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
                 }
                 for installable in installable_artifacts
             ],
+            "snapshot_metrics": (
+                {
+                    "id": snapshot_metrics.id,
+                    "image_count": snapshot_metrics.image_count,
+                    "extras": snapshot_metrics.extras,
+                    "date_added": snapshot_metrics.date_added,
+                    "date_updated": snapshot_metrics.date_updated,
+                }
+                if snapshot_metrics
+                else None
+            ),
+            "snapshot_comparison": snapshot_comparison,
+            "snapshot_approval": snapshot_approval,
             # Extra data
             "extras": preprod_artifact.extras,
         }
@@ -235,7 +301,7 @@ class PreprodArtifactAdminInfoEndpoint(Endpoint):
         logger.info(
             "preprod_artifact.admin_get_info",
             extra={
-                "artifact_id": preprod_artifact_id,
+                "artifact_id": head_artifact_id,
                 "user_id": request.user.id,
                 "organization_id": preprod_artifact.project.organization_id,
                 "project_id": preprod_artifact.project.id,

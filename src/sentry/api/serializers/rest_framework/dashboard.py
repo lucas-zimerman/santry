@@ -7,8 +7,7 @@ from typing import TypedDict
 
 import sentry_sdk
 from django.db.models import Max
-from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import extend_schema_field, extend_schema_serializer
+from drf_spectacular.utils import extend_schema_serializer
 from rest_framework import serializers
 
 from sentry import features, options
@@ -21,14 +20,15 @@ from sentry.issues.issue_search import parse_search_query
 from sentry.models.dashboard import Dashboard
 from sentry.models.dashboard_permissions import DashboardPermissions
 from sentry.models.dashboard_widget import (
+    DashboardFieldLink,
     DashboardWidget,
     DashboardWidgetDisplayTypes,
+    DashboardWidgetLegendType,
     DashboardWidgetQuery,
     DashboardWidgetQueryOnDemand,
     DashboardWidgetTypes,
     DatasetSourcesTypes,
 )
-from sentry.models.organization import Organization
 from sentry.models.team import Team
 from sentry.relay.config.metric_extraction import get_current_widget_specs, widget_exceeds_max_specs
 from sentry.search.events.builder.discover import UnresolvedQuery
@@ -42,7 +42,6 @@ from sentry.tasks.on_demand_metrics import (
     set_or_create_on_demand_state,
 )
 from sentry.tasks.relay import schedule_invalidate_project_config
-from sentry.users.models.user import User
 from sentry.utils.dates import parse_stats_period
 from sentry.utils.strings import oxfordize_list
 
@@ -57,6 +56,11 @@ DATASET_SOURCE_MAP = {source[1]: source[0] for source in DatasetSourcesTypes.as_
 class QueryWarning(TypedDict):
     queries: list[str | None]
     columns: dict[str, str]
+
+
+class LinkedDashboard(TypedDict):
+    field: str
+    dashboard_id: int
 
 
 def is_equation(field: str) -> bool:
@@ -100,38 +104,30 @@ def is_table_display_type(display_type):
     )
 
 
-@extend_schema_field(field=OpenApiTypes.OBJECT)
-class LayoutField(serializers.Field):
-    REQUIRED_KEYS = {
-        "x",
-        "y",
-        "w",
-        "h",
-        "min_h",
-    }
+MAX_WIDGET_COLS = 6
 
-    def to_internal_value(self, data):
-        if data is None:
-            return None
 
-        missing_keys = self.REQUIRED_KEYS - set(data.keys())
-        if missing_keys:
-            missing_key_str = ", ".join(sorted(snake_to_camel_case(key) for key in missing_keys))
-            raise serializers.ValidationError(f"Missing required keys: {missing_key_str}")
+class WidgetLayoutSerializer(CamelSnakeSerializer[Dashboard]):
+    """Widget grid layout position and dimensions.
 
-        layout_to_store = {}
-        for key in self.REQUIRED_KEYS:
-            value = data.get(key)
-            if value is None:
-                continue
+    The dashboard uses a 6-column grid. Required keys: x, y, w, h, minH.
+    Constraints: x (0-5), y (>= 0), w (1-6), h (>= 1), minH (>= 1), and x + w <= 6.
+    """
 
-            if not isinstance(value, int):
-                raise serializers.ValidationError(f"Expected number for: {key}")
-            layout_to_store[key] = value
+    x = serializers.IntegerField(
+        min_value=0, max_value=MAX_WIDGET_COLS - 1, help_text="Column position (0-indexed)."
+    )
+    y = serializers.IntegerField(min_value=0, help_text="Row position (0-indexed).")
+    w = serializers.IntegerField(
+        min_value=1, max_value=MAX_WIDGET_COLS, help_text="Width in grid columns (1-6)."
+    )
+    h = serializers.IntegerField(min_value=1, help_text="Height in grid rows.")
+    min_h = serializers.IntegerField(min_value=1, help_text="Minimum height in grid rows.")
 
-        # Store the layout with camel case dict keys because they'll be
-        # served as camel case in outgoing responses anyways
-        return convert_dict_key_case(layout_to_store, snake_to_camel_case)
+    def validate(self, data):
+        if data["x"] + data["w"] > MAX_WIDGET_COLS:
+            raise serializers.ValidationError(f"x + w must not exceed {MAX_WIDGET_COLS}")
+        return convert_dict_key_case(data, snake_to_camel_case)
 
 
 class DashboardWidgetQueryOnDemandSerializer(CamelSnakeSerializer[Dashboard]):
@@ -140,6 +136,13 @@ class DashboardWidgetQueryOnDemandSerializer(CamelSnakeSerializer[Dashboard]):
 
     def validate(self, data):
         return data
+
+
+class LinkedDashboardSerializer(CamelSnakeSerializer[Dashboard]):
+    field = serializers.CharField(required=True)
+    dashboard_id = serializers.CharField(required=True)
+
+    validate_dashboard_id = validate_id
 
 
 class DashboardWidgetQuerySerializer(CamelSnakeSerializer[Dashboard]):
@@ -163,37 +166,11 @@ class DashboardWidgetQuerySerializer(CamelSnakeSerializer[Dashboard]):
     on_demand_extraction_disabled = serializers.BooleanField(required=False)
 
     selected_aggregate = serializers.IntegerField(required=False, allow_null=True)
+    linked_dashboards = LinkedDashboardSerializer(many=True, required=False, allow_null=True)
 
     required_for_create = {"fields", "conditions"}
 
     validate_id = validate_id
-
-    def get_metrics_features(
-        self, organization: Organization | None, user: User | None
-    ) -> dict[str, bool | None]:
-        if organization is None or user is None:
-            return {}
-
-        feature_names = [
-            "organizations:mep-rollout-flag",
-            "organizations:dynamic-sampling",
-            "organizations:performance-use-metrics",
-            "organizations:dashboards-mep",
-        ]
-        batch_features = features.batch_has(
-            feature_names,
-            organization=organization,
-            actor=user,
-        )
-
-        return (
-            batch_features.get(f"organization:{organization.id}", {})
-            if batch_features is not None
-            else {
-                feature_name: features.has(feature_name, organization=organization, actor=user)
-                for feature_name in feature_names
-            }
-        )
 
     def validate(self, data):
         if not data.get("id"):
@@ -250,17 +227,6 @@ class DashboardWidgetQuerySerializer(CamelSnakeSerializer[Dashboard]):
             data["issue_query_error"] = {"conditions": [f"Invalid conditions: {err}"]}
 
         try:
-            batch_features = self.get_metrics_features(
-                self.context.get("organization"), self.context.get("user")
-            )
-            use_metrics = bool(
-                (
-                    batch_features.get("organizations:mep-rollout-flag", False)
-                    and batch_features.get("organizations:dynamic-sampling", False)
-                )
-                or batch_features.get("organizations:performance-use-metrics", False)
-                or batch_features.get("organizations:dashboards-mep", False)
-            )
             # When using the eps/epm functions, they require an interval argument
             # or to provide the start/end so that the interval can be computed.
             # This uses a hard coded start/end to ensure the validation succeeds
@@ -279,7 +245,7 @@ class DashboardWidgetQuerySerializer(CamelSnakeSerializer[Dashboard]):
             elif self.context.get("widget_type") == DashboardWidgetTypes.get_type_name(
                 DashboardWidgetTypes.TRANSACTION_LIKE
             ):
-                config.has_metrics = use_metrics
+                config.has_metrics = True
             builder = UnresolvedQuery(
                 dataset=Dataset.Discover,
                 params=params,
@@ -331,9 +297,7 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
     # Is a string because output serializers also make it a string.
     id = serializers.CharField(required=False)
     title = serializers.CharField(required=False, allow_blank=True, max_length=255)
-    description = serializers.CharField(
-        required=False, max_length=255, allow_null=True, allow_blank=True
-    )
+    description = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     thresholds = serializers.JSONField(required=False, allow_null=True)
     display_type = serializers.ChoiceField(
         choices=DashboardWidgetDisplayTypes.as_text_choices(), required=False
@@ -341,22 +305,33 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
     interval = serializers.CharField(required=False, max_length=10)
     queries = DashboardWidgetQuerySerializer(many=True, required=False)
     widget_type = serializers.ChoiceField(
-        choices=DashboardWidgetTypes.as_text_choices(), required=False
+        choices=DashboardWidgetTypes.as_text_choices(), required=False, allow_null=True
     )
-    limit = serializers.IntegerField(min_value=1, max_value=10, required=False, allow_null=True)
-    layout = LayoutField(required=False, allow_null=True)
+    limit = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    layout = WidgetLayoutSerializer(required=False, allow_null=True)
+    axis_range = serializers.ChoiceField(
+        choices=[("auto", "auto"), ("dataMin", "dataMin")],
+        required=False,
+        allow_null=True,
+    )
+    legend_type = serializers.ChoiceField(
+        choices=DashboardWidgetLegendType.as_text_choices(),
+        required=False,
+        allow_null=True,
+    )
     query_warnings: QueryWarning = {"queries": [], "columns": {}}
     dataset_source = serializers.ChoiceField(
         choices=DatasetSourcesTypes.as_text_choices(),
         required=False,
         help_text="A widgets's unique id.",
+        error_messages={"invalid_choice": "Invalid dataset source"},
     )
 
     def validate_display_type(self, display_type):
         return DashboardWidgetDisplayTypes.get_id_for_type_name(display_type)
 
-    def validate_widget_type(self, widget_type):
-        widget_type = DashboardWidgetTypes.get_id_for_type_name(widget_type)
+    def _validate_widget_type(self, data):
+        widget_type = DashboardWidgetTypes.get_id_for_type_name(data.get("widget_type"))
         if widget_type == DashboardWidgetTypes.DISCOVER or widget_type is None:
             sentry_sdk.set_context(
                 "dashboard",
@@ -366,16 +341,18 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
             )
             sentry_sdk.capture_message("Created or updated widget with discover dataset.")
             raise serializers.ValidationError(
-                "Attribute value `discover` is deprecated. Please use `error-events` or `transaction-like`"
+                {
+                    "widget_type": "Attribute value `discover` is deprecated. Please use `error-events` or `transaction-like`"
+                }
             )
         return widget_type
 
     validate_id = validate_id
 
-    def validate_interval(self, interval):
+    def _validate_interval(self, data):
+        interval = data.get("interval")
         if parse_stats_period(interval) is None:
-            raise serializers.ValidationError("Invalid interval")
-        return interval
+            raise serializers.ValidationError({"interval": "Invalid interval"})
 
     def to_internal_value(self, data):
         # Update the context for the queries serializer because the display type is
@@ -393,15 +370,72 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
         queries_serializer.context.update(additional_context)
         return super().to_internal_value(data)
 
+    def _validate_text_widget(self, data):
+        if not features.has(
+            "organizations:dashboards-text-widgets",
+            organization=self.context["organization"],
+            actor=self.context["request"].user,
+        ):
+            raise serializers.ValidationError({"display_type": "Text widgets are not enabled"})
+
+        if data.get("widget_type"):
+            raise serializers.ValidationError(
+                {"widget_type": "Text widgets don't have a widget type or dataset"}
+            )
+
+        description = data.get("description")
+        if description is not None and len(description) > 15000:
+            raise serializers.ValidationError(
+                {"description": "Description must not exceed 15,000 characters"}
+            )
+
+        queries = data.get("queries")
+        if queries and len(queries) > 0:
+            raise serializers.ValidationError({"queries": "Text widgets don't have queries"})
+
+        if not data.get("id"):
+            if not data.get("title"):
+                raise serializers.ValidationError({"title": "Title is required during creation."})
+
+        dataset_source = data.get("dataset_source")
+        if dataset_source is not None:
+            try:
+                data["dataset_source"] = DATASET_SOURCE_MAP[dataset_source]
+            except KeyError:
+                raise serializers.ValidationError({"dataset_source": "Invalid dataset source"})
+
+        return data
+
     def validate(self, data):
+        self.query_warnings = {"queries": [], "columns": {}}
+
+        if data.get("display_type") == DashboardWidgetDisplayTypes.TEXT:
+            return self._validate_text_widget(data)
+
+        if (
+            not data.get("id")
+            and data.get("display_type") in DashboardWidgetDisplayTypes.DEPRECATED_TYPES
+        ):
+            raise serializers.ValidationError(
+                {
+                    "display_type": f"{DashboardWidgetDisplayTypes.get_type_name(data['display_type'])} is no longer a supported display type."
+                }
+            )
+
         query_errors = []
         all_columns: set[str] = set()
         has_columns = False
         has_query_error = False
-        self.query_warnings = {"queries": [], "columns": {}}
         max_cardinality_allowed = options.get("on_demand.max_widget_cardinality.on_query_count")
         current_widget_specs = None
         organization = self.context["organization"]
+
+        if "interval" in data:
+            self._validate_interval(data)
+        # Only validate and convert widget_type when the client sent it; otherwise keep
+        # missing for partial updates (use existing) or default in create_widget.
+        if "widget_type" in data:
+            data["widget_type"] = self._validate_widget_type(data)
 
         ondemand_feature = features.has(
             "organizations:on-demand-metrics-extraction-widgets", organization
@@ -420,6 +454,13 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
                 {
                     "widget_type": "The transactions dataset is being deprecated. Please use the spans dataset with the `is_transaction:true` filter instead."
                 }
+            )
+
+        description = data.get("description")
+        description_length = len(description) if description else 0
+        if description_length > 255:
+            raise serializers.ValidationError(
+                {"description": "Ensure description has no more than 255 characters."}
             )
 
         if data.get("queries"):
@@ -524,8 +565,24 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
                 f"Dashboard Widget limit was not set. Suggested maximum limit is {limit}."
             )
             raise serializers.ValidationError(
-                {"limit": f"limit is required. The maximum limit is ${limit}."}
+                {"limit": f"limit is required. The maximum limit is {limit}."}
             )
+        # Validate limit based on display type: categorical bar charts allow up to 25,
+        # all other chart types allow up to 10.
+        widget_limit = data.get("limit")
+        if widget_limit is not None:
+            display_type = data.get("display_type")
+            if display_type == DashboardWidgetDisplayTypes.CATEGORICAL_BAR_CHART:
+                max_allowed = 25
+            elif display_type == DashboardWidgetDisplayTypes.TABLE:
+                max_allowed = 20
+            else:
+                max_allowed = 10
+            if widget_limit > max_allowed:
+                raise serializers.ValidationError(
+                    {"limit": f"The maximum limit for this display type is {max_allowed}."}
+                )
+
         # Validate widget thresholds
         thresholds = data.get("thresholds")
         if thresholds:
@@ -533,7 +590,7 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
             allowed_max_keys = [key.value for key in ThresholdMaxKeys]
             if max_values:
                 for i in range(len(max_values)):
-                    max_key = f"max{i+1}"
+                    max_key = f"max{i + 1}"
 
                     if max_key not in allowed_max_keys:
                         raise serializers.ValidationError(
@@ -568,15 +625,20 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
                                     }
                                 }
                             )
+            preferred_polarity = thresholds.get("preferred_polarity")
+            if preferred_polarity is not None and preferred_polarity not in ("+", "-", ""):
+                raise serializers.ValidationError(
+                    {"thresholds": {"preferred_polarity": "Must be '+', '-', or empty string."}}
+                )
         if len(all_columns) > 0:
             field_cardinality = check_field_cardinality(
                 list(all_columns), self.context["organization"], max_cardinality_allowed
             )
             for field, low_cardinality in field_cardinality.items():
                 if not low_cardinality:
-                    self.query_warnings["columns"][
-                        field
-                    ] = OnDemandExtractionState.DISABLED_HIGH_CARDINALITY
+                    self.query_warnings["columns"][field] = (
+                        OnDemandExtractionState.DISABLED_HIGH_CARDINALITY
+                    )
 
         widget_type = data.get("widget_type")
         if widget_type and widget_type in {
@@ -587,7 +649,10 @@ class DashboardWidgetSerializer(CamelSnakeSerializer[Dashboard]):
 
         dataset_source = data.get("dataset_source")
         if dataset_source is not None:
-            data["dataset_source"] = DATASET_SOURCE_MAP[dataset_source]
+            try:
+                data["dataset_source"] = DATASET_SOURCE_MAP[dataset_source]
+            except KeyError:
+                raise serializers.ValidationError({"dataset_source": "Invalid dataset source"})
 
         return data
 
@@ -695,6 +760,8 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
     def update_dashboard_filters(self, instance, validated_data):
         page_filter_keys = ["environment", "period", "start", "end", "utc"]
         dashboard_filter_keys = ["release", "release_id"]
+
+        dashboard_filter_keys.append("global_filter")
 
         filters = {}
 
@@ -811,6 +878,19 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
                     # Create a new widget.
                     self.create_widget(instance, data)
                 else:
+                    sentry_sdk.set_context(
+                        "dashboard",
+                        {
+                            "org_slug": instance.organization.slug,
+                            "dashboard_id": instance.id,
+                            "widget_id": widget_id,
+                            "existing_widget_ids": list(existing_map.keys()),
+                            "requested_widget_ids": widget_ids,
+                        },
+                    )
+                    sentry_sdk.capture_message(
+                        "Attempted to update widget not belonging to dashboard."
+                    )
                     raise serializers.ValidationError(
                         "You cannot update widgets that are not part of this dashboard."
                     )
@@ -822,6 +902,8 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
         DashboardWidget.objects.filter(dashboard_id=dashboard_id).exclude(id__in=keep_ids).delete()
 
     def create_widget(self, dashboard, widget_data):
+        is_text_widget = widget_data.get("display_type") == DashboardWidgetDisplayTypes.TEXT
+
         widget = DashboardWidget.objects.create(
             dashboard=dashboard,
             display_type=widget_data["display_type"],
@@ -829,15 +911,28 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
             description=widget_data.get("description", None),
             thresholds=widget_data.get("thresholds", None),
             interval=widget_data.get("interval", "5m"),
-            widget_type=widget_data.get("widget_type", DashboardWidgetTypes.ERROR_EVENTS),
+            widget_type=(
+                None
+                if is_text_widget
+                else widget_data.get("widget_type", DashboardWidgetTypes.ERROR_EVENTS)
+            ),
             discover_widget_split=widget_data.get("discover_widget_split", None),
             limit=widget_data.get("limit", None),
-            detail={"layout": widget_data.get("layout")},
+            detail={
+                "layout": widget_data.get("layout"),
+                "axis_range": widget_data.get("axis_range"),
+                "legend_type": widget_data.get("legend_type"),
+            },
             dataset_source=widget_data.get("dataset_source", DatasetSourcesTypes.USER.value),
         )
 
+        # text widgets don't have queries
+        if is_text_widget:
+            return
+
         new_queries = []
-        for i, query in enumerate(widget_data.pop("queries")):
+        query_data_list = widget_data.pop("queries")
+        for i, query in enumerate(query_data_list):
             new_queries.append(
                 DashboardWidgetQuery(
                     widget=widget,
@@ -855,6 +950,13 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
             )
 
         DashboardWidgetQuery.objects.bulk_create(new_queries)
+
+        # Handle field links for each query
+        for query_obj, query_data in zip(new_queries, query_data_list):
+            if "linked_dashboards" in query_data and query_data["linked_dashboards"]:
+                self._update_or_create_field_links(
+                    query_obj, query_data.get("linked_dashboards", []), widget
+                )
 
         if widget.widget_type in [
             DashboardWidgetTypes.DISCOVER,
@@ -886,8 +988,143 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
                 current_widget_specs,
             )
 
+    def _update_or_create_field_links(
+        self,
+        query: DashboardWidgetQuery,
+        linked_dashboards: list[LinkedDashboard],
+        widget: DashboardWidget,
+    ):
+        """
+        Update DashboardFieldLink entries for a query.
+        linked_dashboards is expected to be an array of dicts with format {"field": str, "dashboard_id": int}
+        This can be further optimized, currently we are doing one bulk update for every widget query, but we could do one bulk update for all widget queries at once.
+        In practice a table typically has only one query, so this is not a big deal.
+        """
+        organization = self.context["organization"]
+        linked_dashboards = linked_dashboards or []
+
+        with sentry_sdk.start_span(
+            op="function", name="dashboard.update_or_create_field_links"
+        ) as span:
+            # Get the set of fields that should exist
+            new_fields = set()
+            field_links_to_create = []
+
+            widget_display_type = widget.display_type
+            legend_type = widget.detail.get("legend_type") if widget.detail else None
+            span.set_data(
+                "linked_dashboards",
+                [
+                    {"field": ld.get("field"), "dashboard_id": ld.get("dashboard_id")}
+                    for ld in linked_dashboards
+                ],
+            )
+            span.set_data("widget_display_type", widget_display_type)
+            span.set_data("query_id", query.id)
+            span.set_data("widget_id", widget.id)
+
+            is_breakdown_chart = (
+                widget_display_type
+                in (
+                    DashboardWidgetDisplayTypes.LINE_CHART,
+                    DashboardWidgetDisplayTypes.BAR_CHART,
+                )
+                and legend_type == DashboardWidgetLegendType.BREAKDOWN
+            )
+            supports_field_links = (
+                widget_display_type == DashboardWidgetDisplayTypes.TABLE or is_breakdown_chart
+            )
+
+            if not supports_field_links and len(linked_dashboards) > 0:
+                raise serializers.ValidationError(
+                    "Field links are only supported for table widgets and breakdown charts"
+                )
+
+            if not supports_field_links and len(linked_dashboards) < 1:
+                return
+
+            # Validate no duplicate fields in linked dashboards
+            linked_fields = [ld.get("field") for ld in linked_dashboards]
+            if len(linked_fields) != len(set(linked_fields)):
+                raise serializers.ValidationError("Duplicate fields in linked dashboards")
+
+            # check if the linked dashboard field appears in the columns (group bys) of the query
+            if not all(
+                field in (query.columns or [])
+                for field in [
+                    linked_dashboard.get("field") for linked_dashboard in linked_dashboards
+                ]
+            ):
+                raise serializers.ValidationError(
+                    "Linked dashboard field does not appear in the columns of the widget query"
+                )
+
+            # Validate all linked dashboard IDs belong to this organization
+            linked_dashboard_ids = {
+                int(ld["dashboard_id"])
+                for ld in linked_dashboards
+                if ld.get("field") and ld.get("dashboard_id")
+            }
+            if linked_dashboard_ids:
+                valid_ids = set(
+                    Dashboard.objects.filter(
+                        id__in=linked_dashboard_ids,
+                        organization_id=organization.id,
+                    ).values_list("id", flat=True)
+                )
+                invalid_ids = linked_dashboard_ids - valid_ids
+                if invalid_ids:
+                    raise serializers.ValidationError("Linked dashboard does not exist")
+
+            for link_data in linked_dashboards:
+                field = link_data.get("field")
+                dashboard_id = link_data.get("dashboard_id")
+                if field and dashboard_id:
+                    new_fields.add(field)
+                    field_links_to_create.append(
+                        DashboardFieldLink(
+                            dashboard_widget_query=query,
+                            field=field,
+                            dashboard_id=int(dashboard_id),
+                        )
+                    )
+
+            # Delete field links that are no longer in the request
+            DashboardFieldLink.objects.filter(dashboard_widget_query=query).exclude(
+                field__in=new_fields
+            ).delete()
+
+            with sentry_sdk.start_span(
+                op="db.bulk_create", name="dashboard.update_or_create_field_links.bulk_create"
+            ) as span:
+                span.set_data("new_fields", list(new_fields))
+                span.set_data("query_id", query.id)
+                span.set_data("widget_id", widget.id)
+                span.set_data("widget_display_type", widget.display_type)
+                span.set_data(
+                    "linked_dashboards",
+                    [
+                        {"field": ld.get("field"), "dashboard_id": ld.get("dashboard_id")}
+                        for ld in linked_dashboards
+                    ],
+                )
+                span.set_data("field_links_count", len(field_links_to_create))
+
+                # Use bulk_create with update_conflicts to effectively upsert (i.e bulk update or create)
+                if field_links_to_create:
+                    DashboardFieldLink.objects.bulk_create(
+                        field_links_to_create,
+                        update_conflicts=True,
+                        unique_fields=["dashboard_widget_query", "field"],
+                        update_fields=["dashboard_id"],
+                    )
+
     def update_widget(self, widget, data):
         prev_layout = widget.detail.get("layout") if widget.detail else None
+        prev_axis_range = widget.detail.get("axis_range") if widget.detail else None
+        prev_legend_type = widget.detail.get("legend_type") if widget.detail else None
+        is_text_widget = data.get("display_type") == DashboardWidgetDisplayTypes.TEXT
+
         widget.title = data.get("title", widget.title)
         widget.description = data.get("description", widget.description)
         widget.thresholds = data.get("thresholds", widget.thresholds)
@@ -898,10 +1135,24 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
             "discover_widget_split", widget.discover_widget_split
         )
         widget.limit = data.get("limit", widget.limit)
-        widget.dataset_source = data.get("dataset_source", widget.dataset_source)
-        widget.detail = {"layout": data.get("layout", prev_layout)}
+        new_dataset_source = data.get("dataset_source", widget.dataset_source)
+        widget.dataset_source = new_dataset_source
+        widget.detail = {
+            "layout": data.get("layout", prev_layout),
+            "axis_range": data.get("axis_range", prev_axis_range),
+            "legend_type": data.get("legend_type", prev_legend_type),
+        }
 
-        if widget.widget_type not in [
+        # Text widgets don't have widget_type or dataset_source
+        if is_text_widget:
+            widget.widget_type = None
+            widget.discover_widget_split = None
+            widget.dataset_source = DatasetSourcesTypes.UNKNOWN.value
+        elif widget.widget_type == DashboardWidgetTypes.SPANS:
+            if new_dataset_source == DatasetSourcesTypes.USER.value:
+                widget.changed_reason = None
+        # we don't want to reset dataset source for spans widgets in case they are part of the migration
+        elif widget.widget_type not in [
             DashboardWidgetTypes.DISCOVER,
             DashboardWidgetTypes.TRANSACTION_LIKE,
             DashboardWidgetTypes.ERROR_EVENTS,
@@ -913,11 +1164,15 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
 
         widget.save()
 
-        if "queries" in data:
+        if is_text_widget:
+            # Text widgets don't have queries - delete all if the previous widget had queries
+            DashboardWidgetQuery.objects.filter(widget=widget).delete()
+        elif "queries" in data:
             self.update_widget_queries(widget, data["queries"])
 
     def update_widget_queries(self, widget, data):
         query_ids = [query["id"] for query in data if "id" in query]
+        all_query_array = []
         self.remove_missing_queries(widget.id, query_ids)
 
         existing = DashboardWidgetQuery.objects.filter(widget=widget, id__in=query_ids)
@@ -931,28 +1186,38 @@ class DashboardDetailsSerializer(CamelSnakeSerializer[Dashboard]):
         for i, query_data in enumerate(data):
             query_id = query_data.get("id")
             if query_id and query_id in existing_map:
-                update_queries.append(
-                    self.update_widget_query(existing_map[query_id], query_data, next_order + i)
+                update_query = self.update_widget_query(
+                    existing_map[query_id], query_data, next_order + i
                 )
+                all_query_array.append({"query_obj": update_query, "query_data": query_data})
+                update_queries.append(update_query)
             elif not query_id:
-                new_queries.append(
-                    DashboardWidgetQuery(
-                        widget=widget,
-                        fields=query_data["fields"],
-                        aggregates=query_data.get("aggregates"),
-                        columns=query_data.get("columns"),
-                        field_aliases=query_data.get("field_aliases"),
-                        conditions=query_data["conditions"],
-                        name=query_data.get("name", ""),
-                        is_hidden=query_data.get("is_hidden", False),
-                        orderby=query_data.get("orderby", ""),
-                        order=next_order + i,
-                        selected_aggregate=query_data.get("selected_aggregate"),
-                    )
+                new_query = DashboardWidgetQuery(
+                    widget=widget,
+                    fields=query_data["fields"],
+                    aggregates=query_data.get("aggregates"),
+                    columns=query_data.get("columns"),
+                    field_aliases=query_data.get("field_aliases"),
+                    conditions=query_data["conditions"],
+                    name=query_data.get("name", ""),
+                    is_hidden=query_data.get("is_hidden", False),
+                    orderby=query_data.get("orderby", ""),
+                    order=next_order + i,
+                    selected_aggregate=query_data.get("selected_aggregate"),
                 )
+                new_queries.append(new_query)
+                all_query_array.append({"query_obj": new_query, "query_data": query_data})
             else:
                 raise serializers.ValidationError("You cannot use a query not owned by this widget")
         DashboardWidgetQuery.objects.bulk_create(new_queries)
+
+        for query_data in all_query_array:
+            if "linked_dashboards" in query_data["query_data"]:
+                self._update_or_create_field_links(
+                    query_data["query_obj"],
+                    query_data["query_data"].get("linked_dashboards", []),
+                    widget,
+                )
 
         if widget.widget_type in [
             DashboardWidgetTypes.DISCOVER,

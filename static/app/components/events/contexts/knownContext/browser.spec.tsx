@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getBrowserContextData,
   type BrowserContext,
@@ -60,8 +60,8 @@ describe('BrowserContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'browser'}
-        alias={'browser'}
+        type="browser"
+        alias="browser"
         value={{...MOCK_BROWSER_CONTEXT, name: ''}}
       />
     );

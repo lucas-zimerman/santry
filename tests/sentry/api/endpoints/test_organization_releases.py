@@ -7,8 +7,9 @@ import pytest
 from django.urls import reverse
 from django.utils import timezone
 
+from sentry.api.bases.organization import OrganizationReleasesBaseEndpoint
 from sentry.api.endpoints.organization_releases import ReleaseSerializerWithProjects
-from sentry.api.release_search import FINALIZED_KEY
+from sentry.api.release_search import FINALIZED_KEY, RELEASE_CREATED_KEY
 from sentry.api.serializers.rest_framework.release import ReleaseHeadCommitSerializer
 from sentry.auth import access
 from sentry.constants import BAD_RELEASE_CHARS, MAX_COMMIT_LENGTH, MAX_VERSION_LENGTH
@@ -44,6 +45,7 @@ from sentry.testutils.cases import (
     TestCase,
 )
 from sentry.testutils.outbox import outbox_runner
+from sentry.testutils.requests import drf_request_from_request
 from sentry.testutils.silo import assume_test_silo_mode
 from sentry.testutils.skips import requires_snuba
 from sentry.types.activity import ActivityType
@@ -249,30 +251,79 @@ class OrganizationReleaseListTest(APITestCase, BaseMetricsTestCase):
     def test_release_list_order_by_semver(self) -> None:
         self.login_as(user=self.user)
         release_1 = self.create_release(version="test@2.2")
-        release_2 = self.create_release(version="test@10.0+122")
+        release_2 = self.create_release(version="test@10.0+1000")
         release_3 = self.create_release(version="test@2.2-alpha")
         release_4 = self.create_release(version="test@2.2.3")
         release_5 = self.create_release(version="test@2.20.3")
         release_6 = self.create_release(version="test@2.20.3.3")
-        release_7 = self.create_release(version="test@10.0+123")
+        release_7 = self.create_release(version="test@10.0+998")
         release_8 = self.create_release(version="test@some_thing")
         release_9 = self.create_release(version="random_junk")
+        release_10 = self.create_release(version="test@10.0+x22")
+        release_11 = self.create_release(version="test@10.0+a23")
+        release_12 = self.create_release(version="test@10.0")
+        release_13 = self.create_release(version="test@10.0-abc")
+        release_14 = self.create_release(version="test@10.0+999")
 
         response = self.get_success_response(self.organization.slug, sort="semver")
-        self.assert_expected_versions(
-            response,
-            [
-                release_7,
-                release_2,
-                release_6,
-                release_5,
-                release_4,
-                release_1,
-                release_3,
-                release_9,
-                release_8,
-            ],
-        )
+
+        # without build code ordering, tiebreaker is date_added
+        expected_order = [
+            release_14,  # test@10.0+999
+            release_12,  # test@10.0
+            release_11,  # test@10.0+a23
+            release_10,  # test@10.0+x22
+            release_7,  # test@10.0+998
+            release_2,  # test@10.0+1000
+            release_13,  # test@10.0-abc
+            release_6,  # test@2.20.3.3
+            release_5,  # test@2.20.3
+            release_4,  # test@2.2.3
+            release_1,  # test@2.2
+            release_3,  # test@2.2-alpha
+            release_9,  # random_junk
+            release_8,  # test@some_thing
+        ]
+        self.assert_expected_versions(response, expected_order)
+
+    def test_release_list_order_by_semver_with_build_code(self) -> None:
+        self.login_as(user=self.user)
+
+        release_1 = self.create_release(version="test@2.2")
+        release_2 = self.create_release(version="test@10.0+1000")
+        release_3 = self.create_release(version="test@2.2-alpha")
+        release_4 = self.create_release(version="test@2.2.3")
+        release_5 = self.create_release(version="test@2.20.3")
+        release_6 = self.create_release(version="test@2.20.3.3")
+        release_7 = self.create_release(version="test@10.0+998")
+        release_8 = self.create_release(version="test@some_thing")
+        release_9 = self.create_release(version="random_junk")
+        release_10 = self.create_release(version="test@10.0+x22")
+        release_11 = self.create_release(version="test@10.0+a23")
+        release_12 = self.create_release(version="test@10.0")
+        release_13 = self.create_release(version="test@10.0-abc")
+        release_14 = self.create_release(version="test@10.0+999")
+
+        with self.feature("organizations:semver-ordering-with-build-code"):
+            response = self.get_success_response(self.organization.slug, sort="semver")
+
+        expected_order = [
+            release_10,  # test@10.0+x22
+            release_11,  # test@10.0+a23
+            release_2,  # test@10.0+1000
+            release_14,  # test@10.0+999
+            release_7,  # test@10.0+998
+            release_12,  # test@10.0
+            release_13,  # test@10.0-abc
+            release_6,  # test@2.20.3.3
+            release_5,  # test@2.20.3
+            release_4,  # test@2.2.3
+            release_1,  # test@2.2
+            release_3,  # test@2.2-alpha
+            release_9,  # random_junk
+            release_8,  # test@some_thing
+        ]
+        self.assert_expected_versions(response, expected_order)
 
     def test_query_filter(self) -> None:
         user = self.create_user(is_staff=False, is_superuser=False)
@@ -1097,6 +1148,45 @@ class OrganizationReleasesStatsTest(APITestCase):
             release_1.version,
         ]
 
+    def test_release_created_filter(self) -> None:
+        self.login_as(user=self.user)
+
+        now = timezone.now()
+        one_day_ago = now - timedelta(days=1)
+        one_week_ago = now - timedelta(days=7)
+        two_weeks_ago = now - timedelta(days=14)
+
+        release_1 = self.create_release(version="release-1", date_added=two_weeks_ago)
+        release_2 = self.create_release(version="release-2", date_added=one_week_ago)
+        release_3 = self.create_release(version="release-3", date_added=one_day_ago)
+        release_4 = self.create_release(version="release-4", date_added=now)
+
+        # Test relative date filter: releases created in the last 3 days
+        response = self.get_success_response(
+            self.organization.slug, query=f"{RELEASE_CREATED_KEY}:-3d"
+        )
+        assert [r["version"] for r in response.data] == [
+            release_4.version,
+            release_3.version,
+        ]
+
+        # Test comparison operator: releases created after a specific date
+        formatted_date = one_week_ago.strftime("%Y-%m-%dT%H:%M:%S")
+        response = self.get_success_response(
+            self.organization.slug, query=f"{RELEASE_CREATED_KEY}:>={formatted_date}"
+        )
+        assert [r["version"] for r in response.data] == [
+            release_4.version,
+            release_3.version,
+            release_2.version,
+        ]
+
+        # Test comparison operator: releases created before a specific date
+        response = self.get_success_response(
+            self.organization.slug, query=f"{RELEASE_CREATED_KEY}:<{formatted_date}"
+        )
+        assert [r["version"] for r in response.data] == [release_1.version]
+
     def test_release_stage_filter(self) -> None:
         self.login_as(user=self.user)
 
@@ -1259,6 +1349,22 @@ class OrganizationReleasesStatsTest(APITestCase):
 
         response = self.get_success_response(self.organization.slug, query="release:*baz*")
         assert [r["version"] for r in response.data] == []
+
+    def test_environment_in_query_param(self) -> None:
+        """environment: in the query string filters the stats endpoint's ValuesQuerySet correctly."""
+        env = self.create_environment(name="prod", project=self.project1)
+
+        release_in_env = self.create_release(project=self.project1, version="release-in-env")
+        ReleaseProjectEnvironment.objects.create(
+            project_id=self.project1.id,
+            release_id=release_in_env.id,
+            environment_id=env.id,
+        )
+
+        self.create_release(project=self.project2, version="release-not-in-env")
+
+        response = self.get_success_response(self.organization.slug, query="environment:prod")
+        assert [r["version"] for r in response.data] == [release_in_env.version]
 
 
 class OrganizationReleaseCreateTest(APITestCase):
@@ -2101,6 +2207,108 @@ class OrganizationReleaseCreateTest(APITestCase):
         assert response.status_code == 400
         assert response.data == {"refs": ["Invalid repository names: not_a_repo"]}
 
+    def test_project_ids_as_strings(self) -> None:
+        """
+        Test that project IDs can be passed as strings (common in JSON payloads).
+        This ensures compatibility with clients that serialize numeric IDs as strings.
+        """
+        user = self.create_user(is_staff=False, is_superuser=False)
+        org = self.create_organization()
+        team = self.create_team(organization=org)
+        project = self.create_project(name="test-project", organization=org, teams=[team])
+
+        self.create_member(teams=[team], user=user, organization=org)
+
+        # Create a token with project:releases scope
+        with assume_test_silo_mode(SiloMode.CONTROL):
+            token = ApiToken.objects.create(user=user, scope_list=["project:releases"])
+
+        url = reverse(
+            "sentry-api-0-organization-releases",
+            kwargs={"organization_id_or_slug": org.slug},
+        )
+
+        # Test with project ID as string (common in JSON)
+        response = self.client.post(
+            url,
+            data={"version": "1.0.0", "projects": [str(project.id)]},
+            HTTP_AUTHORIZATION=f"Bearer {token.token}",
+        )
+        assert response.status_code == 201, response.content
+        assert Release.objects.filter(version="1.0.0", organization_id=org.id).exists()
+
+        # Test with project ID as integer
+        response = self.client.post(
+            url,
+            data={"version": "2.0.0", "projects": [project.id]},
+            HTTP_AUTHORIZATION=f"Bearer {token.token}",
+        )
+        assert response.status_code == 201, response.content
+        assert Release.objects.filter(version="2.0.0", organization_id=org.id).exists()
+
+        # Test with project slug
+        response = self.client.post(
+            url,
+            data={"version": "3.0.0", "projects": [project.slug]},
+            HTTP_AUTHORIZATION=f"Bearer {token.token}",
+        )
+        assert response.status_code == 201, response.content
+        assert Release.objects.filter(version="3.0.0", organization_id=org.id).exists()
+
+    def test_user_auth_token_with_project_releases_scope_non_member(self) -> None:
+        """
+        Test that a user with a token that has project:releases scope can create
+        releases for projects they're not a team member of, ensuring consistency
+        with the project releases endpoint behavior.
+        """
+        user = self.create_user(is_staff=False, is_superuser=False)
+        org = self.create_organization()
+        org.flags.allow_joinleave = False
+        org.save()
+
+        team1 = self.create_team(organization=org)
+        team2 = self.create_team(organization=org)
+
+        project1 = self.create_project(name="project1", organization=org, teams=[team1])
+        project2 = self.create_project(name="project2", organization=org, teams=[team2])
+
+        # Make user a member of the org with team1, but not team2
+        self.create_member(teams=[team1], user=user, organization=org)
+
+        # Create a token with project:releases scope
+        with assume_test_silo_mode(SiloMode.CONTROL):
+            token = ApiToken.objects.create(user=user, scope_list=["project:releases"])
+
+        url = reverse(
+            "sentry-api-0-organization-releases",
+            kwargs={"organization_id_or_slug": org.slug},
+        )
+
+        # Should be able to create release for project1 (team member)
+        response = self.client.post(
+            url,
+            data={"version": "1.0.0", "projects": [project1.slug]},
+            HTTP_AUTHORIZATION=f"Bearer {token.token}",
+        )
+        assert response.status_code == 201, response.content
+        assert Release.objects.filter(version="1.0.0", organization_id=org.id).exists()
+
+        # Should also be able to create release for project2 (not a team member)
+        # This ensures consistency with the project releases endpoint which allows
+        # users with project:releases scope to create releases even if they're not
+        # direct team members
+        response = self.client.post(
+            url,
+            data={"version": "2.0.0", "projects": [project2.slug]},
+            HTTP_AUTHORIZATION=f"Bearer {token.token}",
+        )
+        assert response.status_code == 201, response.content
+        assert Release.objects.filter(version="2.0.0", organization_id=org.id).exists()
+
+        # Verify release is properly associated with project2
+        release = Release.objects.get(version="2.0.0", organization_id=org.id)
+        assert ReleaseProject.objects.filter(release=release, project=project2).exists()
+
 
 class OrganizationReleaseCommitRangesTest(SetRefsTestCase):
     def setUp(self) -> None:
@@ -2269,6 +2477,8 @@ class OrganizationReleaseCommitRangesTest(SetRefsTestCase):
 
 
 class OrganizationReleaseListEnvironmentsTest(APITestCase):
+    endpoint = "sentry-api-0-organization-releases"
+
     def setUp(self) -> None:
         self.login_as(user=self.user)
         org = self.create_organization(owner=self.user)
@@ -2342,7 +2552,6 @@ class OrganizationReleaseListEnvironmentsTest(APITestCase):
         return env
 
     def assert_releases(self, response, releases):
-        assert response.status_code == 200, response.content
         assert len(response.data) == len(releases)
 
         response_versions = sorted(r["version"] for r in response.data)
@@ -2350,77 +2559,101 @@ class OrganizationReleaseListEnvironmentsTest(APITestCase):
         assert response_versions == releases_versions
 
     def test_environments_filter(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
-        )
-        response = self.client.get(url + "?environment=" + self.env1.name, format="json")
+        response = self.get_success_response(self.org.slug, environment=self.env1.name)
         self.assert_releases(response, [self.release1, self.release5])
 
-        response = self.client.get(url + "?environment=" + self.env2.name, format="json")
+        response = self.get_success_response(self.org.slug, environment=self.env2.name)
         self.assert_releases(response, [self.release2, self.release3, self.release5])
 
     def test_empty_environment(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
-        )
         env = self.make_environment("", self.project2)
         ReleaseProjectEnvironment.objects.create(
             project_id=self.project2.id, release_id=self.release4.id, environment_id=env.id
         )
-        response = self.client.get(url + "?environment=", format="json")
+        response = self.get_success_response(self.org.slug, environment="")
         self.assert_releases(response, [self.release4])
 
     def test_all_environments(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
-        )
-        response = self.client.get(url, format="json")
+        response = self.get_success_response(self.org.slug)
         self.assert_releases(
             response, [self.release1, self.release2, self.release3, self.release4, self.release5]
         )
 
     def test_invalid_environment(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
+        self.get_error_response(self.org.slug, environment="invalid_environment", status_code=404)
+
+    def test_environment_in_query_param_no_duplicates(self) -> None:
+        """A release in the same environment across multiple projects must appear only once."""
+        # Give project2 the prod environment and associate release5 with it,
+        # so release5 has two RPE rows both matching environment:prod.
+        self.env1.add_project(self.project2)
+        ReleaseProjectEnvironment.objects.create(
+            project_id=self.project2.id, release_id=self.release5.id, environment_id=self.env1.id
         )
-        response = self.client.get(url + "?environment=" + "invalid_environment", format="json")
-        assert response.status_code == 404
+        # Use the header that enables __get_new, which lacks the .distinct() that __get_old has.
+        response = self.get_success_response(
+            self.org.slug,
+            query=f"environment:{self.env1.name}",
+            extra_headers={"HTTP_X_PERFORMANCE_OPTIMIZATIONS": "enabled"},
+        )
+        self.assert_releases(response, [self.release1, self.release5])
+
+    def test_environment_in_query_param(self) -> None:
+        """environment: in the query string should filter the same as ?environment="""
+        response = self.get_success_response(self.org.slug, query=f"environment:{self.env1.name}")
+        self.assert_releases(response, [self.release1, self.release5])
+
+        response = self.get_success_response(self.org.slug, query=f"environment:{self.env2.name}")
+        self.assert_releases(response, [self.release2, self.release3, self.release5])
+
+    def test_environment_query_param_and_environment_filter_are_anded(self) -> None:
+        """Both ?environment= and environment: in query are applied as AND conditions."""
+        # ?environment=prod alone → release1, release5
+        # query=environment:staging alone → release2, release3, release5
+        # Both together → only release5 (in both prod and staging)
+        response = self.get_success_response(
+            self.org.slug,
+            environment=self.env1.name,
+            query=f"environment:{self.env2.name}",
+        )
+        self.assert_releases(response, [self.release5])
+
+    def test_environment_wildcard_in_query_param(self) -> None:
+        """environment: with wildcard patterns in the query string should use substring matching"""
+        # env1="prod" contains "rod"; env2="staging" does not
+        response = self.get_success_response(self.org.slug, query="environment:*rod*")
+        self.assert_releases(response, [self.release1, self.release5])
+
+        # The frontend sends Contains via private-use unicode delimiters — same semantics
+        response = self.get_success_response(
+            self.org.slug, query="!environment:\uf00dContains\uf00dprod"
+        )
+        self.assert_releases(response, [self.release2, self.release3, self.release4])
 
     def test_specify_project_ids(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
-        )
-        response = self.client.get(url, format="json", data={"project": self.project1.id})
+        response = self.get_success_response(self.org.slug, project=self.project1.id)
         self.assert_releases(response, [self.release1, self.release3, self.release5])
-        response = self.client.get(url, format="json", data={"project": self.project2.id})
+
+        response = self.get_success_response(self.org.slug, project=self.project2.id)
         self.assert_releases(response, [self.release2, self.release4, self.release5])
-        response = self.client.get(
-            url, format="json", data={"project": [self.project1.id, self.project2.id]}
+
+        response = self.get_success_response(
+            self.org.slug, project=[self.project1.id, self.project2.id]
         )
         self.assert_releases(
             response, [self.release1, self.release2, self.release3, self.release4, self.release5]
         )
 
     def test_date_range(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
-        )
-        response = self.client.get(
-            url,
-            format="json",
-            data={
-                "start": (datetime.now() - timedelta(days=1)).isoformat() + "Z",
-                "end": datetime.now().isoformat() + "Z",
-            },
+        response = self.get_success_response(
+            self.org.slug,
+            start=(datetime.now() - timedelta(days=1)).isoformat() + "Z",
+            end=datetime.now().isoformat() + "Z",
         )
         self.assert_releases(response, [self.release4, self.release5])
 
     def test_invalid_date_range(self) -> None:
-        url = reverse(
-            "sentry-api-0-organization-releases", kwargs={"organization_id_or_slug": self.org.slug}
-        )
-        response = self.client.get(url, format="json", data={"start": "null", "end": "null"})
-        assert response.status_code == 400
+        self.get_error_response(self.org.slug, start="null", end="null", status_code=400)
 
 
 class OrganizationReleaseCreateCommitPatch(ReleaseCommitPatchTest):
@@ -2793,3 +3026,73 @@ class ReleaseHeadCommitSerializerTest(unittest.TestCase):
             }
         )
         assert not serializer.is_valid()
+
+
+class OrganizationReleasesBaseEndpointGetProjectsTest(TestCase):
+    """
+    Tests for OrganizationReleasesBaseEndpoint.get_projects() method.
+    """
+
+    @cached_property
+    def endpoint(self) -> OrganizationReleasesBaseEndpoint:
+        return OrganizationReleasesBaseEndpoint()
+
+    def test_api_token_cross_organization_returns_empty(self) -> None:
+        """
+        Test that an API token with project:releases scope cannot access
+        projects in an organization where the token owner is not a member.
+
+        This tests the get_projects() method directly, bypassing HTTP dispatch,
+        to verify the method itself correctly restricts cross-org access. As of
+        when this test was written, this permission is enforced by the calling
+        code, but we want to ensure the method itself also enforces this restriction.
+        """
+        # Create two organizations
+        org_a = self.create_organization(name="org-a")
+        org_b = self.create_organization(name="org-b")
+
+        # Create a user who is a member of org_a only
+        user = self.create_user("user@example.com")
+        self.create_member(user=user, organization=org_a)
+        # user is NOT a member of org_b
+
+        # Create projects in both orgs
+        self.create_project(organization=org_a)
+        self.create_project(organization=org_b)
+
+        # Create an API token with project:releases scope
+        with assume_test_silo_mode(SiloMode.CONTROL):
+            token = ApiToken.objects.create(user=user, scope_list=["project:releases"])
+
+        # Build a request targeting org_b (where user is NOT a member)
+        request = drf_request_from_request(self.make_request(user=user, auth=token, method="POST"))
+        request.access = access.from_request(request, org_b)
+
+        # Call get_projects directly - this should return empty list
+        # because the token owner is not a member of org_b
+        projects = self.endpoint.get_projects(request, org_b)
+
+        # Should return empty list - no cross-org access allowed
+        assert projects == []
+
+    def test_api_token_same_organization_returns_projects(self) -> None:
+        """
+        Test that an API token with project:releases scope CAN access
+        projects in an organization where the token owner IS a member.
+        """
+        org = self.create_organization(name="org")
+        user = self.create_user("user@example.com")
+        team = self.create_team(organization=org)
+        self.create_member(user=user, organization=org, teams=[team])
+        project = self.create_project(organization=org, teams=[team])
+
+        with assume_test_silo_mode(SiloMode.CONTROL):
+            token = ApiToken.objects.create(user=user, scope_list=["project:releases"])
+
+        request = drf_request_from_request(self.make_request(user=user, auth=token, method="POST"))
+        request.access = access.from_request(request, org)
+
+        projects = self.endpoint.get_projects(request, org)
+
+        # Should return the project since user is a member
+        assert project in projects

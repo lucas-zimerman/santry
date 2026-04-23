@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import sentry_sdk
 from django.db.models import Q
-from django.http.request import HttpRequest, QueryDict
+from django.http.request import QueryDict
 
 from sentry import features
 from sentry.api.serializers import serialize
@@ -52,15 +52,14 @@ map_incident_args = make_type_coercer(
 
 
 def unfurl_metric_alerts(
-    request: HttpRequest,
     integration: Integration | RpcIntegration,
     links: list[UnfurlableUrl],
     user: User | RpcUser | None = None,
 ) -> UnfurledUrl:
-    event = MessagingInteractionEvent(
+    with MessagingInteractionEvent(
         MessagingInteractionType.UNFURL_METRIC_ALERTS, SlackMessagingSpec(), user=user
-    )
-    with event.capture():
+    ).capture() as lifecycle:
+        lifecycle.add_extras({"integration_id": integration.id})
         return _unfurl_metric_alerts(integration, links, user)
 
 
@@ -183,11 +182,11 @@ def map_metric_alert_query_args(url: str, args: Mapping[str, str | None]) -> Map
 
 
 metric_alerts_link_regex = re.compile(
-    r"^https?\://(?#url_prefix)[^/]+/organizations/(?P<org_slug>[^/]+)/alerts/rules/details/(?P<alert_rule_id>\d+)"
+    r"^https?\://(?#url_prefix)[^/]+/organizations/(?P<org_slug>[^/]+)/issues/alerts/rules/details/(?P<alert_rule_id>\d+)"
 )
 
 customer_domain_metric_alerts_link_regex = re.compile(
-    r"^https?\://(?P<org_slug>[^/]+?)\.(?#url_prefix)[^/]+/alerts/rules/details/(?P<alert_rule_id>\d+)"
+    r"^https?\://(?P<org_slug>[^/]+?)\.(?#url_prefix)[^/]+/issues/alerts/rules/details/(?P<alert_rule_id>\d+)"
 )
 
 metric_alert_handler = Handler(

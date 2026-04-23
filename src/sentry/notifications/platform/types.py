@@ -3,7 +3,9 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
+
+from pydantic import BaseModel
 
 from sentry.integrations.types import ExternalProviderEnum
 
@@ -17,19 +19,88 @@ class NotificationCategory(StrEnum):
 
     # TODO(ecosystem): Connect this to NotificationSettingEnum
     DEBUG = "debug"
+    DATA_EXPORT = "data-export"
+    DYNAMIC_SAMPLING = "dynamic-sampling"
+    REPOSITORY = "repository"
+    SEER = "seer"
+    ISSUE = "issue"
+    METRIC_ALERT = "metric-alert"
 
-    def get_sources(self) -> list[str]:
+    def get_sources(self) -> list[NotificationSource]:
         return NOTIFICATION_SOURCE_MAP[self]
 
 
-NOTIFICATION_SOURCE_MAP = {
+class NotificationSource(StrEnum):
+    """
+    A name for a notification being sent. Each notification sent should have a unique source.
+    """
+
+    # DEBUG
+    TEST = "test"
+    ERROR_ALERT = "error-alert-service"
+    DEPLOYMENT = "deployment-service"
+    SLOW_LOAD_METRIC_ALERT = "slow-load-metric-alert"
+    PERFORMANCE_MONITORING = "performance-monitoring"
+    TEAM_COMMUNICATION = "team-communication"
+
+    # DATA_EXPORT
+    DATA_EXPORT_SUCCESS = "data-export-success"
+    DATA_EXPORT_FAILURE = "data-export-failure"
+
+    # DYNAMIC_SAMPLING
+    CUSTOM_RULE_SAMPLES_FULFILLED = "custom-rule-samples-fulfilled"
+
+    # REPOSITORY
+    UNABLE_TO_DELETE_REPOSITORY = "unable-to-delete-repository"
+
+    # ISSUE_ALERT
+    ISSUE = "issue"
+
+    # METRIC_ALERT
+    METRIC_ALERT = "metric-alert"
+
+    # SEER
+    SEER_AUTOFIX_ERROR = "seer-autofix-error"
+    SEER_AUTOFIX_UPDATE = "seer-autofix-update"
+    SEER_AUTOFIX_TRIGGER = "seer-autofix-trigger"
+    SEER_AUTOFIX_FOOTER = "seer-autofix-footer"
+    SEER_AUTOFIX_SUCCESS = "seer-autofix-success"
+    SEER_AGENT_RESPONSE = "seer-agent-response"
+    SEER_AGENT_ERROR = "seer-agent-error"
+
+
+NOTIFICATION_SOURCE_MAP: dict[NotificationCategory, list[NotificationSource]] = {
     NotificationCategory.DEBUG: [
-        "test",
-        "error-alert-service",
-        "deployment-service",
-        "security-monitoring",
-        "performance-monitoring",
-        "team-communication",
+        NotificationSource.TEST,
+        NotificationSource.ERROR_ALERT,
+        NotificationSource.DEPLOYMENT,
+        NotificationSource.SLOW_LOAD_METRIC_ALERT,
+        NotificationSource.PERFORMANCE_MONITORING,
+        NotificationSource.TEAM_COMMUNICATION,
+    ],
+    NotificationCategory.DATA_EXPORT: [
+        NotificationSource.DATA_EXPORT_SUCCESS,
+        NotificationSource.DATA_EXPORT_FAILURE,
+    ],
+    NotificationCategory.DYNAMIC_SAMPLING: [
+        NotificationSource.CUSTOM_RULE_SAMPLES_FULFILLED,
+    ],
+    NotificationCategory.REPOSITORY: [
+        NotificationSource.UNABLE_TO_DELETE_REPOSITORY,
+    ],
+    NotificationCategory.ISSUE: [
+        NotificationSource.ISSUE,
+    ],
+    NotificationCategory.METRIC_ALERT: [
+        NotificationSource.METRIC_ALERT,
+    ],
+    NotificationCategory.SEER: [
+        NotificationSource.SEER_AUTOFIX_TRIGGER,
+        NotificationSource.SEER_AUTOFIX_ERROR,
+        NotificationSource.SEER_AUTOFIX_SUCCESS,
+        NotificationSource.SEER_AUTOFIX_UPDATE,
+        NotificationSource.SEER_AGENT_RESPONSE,
+        NotificationSource.SEER_AGENT_ERROR,
     ],
 }
 
@@ -41,6 +112,7 @@ class NotificationProviderKey(StrEnum):
 
     EMAIL = ExternalProviderEnum.EMAIL
     SLACK = ExternalProviderEnum.SLACK
+    SLACK_STAGING = ExternalProviderEnum.SLACK_STAGING
     MSTEAMS = ExternalProviderEnum.MSTEAMS
     DISCORD = ExternalProviderEnum.DISCORD
 
@@ -55,16 +127,19 @@ class NotificationTargetResourceType(StrEnum):
     DIRECT_MESSAGE = "direct_message"
 
 
-class NotificationTarget(Protocol):
+class NotificationTarget(BaseModel):
     """
-    All targets of the notification platform must adhere to this protocol.
+    All targets of the notification platform must adhere to this base class.
     """
 
-    is_prepared: bool
+    class Config:
+        frozen = True
+        use_enum_values = True
+
     provider_key: NotificationProviderKey
     resource_type: NotificationTargetResourceType
     resource_id: str
-    specific_data: dict[str, Any] | None
+    specific_data: dict[str, Any] | None = None
 
 
 class NotificationStrategy(Protocol):
@@ -75,12 +150,16 @@ class NotificationStrategy(Protocol):
     def get_targets(self) -> list[NotificationTarget]: ...
 
 
-class NotificationData(Protocol):
+class NotificationData(BaseModel):
     """
-    All data passing through the notification platform must adhere to this protocol.
+    All data passing through the notification platform must adhere to this base class.
     """
 
-    source: str
+    class Config:
+        frozen = True
+        use_enum_values = True
+
+    source: NotificationSource
     """
     The source is uniquely attributable to the way this notification was sent. It will be tracked in
     metrics/analytics to determine the egress from a given code-path or service.
@@ -128,11 +207,10 @@ class NotificationRenderedTemplate:
     expected content of the notification based on this alone, and it will be the first thing
     they see. This string should not contain any formatting, and will be displayed as is.
     """
-    body: str
+    body: list[NotificationBodyFormattingBlock]
     """
     The full contents of the notification. Put the details of the notification here, but consider
-    keeping it concise and useful to the receiver. This string should not contain any formatting,
-    and will be displayed as is.
+    keeping it concise and useful to the receiver.
     """
     actions: list[NotificationRenderedAction] = field(default_factory=list)
     """
@@ -167,11 +245,120 @@ class NotificationRenderedTemplate:
     """
 
 
+class NotificationBodyTextBlockType(StrEnum):
+    """
+    Represents a block of text to be rendered in the notification body.
+    """
+
+    PLAIN_TEXT = "plain_text"
+    """
+    A plain text block.
+    """
+    BOLD_TEXT = "bold_text"
+    """
+    A bolded section of text.
+    """
+    CODE = "code"
+    """
+    Inline block of code.
+    """
+
+
+class NotificationBodyFormattingBlockType(StrEnum):
+    """
+    The type of formatting to be applied to the encapsulated blocks.
+    """
+
+    PARAGRAPH = "paragraph"
+    """
+    A block of text with a line break before.
+    """
+    CODE_BLOCK = "code_block"
+    """
+    A new section of code with a line break before.
+    """
+
+
+class NotificationBodyFormattingBlock(Protocol):
+    """
+    A block that applies formatting such as a newline and encapsulates other text.
+    """
+
+    type: NotificationBodyFormattingBlockType
+    """
+    The type of the block, such as ParagraphBlock, BoldTextBlock, etc.
+    """
+    blocks: list[NotificationBodyTextBlock]
+    """
+    Some blocks may want to contain other blocks, such as a ParagraphBlock containing a BoldTextBlock.
+    """
+
+
+class NotificationBodyTextBlock(Protocol):
+    """
+    Represents a block of text to be rendered in the notification body.
+    """
+
+    type: NotificationBodyTextBlockType
+    """
+    The type of the block, such as BoldTextBlock, CodeBlock, etc.
+    """
+    text: str
+    """
+    Text to be rendered in the body.
+    """
+
+
+@dataclass
+class ParagraphBlock(NotificationBodyFormattingBlock):
+    blocks: list[NotificationBodyTextBlock]
+    type: Literal[NotificationBodyFormattingBlockType.PARAGRAPH] = (
+        NotificationBodyFormattingBlockType.PARAGRAPH
+    )
+
+
+@dataclass
+class CodeBlock(NotificationBodyFormattingBlock):
+    blocks: list[NotificationBodyTextBlock]
+    type: Literal[NotificationBodyFormattingBlockType.CODE_BLOCK] = (
+        NotificationBodyFormattingBlockType.CODE_BLOCK
+    )
+
+
+@dataclass
+class BoldTextBlock(NotificationBodyTextBlock):
+    type: Literal[NotificationBodyTextBlockType.BOLD_TEXT]
+    text: str
+
+
+@dataclass
+class CodeTextBlock(NotificationBodyTextBlock):
+    text: str
+    type: Literal[NotificationBodyTextBlockType.CODE] = NotificationBodyTextBlockType.CODE
+
+
+@dataclass
+class PlainTextBlock(NotificationBodyTextBlock):
+    text: str
+    type: Literal[NotificationBodyTextBlockType.PLAIN_TEXT] = (
+        NotificationBodyTextBlockType.PLAIN_TEXT
+    )
+
+
 class NotificationTemplate[T: NotificationData](abc.ABC):
     category: NotificationCategory
     """
     The category that a notification belongs to. This will be used to determine which settings a
     user needs to modify to manage receipt of these notifications (if applicable).
+    """
+    example_data: T
+    """
+    The example data for this notification.
+    """
+    hide_from_debugger: bool = False
+    """
+    Set 'true' to omit these templates from the internal debugger (sentry.io/debug/notifications).
+    This is useful for templates that only use custom renderers and bypass NotificationRenderedTemplates.
     """
 
     @abc.abstractmethod
@@ -182,9 +369,16 @@ class NotificationTemplate[T: NotificationData](abc.ABC):
         """
         ...
 
-    @abc.abstractmethod
     def render_example(self) -> NotificationRenderedTemplate:
         """
         Used to produce a debugging example rendered template for this notification. This
         implementation should be pure, and not populate with any live data.
         """
+        return self.render(data=self.example_data)
+
+    @classmethod
+    def get_data_class(cls) -> type[NotificationData]:
+        """
+        Returns NotificationData type for this template.
+        """
+        return cls.example_data.__class__

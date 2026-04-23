@@ -4,7 +4,7 @@ import {t, tct} from 'sentry/locale';
 import type {SelectValue} from 'sentry/types/core';
 import type {DataCondition} from 'sentry/types/workflowEngine/dataConditions';
 import {
-  Attributes,
+  Attribute,
   MATCH_CHOICES,
   type MatchType,
 } from 'sentry/views/automations/components/actionFilters/constants';
@@ -13,7 +13,7 @@ import type {ValidateDataConditionProps} from 'sentry/views/automations/componen
 import {useDataConditionNodeContext} from 'sentry/views/automations/components/dataConditionNodes';
 
 export function EventAttributeDetails({condition}: {condition: DataCondition}) {
-  return tct("The event's [attribute] [match] [value]", {
+  return tct("The event's [attribute] attribute [match] [value]", {
     attribute: condition.comparison.attribute,
     match:
       MATCH_CHOICES.find(choice => choice.value === condition.comparison.match)?.label ||
@@ -23,7 +23,7 @@ export function EventAttributeDetails({condition}: {condition: DataCondition}) {
 }
 
 export function EventAttributeNode() {
-  return tct("The event's [attribute] [match] [value]", {
+  return tct("The event's [attribute] attribute [match] [value]", {
     attribute: <AttributeField />,
     match: <MatchField />,
     value: <ValueField />,
@@ -38,11 +38,11 @@ function AttributeField() {
       aria-label={t('Attribute')}
       placeholder={t('attribute')}
       value={condition.comparison.attribute}
-      options={Object.values(Attributes).map(attribute => ({
+      options={Object.values(Attribute).map(attribute => ({
         value: attribute,
         label: attribute,
       }))}
-      onChange={(option: SelectValue<Attributes>) => {
+      onChange={(option: SelectValue<Attribute>) => {
         onUpdate({comparison: {...condition.comparison, attribute: option.value}});
       }}
     />

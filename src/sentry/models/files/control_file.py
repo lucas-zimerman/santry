@@ -3,8 +3,8 @@ from typing import Any
 
 from django.core.files.base import ContentFile
 from django.db import models
+from taskbroker_client.task import Task
 
-from sentry.celery import SentryTask
 from sentry.db.models.base import control_silo_model
 from sentry.models.files.abstractfile import AbstractFile
 from sentry.models.files.control_fileblob import ControlFileBlob
@@ -40,5 +40,5 @@ class ControlFile(AbstractFile[ControlFileBlobIndex, ControlFileBlob]):
     def _get_blobs_by_id(self, blob_ids: Sequence[int]) -> models.QuerySet[ControlFileBlob]:
         return ControlFileBlob.objects.filter(id__in=blob_ids).all()
 
-    def _delete_unreferenced_blob_task(self) -> SentryTask:
+    def _delete_unreferenced_blob_task(self) -> Task[Any, Any]:
         return delete_unreferenced_blobs_control

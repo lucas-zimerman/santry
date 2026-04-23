@@ -1,10 +1,12 @@
 import {useCallback, useEffect, useRef} from 'react';
-
-import type {ApiResult} from 'sentry/api';
+import * as Sentry from '@sentry/react';
 import type {
   InfiniteData,
   InfiniteQueryObserverRefetchErrorResult,
-} from 'sentry/utils/queryClient';
+} from '@tanstack/react-query';
+
+import type {ApiResult} from 'sentry/api';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {
   ABSOLUTE_MAX_AUTO_REFRESH_TIME_MS,
   CONSECUTIVE_PAGES_WITH_MORE_DATA,
@@ -13,7 +15,6 @@ import {
 } from 'sentry/views/explore/contexts/logs/logsAutoRefreshContext';
 import type {EventsLogsResult} from 'sentry/views/explore/logs/types';
 import {parseLinkHeaderFromLogsPage} from 'sentry/views/explore/logs/utils';
-
 /**
  * Hook that manages the auto-refresh interval using setInterval.
  * Handles rate limiting, error checking, and timeout conditions.
@@ -34,7 +35,8 @@ export function useLogsAutoRefreshInterval({
 }) {
   const {autoRefresh, refreshInterval} = useLogsAutoRefresh();
   const setAutoRefresh = useSetLogsAutoRefresh();
-
+  const organization = useOrganization();
+  const organizationRef = useRef(organization);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(Date.now());
   const consecutivePagesWithMoreDataRef = useRef<number>(0);
@@ -88,6 +90,12 @@ export function useLogsAutoRefreshInterval({
       }
 
       if (isError) {
+        Sentry.logger.info('Auto-refresh error due to isError', {
+          error: isError,
+          status: 'error',
+          isError: true,
+          organization: organizationRef.current.slug,
+        });
         setAutoRefresh('error');
         return;
       }
@@ -101,6 +109,12 @@ export function useLogsAutoRefreshInterval({
 
       const pageResult = previousPage;
       if (pageResult.status === 'error' || pageResult.isError) {
+        Sentry.logger.info('Error fetching previous page', {
+          error: pageResult.error,
+          status: pageResult.status,
+          isError: pageResult.isError,
+          organization: organizationRef.current.slug,
+        });
         setAutoRefresh('error');
         return;
       }
@@ -110,6 +124,14 @@ export function useLogsAutoRefreshInterval({
         return;
       }
     } catch (error) {
+      Sentry.withScope(scope => {
+        scope.setTags({
+          endpoint: 'api.explore.logs-table',
+          errorReason: 'auto-refresh',
+          organization: organizationRef.current.slug,
+        });
+        Sentry.captureException(error);
+      });
       setAutoRefresh('error');
     } finally {
       isRefreshRunningRef.current = false;

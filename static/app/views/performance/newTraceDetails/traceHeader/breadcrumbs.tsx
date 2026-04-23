@@ -6,12 +6,12 @@ import type {Crumb} from 'sentry/components/breadcrumbs';
 import {CopyToClipboardButton} from 'sentry/components/copyToClipboardButton';
 import ProjectBadge from 'sentry/components/idBadge/projectBadge';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
 import {formatVersion} from 'sentry/utils/versions/formatVersion';
 import {makeDiscoverPathname} from 'sentry/views/discover/pathnames';
+import {makeFeedbackPathname} from 'sentry/views/feedback/pathnames';
 import type {
   RoutableModuleNames,
   URLBuilder,
@@ -23,11 +23,10 @@ import {
 import {DOMAIN_VIEW_TITLES} from 'sentry/views/insights/pages/types';
 import type {DomainView} from 'sentry/views/insights/pages/useFilters';
 import {ModuleName} from 'sentry/views/insights/types';
-import Tab from 'sentry/views/performance/transactionSummary/tabs';
+import {Tab} from 'sentry/views/performance/transactionSummary/tabs';
 import {getTransactionSummaryBaseUrl} from 'sentry/views/performance/transactionSummary/utils';
 import {getPerformanceBaseUrl} from 'sentry/views/performance/utils';
 import {makeTracesPathname} from 'sentry/views/traces/pathnames';
-import {makeFeedbackPathname} from 'sentry/views/userFeedback/pathnames';
 
 export enum TraceViewSources {
   TRACES = 'traces',
@@ -52,6 +51,7 @@ export enum TraceViewSources {
   FEEDBACK_DETAILS = 'feedback_details',
   LOGS = 'logs',
   AGENT_MONITORING = 'agent_monitoring',
+  TRACE_METRICS = 'trace_metrics',
 }
 
 // Ideally every new entry to ModuleName, would require a new source to be added here so we don't miss any.
@@ -69,21 +69,6 @@ const TRACE_SOURCE_TO_INSIGHTS_MODULE: Partial<Record<TraceViewSources, ModuleNa
   mobile_screens_module: ModuleName.MOBILE_VITALS,
 };
 
-// Remove this when the new navigation is GA'd
-export const TRACE_SOURCE_TO_NON_INSIGHT_ROUTES_LEGACY: Partial<
-  Record<TraceViewSources, string>
-> = {
-  traces: 'traces',
-  metrics: 'metrics',
-  discover: 'discover',
-  profiling_flamegraph: 'profiling',
-  performance_transaction_summary: 'insights/summary',
-  issue_details: 'issues',
-  feedback_details: 'issues/feedback',
-  dashboards: 'dashboards',
-  logs: 'explore/logs',
-};
-
 export const TRACE_SOURCE_TO_NON_INSIGHT_ROUTES: Partial<
   Record<TraceViewSources, string>
 > = {
@@ -96,6 +81,7 @@ export const TRACE_SOURCE_TO_NON_INSIGHT_ROUTES: Partial<
   feedback_details: 'issues/feedback',
   dashboards: 'dashboards',
   logs: 'explore/logs',
+  trace_metrics: 'explore/metrics',
 };
 
 function getBreadCrumbTarget(pathname: string, query: Location['query']) {
@@ -126,10 +112,12 @@ function getPerformanceBreadCrumbs(
       ),
     });
   } else {
-    crumbs.push({
-      label: DOMAIN_VIEW_BASE_TITLE,
-      to: undefined,
-    });
+    if (!organization.features.includes('insights-to-dashboards-ui-rollout')) {
+      crumbs.push({
+        label: DOMAIN_VIEW_BASE_TITLE,
+        to: undefined,
+      });
+    }
   }
 
   switch (location.query.tab) {
@@ -153,31 +141,6 @@ function getPerformanceBreadCrumbs(
         ),
       });
       break;
-    case Tab.SPANS: {
-      crumbs.push({
-        label: t('Spans'),
-        to: getBreadCrumbTarget(
-          normalizeUrl(
-            `/organizations/${organization.slug}/${transactionSummaryUrl}/spans`
-          ),
-          location.query
-        ),
-      });
-
-      const {spanSlug} = location.query;
-      if (spanSlug) {
-        crumbs.push({
-          label: t('Span Summary'),
-          to: getBreadCrumbTarget(
-            normalizeUrl(
-              `/organizations/${organization.slug}/${transactionSummaryUrl}/spans/${spanSlug}`
-            ),
-            location.query
-          ),
-        });
-      }
-      break;
-    }
     default:
       crumbs.push({
         label: t('Transaction Summary'),
@@ -290,9 +253,11 @@ function getInsightsModuleBreadcrumbs(
       ),
     });
   } else {
-    crumbs.push({
-      label: t('Insights'),
-    });
+    if (!organization.features.includes('insights-to-dashboards-ui-rollout')) {
+      crumbs.push({
+        label: DOMAIN_VIEW_BASE_TITLE,
+      });
+    }
   }
 
   let moduleName: RoutableModuleNames | undefined = undefined;
@@ -399,7 +364,6 @@ function getInsightsModuleBreadcrumbs(
       });
       break;
 
-    case ModuleName.CACHE:
     default:
       break;
   }
@@ -431,10 +395,11 @@ function LeafBreadCrumbLabel({
       )}
       <span>{formatVersion(traceSlug)}</span>
       <CopyToClipboardButton
+        aria-label={t('Copy trace ID to clipboard')}
         className="trace-id-copy-button"
         text={traceSlug}
         size="zero"
-        borderless
+        priority="transparent"
         style={{
           transform: 'translateY(-1px) translateX(-3px)',
         }}
@@ -446,7 +411,7 @@ function LeafBreadCrumbLabel({
 const Wrapper = styled('div')`
   display: flex;
   align-items: center;
-  gap: ${space(0.75)};
+  gap: ${p => p.theme.space.sm};
   min-height: 24px;
 
   .trace-id-copy-button {
@@ -550,6 +515,17 @@ export function getTraceViewBreadcrumbs({
           label: t('Logs'),
           to: getBreadCrumbTarget(
             normalizeUrl(`/organizations/${organization.slug}/explore/logs/`),
+            location.query
+          ),
+        },
+        leafBreadcrumb,
+      ];
+    case TraceViewSources.TRACE_METRICS:
+      return [
+        {
+          label: t('Metrics'),
+          to: getBreadCrumbTarget(
+            normalizeUrl(`/organizations/${organization.slug}/explore/metrics/`),
             location.query
           ),
         },

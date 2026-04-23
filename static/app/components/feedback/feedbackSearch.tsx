@@ -3,9 +3,11 @@ import orderBy from 'lodash/orderBy';
 import union from 'lodash/union';
 
 import {fetchTagValues, useFetchOrganizationTags} from 'sentry/actionCreators/tags';
-import type {SearchGroup} from 'sentry/components/deprecatedSmartSearchBar/types';
 import {EMAIL_REGEX} from 'sentry/components/events/contexts/knownContext/user';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import type {SearchGroup} from 'sentry/components/searchBar/types';
 import {SearchQueryBuilder} from 'sentry/components/searchQueryBuilder';
+import type {GetTagValues} from 'sentry/components/searchQueryBuilder';
 import type {FilterKeySection} from 'sentry/components/searchQueryBuilder/types';
 import {t} from 'sentry/locale';
 import type {Tag, TagCollection} from 'sentry/types/group';
@@ -19,13 +21,12 @@ import {
   getFieldDefinition,
   IsFieldValues,
 } from 'sentry/utils/fields';
-import useAssignedSearchValues from 'sentry/utils/membersAndTeams/useAssignedSearchValues';
+import {useAssignedSearchValues} from 'sentry/utils/membersAndTeams/useAssignedSearchValues';
 import {decodeScalar} from 'sentry/utils/queryString';
-import useApi from 'sentry/utils/useApi';
+import {useApi} from 'sentry/utils/useApi';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {Dataset} from 'sentry/views/alerts/rules/metric/types';
 
 const EXCLUDED_TAGS: string[] = [
@@ -35,6 +36,22 @@ const EXCLUDED_TAGS: string[] = [
   'os',
   'user',
   FieldKey.PLATFORM,
+  'ai_categorization.label.0',
+  'ai_categorization.label.1',
+  'ai_categorization.label.2',
+  'ai_categorization.label.3',
+  'ai_categorization.label.4',
+  'ai_categorization.label.5',
+  'ai_categorization.label.6',
+  'ai_categorization.label.7',
+  'ai_categorization.label.8',
+  'ai_categorization.label.9',
+  'ai_categorization.label.10',
+  'ai_categorization.label.11',
+  'ai_categorization.label.12',
+  'ai_categorization.label.13',
+  'ai_categorization.label.14',
+  'ai_categorization.label.15',
 ];
 
 const NON_TAG_FIELDS: string[] = [
@@ -181,7 +198,7 @@ const getFilterKeySections = (tags: TagCollection): FilterKeySection[] => {
   ];
 };
 
-export default function FeedbackSearch() {
+export function FeedbackSearch() {
   const {selection: pageFilters} = usePageFilters();
   const projectIds = pageFilters.projects;
   const {pathname, query: locationQuery} = useLocation();
@@ -209,7 +226,7 @@ export default function FeedbackSearch() {
     },
     {}
   );
-  const issuePlatformTags: TagCollection = useMemo(() => {
+  const issuePlatformTags = useMemo(() => {
     return (tagQuery.data ?? []).reduce<TagCollection>((acc, tag) => {
       acc[tag.key] = {...tag, kind: FieldKind.TAG};
       return acc;
@@ -227,8 +244,8 @@ export default function FeedbackSearch() {
     return getFilterKeySections(issuePlatformTags);
   }, [issuePlatformTags]);
 
-  const getTagValues = useCallback(
-    (tag: Tag, searchQuery: string): Promise<string[]> => {
+  const getTagValues = useCallback<GetTagValues>(
+    ({tag, searchQuery}) => {
       if (isAggregateField(tag.key)) {
         // We can't really auto suggest values for aggregate fields
         // or measurements, so we simply don't
@@ -283,7 +300,7 @@ export default function FeedbackSearch() {
       filterKeySections={filterKeySections}
       getTagValues={getTagValues}
       onSearch={onSearch}
-      searchSource={'feedback-list'}
+      searchSource="feedback-list"
       placeholder={t('Search Feedback')}
       matchKeySuggestions={[{key: 'user.email', valuePattern: EMAIL_REGEX}]}
     />

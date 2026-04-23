@@ -3,19 +3,22 @@ import fs from 'node:fs';
 // eslint-disable-next-line import/no-nodejs-modules
 import path from 'node:path';
 
-import {TimeSeriesFixture} from 'sentry-fixture/discoverSeries';
+import {TimeSeriesFixture} from 'sentry-fixture/timeSeries';
 
 import {render, screen, waitFor} from 'sentry-test/reactTestingLibrary';
 
+import type {TimeSeries} from 'sentry/views/dashboards/widgets/common/types';
 import {TimeSeriesWidgetVisualization} from 'sentry/views/dashboards/widgets/timeSeriesWidget/timeSeriesWidgetVisualization';
 
 import type {ChartId} from './chartWidgetLoader';
 import {ChartWidgetLoader} from './chartWidgetLoader';
 
-function mockDiscoverSeries(seriesName: string) {
-  return TimeSeriesFixture({
-    seriesName,
-  });
+function mockTimeSeries(yAxis: string, groupBy?: string[]) {
+  const partialTimeseries: Partial<TimeSeries> = {yAxis};
+  if (groupBy) {
+    partialTimeseries.groupBy = groupBy.map(group => ({key: group, value: group}));
+  }
+  return TimeSeriesFixture(partialTimeseries);
 }
 
 // Mock this component so it doesn't yell at us for no plottables
@@ -30,32 +33,28 @@ jest.mock(
 );
 
 jest.mock('sentry/views/insights/sessions/queries/useReleaseNewIssues', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useReleaseNewIssues: jest.fn(() => ({
     series: [{}],
     isPending: false,
     isError: false,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useRecentIssues', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useRecentIssues: jest.fn(() => ({
     recentIssues: [],
     isPending: false,
     isError: false,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useNewAndResolvedIssues', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useNewAndResolvedIssues: jest.fn(() => ({
     series: [{}],
     isPending: false,
     isError: false,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useCrashFreeSessions', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useCrashFreeSessions: jest.fn(() => ({
     series: [{}],
     isPending: false,
     isError: false,
@@ -79,90 +78,66 @@ jest.mock('sentry/views/insights/common/queries/useDiscover', () => ({
     error: null,
   })),
 }));
-jest.mock('sentry/views/insights/common/queries/useTopNDiscoverSeries', () => ({
-  useTopNSpanSeries: jest.fn(() => ({
-    data: [mockDiscoverSeries('transaction_a,abc123')],
-    isPending: false,
-    error: null,
-  })),
-}));
-jest.mock('sentry/views/insights/common/queries/useDiscoverSeries', () => ({
-  useSpanSeries: jest.fn(() => ({
+jest.mock('sentry/utils/timeSeries/useFetchEventsTimeSeries', () => ({
+  useFetchSpanTimeSeries: jest.fn(({groupBy}: {groupBy?: string[]}) => ({
     data: {
-      'epm()': {},
-      'count(span.duration)': mockDiscoverSeries('count(span.duration)'),
-      'avg(span.duration)': mockDiscoverSeries('avg(span.duration)'),
-      'p95(span.duration)': mockDiscoverSeries('p95(span.duration)'),
-      'trace_status_rate(internal_error)': mockDiscoverSeries(
-        'trace_status_rate(internal_error)'
-      ),
-      'cache_miss_rate()': {},
-      'http_response_rate(3)': {},
-      'http_response_rate(4)': {},
-      'http_response_rate(5)': {},
-      'avg(span.self_time)': {},
-      'avg(http.response_content_length)': {},
-      'avg(http.response_transfer_size)': {},
-      'avg(http.decoded_response_content_length)': {},
-      'avg(messaging.message.receive.latency)': {},
-      'performance_score(measurements.score.lcp)': {
-        data: [],
-      },
-      'performance_score(measurements.score.fcp)': {
-        data: [],
-      },
-      'performance_score(measurements.score.cls)': {
-        data: [],
-      },
-      'performance_score(measurements.score.inp)': {
-        data: [],
-      },
-      'performance_score(measurements.score.ttfb)': {
-        data: [],
-      },
-      'count()': {
-        data: [],
-      },
+      timeSeries: [
+        mockTimeSeries('epm()'),
+        mockTimeSeries('count(span.duration)'),
+        mockTimeSeries('avg(span.duration)'),
+        mockTimeSeries('p95(span.duration)'),
+        mockTimeSeries('trace_status_rate(internal_error)'),
+        mockTimeSeries('cache_miss_rate()', groupBy),
+        mockTimeSeries('http_response_rate(3)'),
+        mockTimeSeries('http_response_rate(4)'),
+        mockTimeSeries('http_response_rate(5)'),
+        mockTimeSeries('avg(span.self_time)'),
+        mockTimeSeries('avg(http.response_content_length)'),
+        mockTimeSeries('avg(http.response_transfer_size)'),
+        mockTimeSeries('avg(http.decoded_response_content_length)'),
+        mockTimeSeries('avg(messaging.message.receive.latency)'),
+        mockTimeSeries('performance_score(measurements.score.lcp)'),
+        mockTimeSeries('performance_score(measurements.score.fcp)'),
+        mockTimeSeries('performance_score(measurements.score.cls)'),
+        mockTimeSeries('performance_score(measurements.score.inp)'),
+        mockTimeSeries('performance_score(measurements.score.ttfb)'),
+        mockTimeSeries('count()'),
+      ],
     },
     isPending: false,
     error: null,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useErroredSessions', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useErroredSessions: jest.fn(() => ({
     series: [{}],
     isPending: false,
     error: null,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useSessionHealthBreakdown', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useSessionHealthBreakdown: jest.fn(() => ({
     series: [{}],
     isPending: false,
     error: null,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useReleaseSessionPercentage', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useReleaseSessionPercentage: jest.fn(() => ({
     series: [{}],
     isPending: false,
     error: null,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useReleaseSessionCounts', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useReleaseSessionCounts: jest.fn(() => ({
     series: [{}],
     isPending: false,
     error: null,
   })),
 }));
 jest.mock('sentry/views/insights/sessions/queries/useUserHealthBreakdown', () => ({
-  __esModule: true,
-  default: jest.fn(() => ({
+  useUserHealthBreakdown: jest.fn(() => ({
     series: [{}],
     isPending: false,
     error: null,

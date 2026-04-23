@@ -1,82 +1,60 @@
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Flex} from 'sentry/components/core/layout';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import ErrorBoundary from 'sentry/components/errorBoundary';
-import GroupList from 'sentry/components/issues/groupList';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import Section from 'sentry/components/workflowEngine/ui/section';
+import {LinkButton} from '@sentry/scraps/button';
+
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
+import {GroupList} from 'sentry/components/issues/groupList';
+import {DetailSection} from 'sentry/components/workflowEngine/ui/detailSection';
 import {t} from 'sentry/locale';
+import type {PageFilters} from 'sentry/types/core';
+import type {Detector} from 'sentry/types/workflowEngine/detectors';
 import {getUtcDateString} from 'sentry/utils/dates';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {useOrganization} from 'sentry/utils/useOrganization';
 
-interface Props {
-  detectorId: string;
-  query?: Record<string, any>;
-}
+type DetectorDetailsOngoingIssuesProps = {
+  // The time range used for the issues query.
+  // When null, the query uses 90d as the stats period.
+  dateTimeSelection: PageFilters['datetime'] | null;
+  detector: Detector;
+};
 
-function EmptyMessage() {
-  return (
-    <Panel>
-      <PanelBody>
-        <EmptyStateWarning small withIcon={false}>
-          {t('No ongoing issues found for this monitor')}
-        </EmptyStateWarning>
-      </PanelBody>
-    </Panel>
-  );
-}
+const DEFAULT_STATS_PERIOD = '90d';
 
-export function DetectorDetailsOngoingIssues({detectorId, query}: Props) {
+export function DetectorDetailsOngoingIssues({
+  detector,
+  dateTimeSelection,
+}: DetectorDetailsOngoingIssuesProps) {
   const organization = useOrganization();
-
-  const {selection} = usePageFilters();
-  const {start, end, period} = selection.datetime;
-  const timeProps =
-    start && end
-      ? {
-          start: getUtcDateString(start),
-          end: getUtcDateString(end),
-        }
-      : {
-          statsPeriod: period,
-        };
+  const query = `is:unresolved detector:${detector.id}`;
+  const {start, end, period} = dateTimeSelection ?? {period: DEFAULT_STATS_PERIOD};
 
   const queryParams = {
-    ...(query || timeProps),
-    query: `is:unresolved detector:${detectorId}`,
-    limit: 5,
-  };
-
-  const issueSearch = {
-    pathname: `/organizations/${organization.slug}/issues/`,
-    query: queryParams,
+    query,
+    project: detector.projectId,
+    start: start ? getUtcDateString(start) : undefined,
+    end: end ? getUtcDateString(end) : undefined,
+    statsPeriod: period ?? undefined,
   };
 
   return (
-    <Section
-      title={
-        <Flex justify={'between'} align="center">
-          {t('Ongoing Issues')}
-          <LinkButton size="xs" to={issueSearch}>
-            {t('View All')}
-          </LinkButton>
-        </Flex>
+    <DetailSection
+      title={t('Ongoing Issues')}
+      trailingItems={
+        <LinkButton
+          data-test-id="view-all-ongoing-issues-button"
+          size="xs"
+          to={{
+            pathname: `/organizations/${organization.slug}/issues/`,
+            query: queryParams,
+          }}
+        >
+          {t('View All')}
+        </LinkButton>
       }
     >
       <ErrorBoundary mini>
-        <GroupList
-          endpointPath={`/organizations/${organization.slug}/issues/`}
-          queryParams={queryParams}
-          canSelectGroups={false}
-          withPagination={false}
-          withChart={false}
-          renderEmptyMessage={EmptyMessage}
-          source="detector-details"
-          numPlaceholderRows={queryParams.limit}
-        />
+        <div>
+          <GroupList numPlaceholderRows={5} queryParams={{...queryParams, limit: 5}} />
+        </div>
       </ErrorBoundary>
-    </Section>
+    </DetailSection>
   );
 }

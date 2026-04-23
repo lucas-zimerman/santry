@@ -1,26 +1,25 @@
 import logging
 from datetime import timedelta
 
-from django.conf import settings
 from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.response import Response
+from urllib3 import Retry
 
-from sentry import features
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.organization import OrganizationEndpoint, OrganizationUserReportsPermission
 from sentry.api.utils import get_date_range_from_stats_period
 from sentry.exceptions import InvalidParams
+from sentry.feedback.lib.seer_api import SummarizeFeedbacksRequest, make_summarize_feedbacks_request
 from sentry.grouping.utils import hash_from_values
 from sentry.issues.grouptype import FeedbackGroup
 from sentry.models.group import Group, GroupStatus
 from sentry.models.organization import Organization
-from sentry.net.http import connection_from_url
 from sentry.seer.seer_setup import has_seer_access
-from sentry.seer.signed_seer_api import make_signed_seer_api_request
-from sentry.utils import json
+from sentry.seer.signed_seer_api import SeerViewerContext
+from sentry.utils import metrics
 from sentry.utils.cache import cache
 
 logger = logging.getLogger(__name__)
@@ -33,41 +32,27 @@ MAX_FEEDBACKS_TO_SUMMARIZE_CHARS = 1000000
 # One day since the cache key includes the start and end dates at hour granularity
 SUMMARY_CACHE_TIMEOUT = 86400
 
-SEER_SUMMARIZE_FEEDBACKS_ENDPOINT_PATH = "/v1/automation/summarize/feedback/summarize"
-
-seer_connection_pool = connection_from_url(
-    settings.SEER_SUMMARIZATION_URL, timeout=getattr(settings, "SEER_DEFAULT_TIMEOUT", 5)
-)
-fallback_connection_pool = connection_from_url(
-    settings.SEER_AUTOFIX_URL, timeout=getattr(settings, "SEER_DEFAULT_TIMEOUT", 5)
-)
+SEER_TIMEOUT_S = 30
+SEER_RETRIES = Retry(total=1, backoff_factor=3)  # 1 retry after a 3 second delay.
 
 
-def get_summary_from_seer(feedback_msgs: list[str]) -> str | None:
-    request_body = json.dumps({"feedbacks": feedback_msgs}).encode("utf-8")
+def get_summary_from_seer(
+    feedback_msgs: list[str],
+    viewer_context: SeerViewerContext | None = None,
+) -> str | None:
+    request_body = SummarizeFeedbacksRequest(feedbacks=feedback_msgs)
     try:
-        response = make_signed_seer_api_request(
-            connection_pool=seer_connection_pool,
-            path=SEER_SUMMARIZE_FEEDBACKS_ENDPOINT_PATH,
-            body=request_body,
+        response = make_summarize_feedbacks_request(
+            request_body,
+            timeout=SEER_TIMEOUT_S,
+            retries=SEER_RETRIES,
+            viewer_context=viewer_context,
         )
     except Exception:
-        # If summarization pod fails, fall back to autofix pod
-        logger.warning(
-            "Summarization pod connection failed for feedback summary, falling back to autofix",
-            exc_info=True,
+        logger.exception(
+            "Seer failed to generate a summary for a list of feedbacks",
         )
-        try:
-            response = make_signed_seer_api_request(
-                connection_pool=fallback_connection_pool,
-                path=SEER_SUMMARIZE_FEEDBACKS_ENDPOINT_PATH,
-                body=request_body,
-            )
-        except Exception:
-            logger.exception(
-                "Seer failed to generate a summary for a list of feedbacks on both pods"
-            )
-            return None
+        return None
 
     if response.status < 200 or response.status >= 300:
         logger.error(
@@ -79,7 +64,7 @@ def get_summary_from_seer(feedback_msgs: list[str]) -> str | None:
     return response.json()["data"]
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationFeedbackSummaryEndpoint(OrganizationEndpoint):
     owner = ApiOwner.FEEDBACK
     publish_status = {
@@ -105,12 +90,12 @@ class OrganizationFeedbackSummaryEndpoint(OrganizationEndpoint):
         :auth: required
         """
 
-        if not features.has(
-            "organizations:user-feedback-ai-summaries", organization, actor=request.user
-        ) or not has_seer_access(organization, actor=request.user):
+        if not has_seer_access(organization, actor=request.user):
             return Response(
                 {"detail": "AI summaries are not available for this organization."}, status=403
             )
+
+        viewer_context = SeerViewerContext(organization_id=organization.id, user_id=request.user.id)
 
         try:
             start, end = get_date_range_from_stats_period(
@@ -129,6 +114,8 @@ class OrganizationFeedbackSummaryEndpoint(OrganizationEndpoint):
         hashed_project_ids = hash_from_values(project_ids)
 
         summary_cache_key = f"feedback_summary:{organization.id}:{start.strftime('%Y-%m-%d-%H')}:{end.strftime('%Y-%m-%d-%H')}:{hashed_project_ids}"
+
+        # Hour granularity date range.
         summary_cache = cache.get(summary_cache_key)
         if summary_cache:
             return Response(
@@ -151,8 +138,9 @@ class OrganizationFeedbackSummaryEndpoint(OrganizationEndpoint):
             :MAX_FEEDBACKS_TO_SUMMARIZE
         ]
 
-        if groups.count() < MIN_FEEDBACKS_TO_SUMMARIZE:
-            logger.error("Too few feedbacks to summarize")
+        group_count = groups.count()
+        if group_count < MIN_FEEDBACKS_TO_SUMMARIZE:
+            metrics.distribution("feedback.summary.too_few_feedbacks", group_count)
             return Response(
                 {
                     "summary": None,
@@ -174,7 +162,7 @@ class OrganizationFeedbackSummaryEndpoint(OrganizationEndpoint):
         if len(feedback_msgs) < MIN_FEEDBACKS_TO_SUMMARIZE:
             logger.error("Too few feedbacks to summarize after enforcing the character limit")
 
-        summary = get_summary_from_seer(feedback_msgs)
+        summary = get_summary_from_seer(feedback_msgs, viewer_context=viewer_context)
         if summary is None:
             return Response(
                 {"detail": "Failed to generate a summary for a list of feedbacks"}, status=500

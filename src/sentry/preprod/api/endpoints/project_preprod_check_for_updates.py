@@ -1,22 +1,28 @@
+from __future__ import annotations
+
 import logging
 
-from packaging.version import parse as parse_version
 from pydantic import BaseModel
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
-from sentry.api.bases.project import ProjectEndpoint, ProjectReleasePermission
+from sentry.api.base import cell_silo_endpoint
+from sentry.api.bases.project import ProjectDistributionPermission, ProjectEndpoint
+from sentry.models.project import Project
 from sentry.preprod.build_distribution_utils import (
+    find_current_and_latest,
     get_download_url_for_artifact,
-    is_installable_artifact,
 )
-from sentry.preprod.models import PreprodArtifact, PreprodBuildConfiguration
+from sentry.preprod.models import PreprodArtifact
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 logger = logging.getLogger(__name__)
+
+# Map legacy platform names to the canonical names used by shared utilities
+_PLATFORM_MAP = {"ios": "apple", "android": "android"}
 
 
 class InstallableBuildDetails(BaseModel):
@@ -24,6 +30,7 @@ class InstallableBuildDetails(BaseModel):
     build_version: str
     build_number: int
     release_notes: str | None
+    install_groups: list[str] | None
     download_url: str
     app_name: str
     created_date: str
@@ -34,155 +41,102 @@ class CheckForUpdatesApiResponse(BaseModel):
     current: InstallableBuildDetails | None = None
 
 
-@region_silo_endpoint
+def _build_details_from_artifact(artifact: PreprodArtifact) -> InstallableBuildDetails | None:
+    """Convert a PreprodArtifact to InstallableBuildDetails, or None."""
+    mobile_app_info = artifact.get_mobile_app_info()
+    if (
+        not mobile_app_info
+        or not mobile_app_info.build_version
+        or not mobile_app_info.build_number
+        or not mobile_app_info.app_name
+    ):
+        return None
+    return InstallableBuildDetails(
+        id=str(artifact.id),
+        build_version=mobile_app_info.build_version,
+        build_number=mobile_app_info.build_number,
+        release_notes=(artifact.extras.get("release_notes") if artifact.extras else None),
+        install_groups=(artifact.extras.get("install_groups") if artifact.extras else None),
+        app_name=mobile_app_info.app_name,
+        download_url=get_download_url_for_artifact(artifact),
+        created_date=artifact.date_added.isoformat(),
+    )
+
+
+# Deprecated: This experimental endpoint is superseded by the public
+# ProjectPreprodBuildDistributionLatestEndpoint at
+# /api/0/{org}/{project}/preprodartifacts/build-distribution/latest/
+@cell_silo_endpoint
 class ProjectPreprodArtifactCheckForUpdatesEndpoint(ProjectEndpoint):
     owner = ApiOwner.EMERGE_TOOLS
     publish_status = {
         "GET": ApiPublishStatus.EXPERIMENTAL,
     }
-    permission_classes = (ProjectReleasePermission,)
+    permission_classes = (ProjectDistributionPermission,)
 
-    enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.ORGANIZATION: RateLimit(
-                limit=100, window=60
-            ),  # 100 requests per minute per org
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=100, window=60),
+            }
         }
-    }
+    )
 
-    def get(self, request: Request, project) -> Response:
+    def get(self, request: Request, project: Project) -> Response:
         """
         Check for updates for a preprod artifact
         """
-        main_binary_identifier = request.GET.get("main_binary_identifier")
-        app_id = request.GET.get("app_id")
 
-        platform = request.GET.get("platform")
-        provided_version = request.GET.get("version")
-        provided_build_configuration_name = request.GET.get("build_configuration")
+        provided_main_binary_identifier = request.GET.get("main_binary_identifier")
+        provided_app_id = request.GET.get("app_id")
+        provided_platform = request.GET.get("platform")
+        provided_build_version = request.GET.get("build_version")
+        provided_build_number_str = request.GET.get("build_number")
+        provided_build_configuration = request.GET.get("build_configuration")
+        provided_codesigning_type = request.GET.get("codesigning_type")
+        provided_install_groups = request.GET.getlist("install_groups")
 
-        if not app_id or not platform or not provided_version or not main_binary_identifier:
+        if not provided_app_id or not provided_platform or not provided_build_version:
             return Response({"error": "Missing required parameters"}, status=400)
 
-        provided_build_configuration = None
-        if provided_build_configuration_name:
+        if not provided_main_binary_identifier and not provided_build_number_str:
+            return Response(
+                {"error": "Either main_binary_identifier or build_number must be provided"},
+                status=400,
+            )
+
+        # Validate build_number
+        provided_build_number: int | None = None
+        if provided_build_number_str is not None:
             try:
-                provided_build_configuration = PreprodBuildConfiguration.objects.get(
-                    project=project,
-                    name=provided_build_configuration_name,
-                )
-            except PreprodBuildConfiguration.DoesNotExist:
-                return Response({"error": "Invalid build configuration"}, status=400)
+                provided_build_number = int(provided_build_number_str)
+            except ValueError:
+                return Response({"error": "Invalid build_number format"}, status=400)
 
-        preprod_artifact = None
-        current = None
-        update = None
+        platform = _PLATFORM_MAP.get(provided_platform, provided_platform)
 
-        # Common filter logic
-        def get_base_filters():
-            filter_kwargs = {
-                "project": project,
-                "app_id": app_id,
-            }
-
-            if platform == "android":
-                filter_kwargs["artifact_type__in"] = [
-                    PreprodArtifact.ArtifactType.AAB,
-                    PreprodArtifact.ArtifactType.APK,
-                ]
-            elif platform == "ios":
-                filter_kwargs["artifact_type"] = PreprodArtifact.ArtifactType.XCARCHIVE
-
-            return filter_kwargs
-
-        try:
-            current_filter_kwargs = get_base_filters()
-            current_filter_kwargs.update(
-                {
-                    "main_binary_identifier": main_binary_identifier,
-                    "build_version": provided_version,
-                }
-            )
-
-            if provided_build_configuration:
-                current_filter_kwargs["build_configuration"] = provided_build_configuration
-
-            preprod_artifact = PreprodArtifact.objects.filter(**current_filter_kwargs).latest(
-                "date_added"
-            )
-        except PreprodArtifact.DoesNotExist:
-            logger.warning(
-                "No artifact found for binary identifier with version %s", provided_version
-            )
-
-        if preprod_artifact and preprod_artifact.build_version and preprod_artifact.build_number:
-            current = InstallableBuildDetails(
-                id=str(preprod_artifact.id),
-                build_version=preprod_artifact.build_version,
-                build_number=preprod_artifact.build_number,
-                release_notes=(
-                    preprod_artifact.extras.get("release_notes")
-                    if preprod_artifact.extras
-                    else None
-                ),
-                app_name=preprod_artifact.app_name,
-                download_url=get_download_url_for_artifact(preprod_artifact),
-                created_date=preprod_artifact.date_added.isoformat(),
-            )
-
-        # Get the update object - find the highest version available
-        # Get all build versions for this app and platform
-        new_build_filter_kwargs = get_base_filters()
-        if preprod_artifact:
-            new_build_filter_kwargs["build_configuration"] = preprod_artifact.build_configuration
-        elif provided_build_configuration:
-            new_build_filter_kwargs["build_configuration"] = provided_build_configuration
-        all_versions = (
-            PreprodArtifact.objects.filter(**new_build_filter_kwargs)
-            .values_list("build_version", flat=True)
-            .distinct()
+        current_artifact, latest_artifact = find_current_and_latest(
+            project=project,
+            app_id=provided_app_id,
+            platform=platform,
+            build_version=provided_build_version,
+            build_number=provided_build_number,
+            main_binary_identifier=provided_main_binary_identifier,
+            build_configuration=provided_build_configuration,
+            codesigning_type=provided_codesigning_type,
+            install_groups=provided_install_groups or None,
         )
 
-        # Find the highest semver version
-        highest_version = None
-        for version in all_versions:
-            if version:
-                try:
-                    parsed_version = parse_version(version)
-                    if highest_version is None or parsed_version > parse_version(highest_version):
-                        highest_version = version
-                except Exception:
-                    # Skip invalid version strings
-                    continue
+        if not current_artifact:
+            logger.warning(
+                "No artifact found for binary identifier with version %s",
+                provided_build_version,
+            )
 
-        # Get all artifacts for the highest version
-        if highest_version:
-            new_build_filter_kwargs["build_version"] = highest_version
-            potential_artifacts = PreprodArtifact.objects.filter(**new_build_filter_kwargs)
+        current = _build_details_from_artifact(current_artifact) if current_artifact else None
 
-            # Filter for installable artifacts and get the one with highest build_number
-            installable_artifacts = [
-                artifact for artifact in potential_artifacts if is_installable_artifact(artifact)
-            ]
-            if len(installable_artifacts) > 0:
-                best_artifact = max(
-                    installable_artifacts, key=lambda a: (a.build_number, a.date_added)
-                )
-                if not preprod_artifact or preprod_artifact.id != best_artifact.id:
-                    if best_artifact.build_version and best_artifact.build_number:
-                        update = InstallableBuildDetails(
-                            id=str(best_artifact.id),
-                            build_version=best_artifact.build_version,
-                            build_number=best_artifact.build_number,
-                            release_notes=(
-                                best_artifact.extras.get("release_notes")
-                                if best_artifact.extras
-                                else None
-                            ),
-                            app_name=best_artifact.app_name,
-                            download_url=get_download_url_for_artifact(best_artifact),
-                            created_date=best_artifact.date_added.isoformat(),
-                        )
+        update = None
+        if latest_artifact and (not current_artifact or current_artifact.id != latest_artifact.id):
+            update = _build_details_from_artifact(latest_artifact)
 
         return Response(CheckForUpdatesApiResponse(current=current, update=update).dict())

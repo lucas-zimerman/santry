@@ -1,13 +1,15 @@
 import {act, renderHook, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import {makeCombinedReducers} from 'sentry/utils/useCombinedReducer';
+import {makeCombinedReducers} from 'sentry/utils/makeCombinedReducer';
 import {useDispatchingReducer} from 'sentry/utils/useDispatchingReducer';
 
 describe('useDispatchingReducer', () => {
   beforeEach(() => {
-    window.requestAnimationFrame = jest.fn().mockImplementation(cb => {
-      return setTimeout(cb, 0);
-    });
+    window.requestAnimationFrame = jest
+      .fn()
+      .mockImplementation((cb: FrameRequestCallback) => {
+        return setTimeout(cb, 0);
+      });
     window.cancelAnimationFrame = jest.fn().mockImplementation(id => {
       return clearTimeout(id);
     });

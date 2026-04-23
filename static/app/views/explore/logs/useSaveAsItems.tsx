@@ -1,23 +1,28 @@
 import {useMemo} from 'react';
 import styled from '@emotion/styled';
+import * as Sentry from '@sentry/react';
 
+import {
+  addErrorMessage,
+  addLoadingMessage,
+  addSuccessMessage,
+} from 'sentry/actionCreators/indicator';
 import {openSaveQueryModal} from 'sentry/actionCreators/modal';
 import Feature from 'sentry/components/acl/feature';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {t} from 'sentry/locale';
 import type {NewQuery} from 'sentry/types/organization';
 import {defined} from 'sentry/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import type {Sort} from 'sentry/utils/discover/fields';
 import {parseFunction, prettifyParsedFunction} from 'sentry/utils/discover/fields';
 import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
-import useRouter from 'sentry/utils/useRouter';
-import {Dataset} from 'sentry/views/alerts/rules/metric/types';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
+import {Dataset, EventTypes} from 'sentry/views/alerts/rules/metric/types';
 import {
   DashboardWidgetSource,
   DEFAULT_WIDGET_NAME,
@@ -27,7 +32,9 @@ import {
 import {handleAddQueryToDashboard} from 'sentry/views/discover/utils';
 import {Mode} from 'sentry/views/explore/contexts/pageParamsContext/mode';
 import {formatSort} from 'sentry/views/explore/contexts/pageParamsContext/sortBys';
+import {useGetSavedQuery} from 'sentry/views/explore/hooks/useGetSavedQueries';
 import {useLogsSaveQuery} from 'sentry/views/explore/hooks/useSaveQuery';
+import {useQueryParamsId} from 'sentry/views/explore/queryParams/context';
 import type {Visualize} from 'sentry/views/explore/queryParams/visualize';
 import {TraceItemDataset} from 'sentry/views/explore/types';
 import {getAlertsUrl} from 'sentry/views/insights/common/utils/getAlertsUrl';
@@ -52,11 +59,12 @@ export function useSaveAsItems({
   visualizes,
 }: UseSaveAsItemsOptions) {
   const location = useLocation();
-  const router = useRouter();
   const organization = useOrganization();
   const {projects} = useProjects();
   const pageFilters = usePageFilters();
-  const {saveQuery} = useLogsSaveQuery();
+  const {saveQuery, updateQuery} = useLogsSaveQuery();
+  const id = useQueryParamsId();
+  const {data: savedQuery} = useGetSavedQuery(id);
 
   const project =
     projects.length === 1
@@ -69,10 +77,35 @@ export function useSaveAsItems({
   );
 
   const saveAsQuery = useMemo(() => {
-    return {
+    const items = [];
+
+    if (defined(id) && savedQuery?.isPrebuilt === false) {
+      items.push({
+        key: 'update-query',
+        textValue: t('Existing Query'),
+        label: <span>{t('Existing Query')}</span>,
+        onAction: async () => {
+          try {
+            addLoadingMessage(t('Updating query...'));
+            await updateQuery();
+            addSuccessMessage(t('Query updated successfully'));
+            trackAnalytics('logs.save_as', {
+              save_type: 'update_query',
+              ui_source: 'searchbar',
+              organization,
+            });
+          } catch (error) {
+            addErrorMessage(t('Failed to update query'));
+            Sentry.captureException(error);
+          }
+        },
+      });
+    }
+
+    items.push({
       key: 'save-query',
-      label: <span>{t('A New Query')}</span>,
-      textValue: t('A New Query'),
+      label: <span>{t('New Query')}</span>,
+      textValue: t('New Query'),
       onAction: () => {
         trackAnalytics('logs.save_query_modal', {
           action: 'open',
@@ -87,8 +120,10 @@ export function useSaveAsItems({
           traceItemDataset: TraceItemDataset.LOGS,
         });
       },
-    };
-  }, [organization, saveQuery]);
+    });
+
+    return items;
+  }, [id, savedQuery?.isPrebuilt, updateQuery, saveQuery, organization]);
 
   const saveAsAlert = useMemo(() => {
     const alertsUrls = aggregates.map((yAxis: string, index: number) => {
@@ -105,7 +140,7 @@ export function useSaveAsItems({
           organization,
           dataset: Dataset.EVENTS_ANALYTICS_PLATFORM,
           interval,
-          eventTypes: 'trace_item_log',
+          eventTypes: [EventTypes.TRACE_ITEM_LOG],
         }),
         onAction: () => {
           trackAnalytics('logs.save_as', {
@@ -117,10 +152,14 @@ export function useSaveAsItems({
       };
     });
 
+    const newAlertLabel = organization.features.includes('workflow-engine-ui')
+      ? t('Monitor for')
+      : t('Alert for');
+
     return {
       key: 'create-alert',
-      label: t('An Alert for'),
-      textValue: t('An Alert for'),
+      label: newAlertLabel,
+      textValue: newAlertLabel,
       children: alertsUrls ?? [],
       disabled: !alertsUrls || alertsUrls.length === 0,
       isSubmenu: true,
@@ -174,7 +213,6 @@ export function useSaveAsItems({
             organization,
             location,
             eventView,
-            router,
             yAxis: eventView.yAxis,
             widgetType: WidgetType.LOGS,
             source: DashboardWidgetSource.LOGS,
@@ -189,32 +227,22 @@ export function useSaveAsItems({
         <Feature
           hookName="feature-disabled:dashboards-edit"
           features="organizations:dashboards-edit"
-          renderDisabled={() => <DisabledText>{t('A Dashboard widget')}</DisabledText>}
+          renderDisabled={() => <DisabledText>{t('Dashboard widget')}</DisabledText>}
         >
-          {t('A Dashboard widget')}
+          {t('Dashboard widget')}
         </Feature>
       ),
-      textValue: t('A Dashboard widget'),
+      textValue: t('Dashboard widget'),
       children: dashboardsUrls,
       disabled: !dashboardsUrls || dashboardsUrls.length === 0,
       isSubmenu: true,
     };
-  }, [
-    aggregates,
-    groupBys,
-    mode,
-    organization,
-    pageFilters,
-    search,
-    sortBys,
-    location,
-    router,
-  ]);
+  }, [aggregates, groupBys, mode, organization, pageFilters, search, sortBys, location]);
 
   return useMemo(() => {
     const saveAs = [];
     if (isLogsEnabled(organization)) {
-      saveAs.push(saveAsQuery);
+      saveAs.push(...saveAsQuery);
       saveAs.push(saveAsAlert);
       saveAs.push(saveAsDashboard);
     }
@@ -223,5 +251,5 @@ export function useSaveAsItems({
 }
 
 const DisabledText = styled('span')`
-  color: ${p => p.theme.disabled};
+  color: ${p => p.theme.tokens.content.disabled};
 `;

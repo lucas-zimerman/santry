@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from sentry.features.handler import FeatureHandler
     from sentry.models.organization import Organization
     from sentry.models.project import Project
+    from sentry.organizations.services.organization.model import RpcOrganization
     from sentry.users.models.user import User
 
 
@@ -321,7 +322,7 @@ class FeatureManager(RegisteredFeatureManager):
         feature_names: Sequence[str],
         actor: User | RpcUser | AnonymousUser | None = None,
         projects: Sequence[Project] | None = None,
-        organization: Organization | None = None,
+        organization: RpcOrganization | Organization | None = None,
     ) -> dict[str, dict[str, bool | None]] | None:
         """
         Determine if multiple features are enabled. Unhandled flags will not be in
@@ -373,6 +374,66 @@ class FeatureManager(RegisteredFeatureManager):
             if in_random_rollout("features.error.capture_rate"):
                 sentry_sdk.capture_exception(e)
             return None
+
+    def batch_has_for_organizations(
+        self, feature_name: str, organizations: Sequence[Organization]
+    ) -> dict[str, bool] | None:
+        """
+        Check the same set of feature flags for multiple organizations at once.
+
+        This method optimizes the case where you need to check the same features
+        for many different organizations by delegating to the entity handler if
+        available, or falling back to individual checks.
+
+        Args:
+            feature_names: List of feature names to check
+            organizations: List of organizations to check the features for
+
+        Returns:
+            Mapping from organization keys (format: "organization:{id}") to
+            feature name to result mapping.
+        """
+        try:
+            if self._entity_handler and hasattr(
+                self._entity_handler, "batch_has_for_organizations"
+            ):
+                with metrics.timer("features.batch_has_for_organizations", sample_rate=0.01):
+                    return self._entity_handler.batch_has_for_organizations(
+                        feature_name, organizations
+                    )
+            else:
+                results: dict[str, bool] = {}
+                for organization in organizations:
+                    org_key = f"organization:{organization.id}"
+                    results[org_key] = self.has(feature_name, organization)
+                return results
+
+        except Exception as e:
+            if in_random_rollout("features.error.capture_rate"):
+                sentry_sdk.capture_exception(e)
+                return None
+        return None
+
+    def get_experiment_assignments(
+        self,
+        organization: Organization,
+        actor: User | RpcUser | AnonymousUser | None = None,
+    ) -> dict[str, str]:
+        """
+        Get experiment assignments for an organization.
+
+        Returns a dict mapping experiment name (without scope prefix) to
+        assignment ("active" or "control") for all flags with experiment_mode set.
+
+        Delegates to the entity handler (FlagpoleFeatureHandler in getsentry).
+        """
+        try:
+            if self._entity_handler:
+                return self._entity_handler.get_experiment_assignments(organization, actor)
+        except Exception:
+            if in_random_rollout("features.error.capture_rate"):
+                logger.exception("Failed to get experiment assignments")
+        return {}
 
     @staticmethod
     def _shim_feature_strategy(

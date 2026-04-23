@@ -19,7 +19,7 @@ export const CPE_MULTIPLIER_TO_CENTS = 0.000001;
 export const GIGABYTE = 10 ** 9;
 
 // the first tier is the default tier
-export const SUPPORTED_TIERS = [PlanTier.AM3, PlanTier.AM2, PlanTier.AM1];
+const SUPPORTED_TIERS = [PlanTier.AM3, PlanTier.AM2, PlanTier.AM1];
 export const DEFAULT_TIER = SUPPORTED_TIERS[0];
 export const UPSELL_TIER = SUPPORTED_TIERS[1]; // TODO(am3): Update to DEFAULT_TIER when upsells are configured for AM3
 
@@ -54,14 +54,13 @@ Object.entries(DEFAULT_BILLED_DATA_CATEGORY_INFO).forEach(
       ...categoryInfo,
       canAllocate: false,
       canProductTrial: false,
-      maxAdminGift: 0,
       freeEventsMultiple: 0,
       feature: null,
       hasSpikeProtection: false,
-      reservedVolumeTooltip: null,
+      checkoutTooltip: null,
       tallyType: 'usage',
       hasPerCategory: false,
-      paygPriceMultiplier: 1,
+      adminOnlyProductTrialFeature: null,
     };
   }
 );
@@ -76,136 +75,155 @@ export const BILLED_DATA_CATEGORY_INFO = {
   [DataCategoryExact.ERROR]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.ERROR],
     canAllocate: true,
-    maxAdminGift: 10_000_000,
     freeEventsMultiple: 1_000,
     hasSpikeProtection: true,
-    reservedVolumeTooltip: t(
+    checkoutTooltip: t(
       'Errors are sent every time an SDK catches a bug. You can send them manually too, if you want.'
     ),
     hasPerCategory: true,
-    paygPriceMultiplier: 10_000,
   },
   [DataCategoryExact.TRANSACTION]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.TRANSACTION],
     canAllocate: true,
     canProductTrial: true,
-    maxAdminGift: 50_000_000,
     freeEventsMultiple: 1_000,
     feature: 'performance-view',
     hasSpikeProtection: true,
-    reservedVolumeTooltip: t(
+    checkoutTooltip: t(
       'Transactions are sent when your service receives a request and sends a response.'
     ),
     hasPerCategory: true,
-    paygPriceMultiplier: 10_000,
+    shortenedUnitName: t('unit'),
   },
   [DataCategoryExact.ATTACHMENT]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.ATTACHMENT],
     canAllocate: true,
-    maxAdminGift: 10_000,
     freeEventsMultiple: 1,
     feature: 'event-attachments',
     hasSpikeProtection: true,
-    reservedVolumeTooltip: t(
-      'Attachments are files attached to errors, such as minidumps.'
-    ),
+    checkoutTooltip: t('Attachments are files attached to errors, such as minidumps.'),
     hasPerCategory: true,
-    paygPriceMultiplier: 10,
+    shortenedUnitName: 'GB',
   },
   [DataCategoryExact.REPLAY]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.REPLAY],
     canProductTrial: true,
-    maxAdminGift: 1_000_000,
     freeEventsMultiple: 1,
     feature: 'session-replay',
-    reservedVolumeTooltip: t(
+    checkoutTooltip: t(
       'Session Replays are video-like reproductions of your users’ sessions navigating your app or website.'
     ),
     hasPerCategory: true,
-    paygPriceMultiplier: 1000,
   },
   [DataCategoryExact.SPAN]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.SPAN],
     canProductTrial: true,
-    maxAdminGift: 1_000_000_000,
     freeEventsMultiple: 100_000,
     feature: 'spans-usage-tracking',
     hasSpikeProtection: true,
-    reservedVolumeTooltip: t(
+    checkoutTooltip: t(
       'Tracing is enabled by spans. A span represents a single operation of work within a trace.'
     ),
-    paygPriceMultiplier: 100_000,
   },
   [DataCategoryExact.SPAN_INDEXED]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.SPAN_INDEXED],
     canProductTrial: true,
-    maxAdminGift: 1_000_000_000,
     freeEventsMultiple: 100_000,
     feature: 'spans-usage-tracking',
-    paygPriceMultiplier: 100_000,
   },
   [DataCategoryExact.MONITOR_SEAT]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.MONITOR_SEAT],
-    maxAdminGift: 10_000,
     freeEventsMultiple: 1,
     feature: 'monitor-seat-billing',
     tallyType: 'seat',
     hasPerCategory: true,
+    checkoutTooltip: t(
+      'Crons monitors scheduled jobs to confirm they run on time and alert you when they fail or misfire.'
+    ),
+    shortenedUnitName: t('monitor'),
   },
   [DataCategoryExact.UPTIME]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.UPTIME],
-    maxAdminGift: 10_000,
     freeEventsMultiple: 1,
     feature: 'uptime-billing',
     tallyType: 'seat',
     hasPerCategory: true,
+    checkoutTooltip: t(
+      'Uptime monitoring checks your application’s availability and alerts you when services go down so you can respond quickly.'
+    ),
+    shortenedUnitName: t('monitor'),
   },
   [DataCategoryExact.PROFILE_DURATION]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.PROFILE_DURATION],
     canProductTrial: true,
-    maxAdminGift: 10_000,
     freeEventsMultiple: 1, // in hours
     hasPerCategory: true,
-    paygPriceMultiplier: 10,
+    checkoutTooltip: t(
+      'Continuous profiling tracks how code runs while your service is active, helping you find bottlenecks and improve efficiency.'
+    ),
+    shortenedUnitName: t('hour'),
   },
   [DataCategoryExact.PROFILE_DURATION_UI]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.PROFILE_DURATION_UI],
     canProductTrial: true,
-    maxAdminGift: 10_000,
     freeEventsMultiple: 1, // in hours
     hasPerCategory: true,
-    paygPriceMultiplier: 10,
+    checkoutTooltip: t(
+      'UI profiling tracks code performance during user sessions in frontend or mobile apps, helping you spot slowdowns and improve experience.'
+    ),
+    shortenedUnitName: t('hour'),
   },
   // Seer categories have product trials through ReservedBudgetCategoryType.SEER, not as individual categories
   [DataCategoryExact.SEER_AUTOFIX]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.SEER_AUTOFIX],
     feature: 'seer-billing',
+    shortenedUnitName: t('fix'),
   },
   [DataCategoryExact.SEER_SCANNER]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.SEER_SCANNER],
     feature: 'seer-billing',
+    shortenedUnitName: t('scan'),
   },
   [DataCategoryExact.LOG_BYTE]: {
     ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.LOG_BYTE],
     canAllocate: false,
     canProductTrial: true,
-    maxAdminGift: 10_000,
     freeEventsMultiple: 1,
     hasSpikeProtection: false,
     feature: 'logs-billing',
-    reservedVolumeTooltip: t(
-      'Log bytes represent the amount of log data ingested and stored.'
+    checkoutTooltip: t(
+      'A log records events from your application, giving you the context to debug issues and understand system behavior.'
+    ),
+    shortenedUnitName: 'GB',
+  },
+  [DataCategoryExact.TRACE_METRIC_BYTE]: {
+    ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.TRACE_METRIC_BYTE],
+    canProductTrial: true,
+    freeEventsMultiple: 1,
+    feature: 'expose-category-trace-metric-byte',
+    shortenedUnitName: 'GB',
+    checkoutTooltip: t(
+      'Application Metrics capture key signals from your application using counters, gauges, and distributions.'
     ),
   },
-  [DataCategoryExact.PREVENT_USER]: {
-    ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.PREVENT_USER],
-    feature: 'prevent-billing',
-    maxAdminGift: 10_000, // TODO(prevent): Update this to the actual max admin gift
+  [DataCategoryExact.SEER_USER]: {
+    ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.SEER_USER],
+    feature: 'seer-user-billing-launch',
+    canProductTrial: false,
+    freeEventsMultiple: 1,
     tallyType: 'seat',
+    shortenedUnitName: t('contributor'),
   },
-  [DataCategoryExact.PREVENT_REVIEW]: {
-    ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.PREVENT_REVIEW],
-    feature: 'prevent-billing',
-    maxAdminGift: 10_000, // TODO(prevent): Update this to the actual max admin gift
+  [DataCategoryExact.SIZE_ANALYSIS]: {
+    ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.SIZE_ANALYSIS],
+    freeEventsMultiple: 1,
+    shortenedUnitName: t('build'),
+    adminOnlyProductTrialFeature: true,
+  },
+  [DataCategoryExact.INSTALLABLE_BUILD]: {
+    ...DEFAULT_BILLED_DATA_CATEGORY_INFO[DataCategoryExact.INSTALLABLE_BUILD],
+    freeEventsMultiple: 1,
+    shortenedUnitName: t('install'),
+    adminOnlyProductTrialFeature: 'expose-category-installable-build',
   },
 } as const satisfies Record<DataCategoryExact, BilledDataCategoryInfo>;

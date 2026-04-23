@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 
-from tests.sentry.uptime.endpoints.test_base import UptimeResultEAPTestCase
+from sentry.testutils.cases import UptimeResultEAPTestCase
 from tests.snuba.api.endpoints.test_organization_events import OrganizationEventsEndpointTestBase
 
 
@@ -11,12 +11,6 @@ class OrganizationEventsUptimeResultsEndpointTest(
     OrganizationEventsEndpointTestBase, UptimeResultEAPTestCase
 ):
     dataset = "uptime_results"
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.features = {
-            "organizations:uptime-eap-enabled": True,
-        }
 
     def build_expected_result(self, **kwargs):
         return {"project.name": None, **kwargs}
@@ -37,7 +31,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=self.nine_mins_ago,
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {
@@ -87,7 +81,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=self.nine_mins_ago,
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {
@@ -131,7 +125,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=self.nine_mins_ago,
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {
@@ -196,7 +190,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=self.nine_mins_ago,
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {
@@ -255,7 +249,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=self.nine_mins_ago,
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {
@@ -308,7 +302,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=self.nine_mins_ago,
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {
@@ -353,7 +347,7 @@ class OrganizationEventsUptimeResultsEndpointTest(
                 scheduled_check_time=base_time + timedelta(microseconds=2),
             ),
         ]
-        self.store_uptime_results(results)
+        self.store_eap_items(results)
 
         response = self.do_request(
             {

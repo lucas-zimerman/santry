@@ -4,31 +4,34 @@ from rest_framework.response import Response
 from sentry import tsdb
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import StatsMixin, region_silo_endpoint
+from sentry.api.base import StatsMixin, cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.exceptions import ResourceDoesNotExist
 from sentry.api.helpers.environments import get_environment_id
 from sentry.models.environment import Environment
 from sentry.models.group import Group
 from sentry.models.project import Project
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.tsdb.base import TSDBModel
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectGroupStatsEndpoint(ProjectEndpoint, StatsMixin):
     owner = ApiOwner.ISSUES
     publish_status = {
         "GET": ApiPublishStatus.PRIVATE,
     }
     enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=20, window=1),
-            RateLimitCategory.USER: RateLimit(limit=20, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=20, window=1),
+                RateLimitCategory.USER: RateLimit(limit=20, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=20, window=1),
+            }
         }
-    }
+    )
 
     def get(self, request: Request, project: Project) -> Response:
         try:

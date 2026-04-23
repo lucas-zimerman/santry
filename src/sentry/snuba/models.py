@@ -3,9 +3,8 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from enum import Enum
-from typing import TYPE_CHECKING, ClassVar, Self, override
+from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
-from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django.utils import timezone
@@ -13,9 +12,10 @@ from django.utils import timezone
 from sentry.backup.dependencies import ImportKind, PrimaryKeyMap, get_model_name
 from sentry.backup.helpers import ImportFlags
 from sentry.backup.scopes import ImportScope, RelocationScope
-from sentry.db.models import FlexibleForeignKey, Model, region_silo_model
+from sentry.db.models import FlexibleForeignKey, Model, cell_silo_model
 from sentry.db.models.manager.base import BaseManager
 from sentry.deletions.base import ModelRelation
+from sentry.incidents.utils.subscription_limits import get_max_metric_alert_subscriptions
 from sentry.incidents.utils.types import DATA_SOURCE_SNUBA_QUERY_SUBSCRIPTION
 from sentry.models.team import Team
 from sentry.users.models.user import User
@@ -29,7 +29,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@region_silo_model
+class ExtrapolationMode(Enum):
+    UNKNOWN = 0
+    NONE = 1
+    CLIENT_AND_SERVER_WEIGHTED = 2
+    SERVER_WEIGHTED = 3
+
+    @classmethod
+    def as_choices(cls) -> tuple[Any, ...]:
+        return tuple((mode.value, mode.name.lower()) for mode in cls)
+
+    @classmethod
+    def as_text_choices(cls) -> tuple[Any, ...]:
+        return tuple((mode.name.lower(), mode.value) for mode in cls)
+
+    @classmethod
+    def from_str(cls, name: str) -> Self | None:
+        for mode in cls:
+            if mode.name.lower() == name:
+                return mode
+        return None
+
+
+@cell_silo_model
 class SnubaQuery(Model):
     __relocation_scope__ = RelocationScope.Organization
     __relocation_dependencies__ = {"sentry.Organization", "sentry.Project"}
@@ -50,8 +72,19 @@ class SnubaQuery(Model):
         size=100,
     )
     aggregate = models.TextField()
+    # The aggregation window for the query, in seconds.
     time_window = models.IntegerField()
+    # How often the subscription query is evaluated, in seconds. Scaled up for
+    # larger time windows and comparison alerts to reduce query load.
     resolution = models.IntegerField()
+    extrapolation_mode = models.IntegerField(
+        choices=ExtrapolationMode.as_choices(),
+        default=ExtrapolationMode.UNKNOWN.value,
+        db_default=ExtrapolationMode.UNKNOWN.value,
+    )
+    # This field is used for transactions -> spans alert migration.
+    # This field is used to store a snapshot of the query before the migration.
+    query_snapshot = models.JSONField(null=True)
     date_added = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -59,7 +92,7 @@ class SnubaQuery(Model):
         db_table = "sentry_snubaquery"
 
     @property
-    def event_types(self):
+    def event_types(self) -> list[SnubaQueryEventType.EventType]:
         return [type.event_type for type in self.snubaqueryeventtype_set.all()]
 
     @classmethod
@@ -81,7 +114,7 @@ class SnubaQuery(Model):
         return q & models.Q(pk__in=set(from_alert_rule).union(set(from_query_subscription)))
 
 
-@region_silo_model
+@cell_silo_model
 class SnubaQueryEventType(Model):
     __relocation_scope__ = RelocationScope.Organization
 
@@ -91,6 +124,7 @@ class SnubaQueryEventType(Model):
         TRANSACTION = 2
         TRACE_ITEM_SPAN = 3
         TRACE_ITEM_LOG = 4
+        TRACE_ITEM_METRIC = 5
 
     snuba_query = FlexibleForeignKey("sentry.SnubaQuery")
     type = models.SmallIntegerField()
@@ -101,11 +135,11 @@ class SnubaQueryEventType(Model):
         unique_together = (("snuba_query", "type"),)
 
     @property
-    def event_type(self):
+    def event_type(self) -> SnubaQueryEventType.EventType:
         return self.EventType(self.type)
 
 
-@region_silo_model
+@cell_silo_model
 class QuerySubscription(Model):
     __relocation_scope__ = RelocationScope.Organization
 
@@ -119,9 +153,7 @@ class QuerySubscription(Model):
     # NOTE: project fk SHOULD match AlertRule's fk
     project = FlexibleForeignKey("sentry.Project", db_constraint=False)
     snuba_query = FlexibleForeignKey("sentry.SnubaQuery", related_name="subscriptions")
-    type = (
-        models.TextField()
-    )  # Text identifier for the subscription type this is. Used to identify the registered callback associated with this subscription.
+    type = models.TextField()  # Text identifier for the subscription type this is. Used to identify the registered callback associated with this subscription.
     status = models.SmallIntegerField(default=Status.ACTIVE.value, db_index=True)
     subscription_id = models.TextField(unique=True, null=True)
     date_added = models.DateTimeField(default=timezone.now)
@@ -159,6 +191,7 @@ class QuerySubscription(Model):
 
 @data_source_type_registry.register(DATA_SOURCE_SNUBA_QUERY_SUBSCRIPTION)
 class QuerySubscriptionDataSourceHandler(DataSourceTypeHandler[QuerySubscription]):
+    @override
     @staticmethod
     def bulk_get_query_object(
         data_sources: list[DataSource],
@@ -180,14 +213,15 @@ class QuerySubscriptionDataSourceHandler(DataSourceTypeHandler[QuerySubscription
         }
         return {ds.id: qs_lookup.get(ds.source_id) for ds in data_sources}
 
+    @override
     @staticmethod
-    def related_model(instance) -> list[ModelRelation]:
+    def related_model(instance: DataSource) -> list[ModelRelation]:
         return [ModelRelation(QuerySubscription, {"id": instance.source_id})]
 
     @override
     @staticmethod
     def get_instance_limit(org: Organization) -> int | None:
-        return settings.MAX_QUERY_SUBSCRIPTIONS_PER_ORG
+        return get_max_metric_alert_subscriptions(org)
 
     @override
     @staticmethod
@@ -200,3 +234,8 @@ class QuerySubscriptionDataSourceHandler(DataSourceTypeHandler[QuerySubscription
                 QuerySubscription.Status.UPDATING.value,
             ),
         ).count()
+
+    @override
+    @staticmethod
+    def get_relocation_model_name() -> str:
+        return "sentry.querysubscription"

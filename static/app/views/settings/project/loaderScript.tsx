@@ -1,26 +1,28 @@
 import {Fragment, useCallback, useState} from 'react';
+import {useQuery} from '@tanstack/react-query';
 
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {ExternalLink, Link} from 'sentry/components/core/link';
-import EmptyMessage from 'sentry/components/emptyMessage';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Panel from 'sentry/components/panels/panel';
-import PanelAlert from 'sentry/components/panels/panelAlert';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
+import {LinkButton} from '@sentry/scraps/button';
+import {ExternalLink, Link} from '@sentry/scraps/link';
+
+import {EmptyMessage} from 'sentry/components/emptyMessage';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelAlert} from 'sentry/components/panels/panelAlert';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {PanelHeader} from 'sentry/components/panels/panelHeader';
 import {t, tct} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import type {Project, ProjectKey} from 'sentry/types/project';
-import {useApiQuery} from 'sentry/utils/queryClient';
-import useOrganization from 'sentry/utils/useOrganization';
-import SettingsPageHeader from 'sentry/views/settings/components/settingsPageHeader';
-import TextBlock from 'sentry/views/settings/components/text/textBlock';
+import {projectKeysApiOptions} from 'sentry/utils/projectKeys';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {SettingsPageHeader} from 'sentry/views/settings/components/settingsPageHeader';
 import {LoaderSettings} from 'sentry/views/settings/project/projectKeys/details/loaderSettings';
+import {useProjectSettingsOutlet} from 'sentry/views/settings/project/projectSettingsLayout';
 
-function ProjectLoaderScript({project}: {project: Project}) {
+export default function ProjectLoaderScript() {
   const organization = useOrganization();
-  const apiEndpoint = `/projects/${organization.slug}/${project.slug}/keys/`;
+  const {project} = useProjectSettingsOutlet();
   const [updatedProjectKeys, setUpdatedProjectKeys] = useState<ProjectKey[]>([]);
 
   const {
@@ -28,9 +30,9 @@ function ProjectLoaderScript({project}: {project: Project}) {
     isPending,
     error,
     refetch: refetchProjectKeys,
-  } = useApiQuery<ProjectKey[]>([apiEndpoint], {
-    staleTime: 0,
-  });
+  } = useQuery(
+    projectKeysApiOptions({orgSlug: organization.slug, projSlug: project.slug})
+  );
 
   const handleUpdateProjectKey = useCallback(
     (projectKey: ProjectKey) => {
@@ -51,10 +53,9 @@ function ProjectLoaderScript({project}: {project: Project}) {
 
   return (
     <Fragment>
-      <SettingsPageHeader title={t('Loader Script')} />
-
-      <TextBlock>
-        {tct(
+      <SettingsPageHeader
+        title={t('Loader Script')}
+        subtitle={tct(
           'The Loader Script is the easiest way to initialize the Sentry SDK. The Loader Script automatically keeps your Sentry SDK up to date and offers configuration for different Sentry features. [docsLink:Learn more about the Loader Script]. Note: The Loader Script is bound to a Client Key (DSN), to create a new Script, go to the [clientKeysLink:Client Keys page].',
           {
             docsLink: (
@@ -67,7 +68,7 @@ function ProjectLoaderScript({project}: {project: Project}) {
             ),
           }
         )}
-      </TextBlock>
+      />
 
       {isPending && <LoadingIndicator />}
       {!!error && (
@@ -121,7 +122,7 @@ function LoaderItem({
         </LinkButton>
       </PanelHeader>
       <PanelBody>
-        <PanelAlert type="info">
+        <PanelAlert variant="info">
           {t('Note that it can take a few minutes until changed options are live.')}
         </PanelAlert>
 
@@ -136,5 +137,3 @@ function LoaderItem({
     </Panel>
   );
 }
-
-export default ProjectLoaderScript;

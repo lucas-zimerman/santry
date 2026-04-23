@@ -2,11 +2,20 @@ import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'r
 import styled from '@emotion/styled';
 import partition from 'lodash/partition';
 
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import useDrawer from 'sentry/components/globalDrawer';
-import IdBadge from 'sentry/components/idBadge';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {useDrawer} from '@sentry/scraps/drawer';
+import {Stack} from '@sentry/scraps/layout';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+
+import {IdBadge} from 'sentry/components/idBadge';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {DeprecatedPlatformInfo} from 'sentry/components/onboarding/gettingStartedDoc/deprecatedPlatformInfo';
+import {
+  OnboardingCopyMarkdownButton,
+  useCopySetupInstructionsEnabled,
+} from 'sentry/components/onboarding/gettingStartedDoc/onboardingCopyMarkdownButton';
+import {TabSelectionScope} from 'sentry/components/onboarding/gettingStartedDoc/selectedCodeTabContext';
 import {Step} from 'sentry/components/onboarding/gettingStartedDoc/step';
 import {
   DocsPageLocation,
@@ -15,25 +24,24 @@ import {
 } from 'sentry/components/onboarding/gettingStartedDoc/types';
 import {useSourcePackageRegistries} from 'sentry/components/onboarding/gettingStartedDoc/useSourcePackageRegistries';
 import {useLoadGettingStarted} from 'sentry/components/onboarding/gettingStartedDoc/utils/useLoadGettingStarted';
-import {TaskSidebar} from 'sentry/components/sidebar/taskSidebar';
-import type {CommonSidebarProps} from 'sentry/components/sidebar/types';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
-import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
-import platforms from 'sentry/data/platforms';
+import {ALL_ACCESS_PROJECTS} from 'sentry/components/pageFilters/constants';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {allPlatforms as platforms} from 'sentry/data/platforms';
 import {t} from 'sentry/locale';
-import ConfigStore from 'sentry/stores/configStore';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
+import {ConfigStore} from 'sentry/stores/configStore';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import {space} from 'sentry/styles/space';
 import type {SelectValue} from 'sentry/types/core';
 import type {Organization} from 'sentry/types/organization';
 import type {PlatformIntegration, Project} from 'sentry/types/project';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {getDocsPlatformSDKForPlatform} from 'sentry/utils/profiling/platforms';
-import useApi from 'sentry/utils/useApi';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
 
 function splitProjectsByProfilingSupport(projects: Project[]): {
   supported: Project[];
@@ -54,8 +62,8 @@ const PROFILING_ONBOARDING_STEPS = [
 
 export function useProfilingOnboardingDrawer() {
   const organization = useOrganization();
-  const currentPanel = useLegacyStore(SidebarPanelStore);
-  const isActive = currentPanel === SidebarPanelKey.PROFILING_ONBOARDING;
+  const currentPanel = useLegacyStore(OnboardingDrawerStore);
+  const isActive = currentPanel === OnboardingDrawerKey.PROFILING_ONBOARDING;
   const hasProjectAccess = organization.access.includes('project:read');
   const initialPathname = useRef<string | null>(null);
 
@@ -79,36 +87,11 @@ export function useProfilingOnboardingDrawer() {
 function DrawerContent() {
   useLayoutEffect(() => {
     return () => {
-      SidebarPanelStore.hidePanel();
+      OnboardingDrawerStore.close();
     };
   }, []);
 
   return <SidebarContent />;
-}
-
-/**
- * @deprecated Use useProfilingOnboardingDrawer instead.
- */
-export function LegacyProfilingOnboardingSidebar(props: CommonSidebarProps) {
-  if (props.currentPanel !== SidebarPanelKey.PROFILING_ONBOARDING) {
-    return null;
-  }
-
-  return <ProfilingOnboarding {...props} />;
-}
-
-function ProfilingOnboarding(props: CommonSidebarProps) {
-  return (
-    <TaskSidebar
-      orientation={props.orientation}
-      collapsed={props.collapsed}
-      hidePanel={() => {
-        props.hidePanel();
-      }}
-    >
-      <SidebarContent />
-    </TaskSidebar>
-  );
 }
 
 function SidebarContent() {
@@ -227,7 +210,7 @@ function SidebarContent() {
 
   return (
     <Fragment>
-      <Content>
+      <Stack padding="xl" gap="md">
         <Heading>{t('Profile Code')}</Heading>
         <div
           onClick={e => {
@@ -239,21 +222,22 @@ function SidebarContent() {
           }}
         >
           <CompactSelect
-            triggerLabel={
-              currentProject ? (
-                <StyledIdBadge
-                  project={currentProject}
-                  avatarSize={16}
-                  hideOverflow
-                  disableLink
-                />
-              ) : (
-                t('Select a project')
-              )
-            }
             value={currentProject?.id}
             onChange={opt => setCurrentProject(projects.find(p => p.id === opt.value))}
-            triggerProps={{'aria-label': currentProject?.slug}}
+            trigger={triggerProps => (
+              <OverlayTrigger.Button {...triggerProps} aria-label={currentProject?.slug}>
+                {currentProject ? (
+                  <StyledIdBadge
+                    project={currentProject}
+                    avatarSize={16}
+                    hideOverflow
+                    disableLink
+                  />
+                ) : (
+                  t('Select a project')
+                )}
+              </OverlayTrigger.Button>
+            )}
             options={projectSelectOptions}
             position="bottom-end"
           />
@@ -266,7 +250,7 @@ function SidebarContent() {
             project={currentProject}
           />
         ) : null}
-      </Content>
+      </Stack>
     </Fragment>
   );
 }
@@ -292,6 +276,7 @@ function ProfilingOnboardingContent(props: ProfilingOnboardingContentProps) {
     useSourcePackageRegistries(organization);
 
   const {isSelfHosted, urlPrefix} = useLegacyStore(ConfigStore);
+  const copyEnabled = useCopySetupInstructionsEnabled();
 
   if (isLoading) {
     return <LoadingIndicator />;
@@ -307,16 +292,6 @@ function ProfilingOnboardingContent(props: ProfilingOnboardingContentProps) {
     );
   }
 
-  if (!docs) {
-    return (
-      <LoadingError
-        message={t(
-          'The getting started documentation for this platform is currently unavailable.'
-        )}
-      />
-    );
-  }
-
   if (!dsn) {
     return (
       <LoadingError
@@ -324,6 +299,20 @@ function ProfilingOnboardingContent(props: ProfilingOnboardingContentProps) {
           'We encountered an issue while loading the DSN for this getting started documentation.'
         )}
         onRetry={refetch}
+      />
+    );
+  }
+
+  if (props.platform.deprecated) {
+    return <DeprecatedPlatformInfo platform={props.platform} dsn={dsn} />;
+  }
+
+  if (!docs) {
+    return (
+      <LoadingError
+        message={t(
+          'The getting started documentation for this platform is currently unavailable.'
+        )}
       />
     );
   }
@@ -348,6 +337,7 @@ function ProfilingOnboardingContent(props: ProfilingOnboardingContentProps) {
     project: props.project,
     isLogsSelected: false,
     isFeedbackSelected: false,
+    isMetricsSelected: false,
     isPerformanceSelected: true,
     isProfilingSelected: true,
     isReplaySelected: false,
@@ -375,19 +365,36 @@ function ProfilingOnboardingContent(props: ProfilingOnboardingContentProps) {
   const steps = [...doc.install(docParams), ...doc.configure(docParams)];
 
   return (
-    <Wrapper>
-      {doc.introduction && <Introduction>{doc.introduction(docParams)}</Introduction>}
-      <Steps>
-        {steps.map(step => {
-          return <Step key={step.title ?? step.type} {...step} />;
-        })}
-      </Steps>
-    </Wrapper>
+    <TabSelectionScope>
+      <Wrapper>
+        {doc.introduction && <Introduction>{doc.introduction(docParams)}</Introduction>}
+        <Steps>
+          {steps.map((step, index) => {
+            return (
+              <Step
+                key={step.title ?? step.type}
+                stepIndex={index}
+                {...step}
+                trailingItems={
+                  index === 0 && copyEnabled ? (
+                    <OnboardingCopyMarkdownButton
+                      borderless
+                      steps={steps}
+                      source="profiling_sidebar_onboarding"
+                    />
+                  ) : undefined
+                }
+              />
+            );
+          })}
+        </Steps>
+      </Wrapper>
+    </TabSelectionScope>
   );
 }
 
 const Wrapper = styled('div')`
-  margin-top: ${space(2)};
+  margin-top: ${p => p.theme.space.xl};
 `;
 
 const Steps = styled('div')`
@@ -398,25 +405,18 @@ const Steps = styled('div')`
 
 const Introduction = styled('div')`
   & > p:not(:last-child) {
-    margin-bottom: ${space(2)};
+    margin-bottom: ${p => p.theme.space.xl};
   }
-`;
-
-const Content = styled('div')`
-  padding: ${space(2)};
-  display: flex;
-  flex-direction: column;
-  gap: ${space(1)};
 `;
 
 const Heading = styled('div')`
   display: flex;
-  color: ${p => p.theme.activeText};
-  font-size: ${p => p.theme.fontSize.xs};
+  color: ${p => p.theme.tokens.interactive.link.accent.rest};
+  font-size: ${p => p.theme.font.size.xs};
   text-transform: uppercase;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   line-height: 1;
-  margin-top: ${space(3)};
+  margin-top: ${p => p.theme.space['2xl']};
 `;
 
 const StyledIdBadge = styled(IdBadge)`

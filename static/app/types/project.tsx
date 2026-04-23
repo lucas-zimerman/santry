@@ -5,6 +5,10 @@ import type {Organization, Team} from './organization';
 import type {Deploy} from './release';
 import type {DynamicSamplingBias} from './sampling';
 
+export type SeerNightshiftTweaks = {
+  enabled?: boolean;
+};
+
 // Minimal project representation for use with avatars.
 export type AvatarProject = {
   slug: string;
@@ -34,7 +38,6 @@ export type Project = {
   hasInsightsCaches: boolean;
   hasInsightsDb: boolean;
   hasInsightsHttp: boolean;
-  hasInsightsLlmMonitoring: boolean;
   hasInsightsMCP: boolean;
   hasInsightsQueues: boolean;
   hasInsightsScreenLoad: boolean;
@@ -46,13 +49,13 @@ export type Project = {
   hasProfiles: boolean;
   hasReplays: boolean;
   hasSessions: boolean;
+  hasTraceMetrics: boolean;
   id: string;
   isBookmarked: boolean;
   isInternal: boolean;
   isMember: boolean;
   name: string;
-  organization: Organization;
-
+  organization: Pick<Organization, 'id' | 'slug'>;
   plugins: Plugin[];
   processingIssues: number;
   relayCustomMetricCardinalityLimit: number | null;
@@ -82,8 +85,21 @@ export type Project = {
   latestDeploys?: Record<string, Pick<Deploy, 'dateFinished' | 'version'>> | null;
   latestRelease?: {version: string} | null;
   options?: Record<string, boolean | string>;
+  preprodDistributionEnabledByCustomer?: boolean;
+  preprodDistributionEnabledQuery?: string | null;
+  preprodDistributionPrCommentsEnabledByCustomer?: boolean;
+  preprodSizeEnabledByCustomer?: boolean;
+  preprodSizeEnabledQuery?: string | null;
+  preprodSizeStatusChecksEnabled?: boolean;
+  preprodSizeStatusChecksRules?: unknown[];
+  preprodSnapshotPrCommentsEnabled?: boolean;
+  preprodSnapshotStatusChecksEnabled?: boolean;
+  preprodSnapshotStatusChecksFailOnAdded?: boolean;
+  preprodSnapshotStatusChecksFailOnRemoved?: boolean;
+  scmSourceContextEnabled?: boolean;
   securityToken?: string;
   securityTokenHeader?: string;
+  seerNightshiftTweaks?: SeerNightshiftTweaks | null;
   seerScannerAutomation?: boolean;
   sessionStats?: {
     currentCrashFreeRate: number | null;
@@ -93,7 +109,6 @@ export type Project = {
   stats?: TimeseriesValue[];
   subjectPrefix?: string;
   symbolSources?: string;
-  tempestFetchDumps?: boolean;
   tempestFetchScreenshots?: boolean;
   transactionStats?: TimeseriesValue[];
 } & AvatarProject;
@@ -111,6 +126,7 @@ export type ProjectKey = {
     cdn: string;
     crons: string;
     csp: string;
+    integration: string;
     minidump: string;
     otlp_logs: string;
     otlp_traces: string;
@@ -122,6 +138,8 @@ export type ProjectKey = {
   };
   dynamicSdkLoaderOptions: {
     hasDebug: boolean;
+    hasFeedback: boolean;
+    hasLogsAndMetrics: boolean;
     hasPerformance: boolean;
     hasReplay: boolean;
   };
@@ -287,6 +305,7 @@ export type PlatformKey =
   | 'python-fastapi'
   | 'python-flask'
   | 'python-gcpfunctions'
+  | 'python-litestar'
   | 'python-pylons'
   | 'python-pymongo'
   | 'python-pyramid'
@@ -322,6 +341,7 @@ export type PlatformIntegration = {
   link: string | null;
   name: string;
   type: string;
+  deprecated?: boolean;
   iconConfig?: {
     withLanguageIcon: boolean;
   };

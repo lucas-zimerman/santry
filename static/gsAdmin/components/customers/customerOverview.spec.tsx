@@ -6,15 +6,21 @@ import {SeerReservedBudgetFixture} from 'getsentry-test/fixtures/reservedBudget'
 import {
   InvoicedSubscriptionFixture,
   SubscriptionFixture,
-  SubscriptionWithSeerFixture,
+  SubscriptionWithLegacySeerFixture,
 } from 'getsentry-test/fixtures/subscription';
-import {render, screen, userEvent, within} from 'sentry-test/reactTestingLibrary';
+import {
+  render,
+  screen,
+  userEvent,
+  waitFor,
+  within,
+} from 'sentry-test/reactTestingLibrary';
 
 import {DataCategory} from 'sentry/types/core';
 import {toTitleCase} from 'sentry/utils/string/toTitleCase';
 
-import CustomerOverview from 'admin/components/customers/customerOverview';
-import {PlanTier, ReservedBudgetCategoryType} from 'getsentry/types';
+import {CustomerOverview} from 'admin/components/customers/customerOverview';
+import {AddOnCategory, PlanTier} from 'getsentry/types';
 
 describe('CustomerOverview', () => {
   it('renders DetailLabels for SubscriptionSummary section', () => {
@@ -35,7 +41,6 @@ describe('CustomerOverview', () => {
     expect(screen.getByText('Gifted Errors:')).toBeInTheDocument();
     expect(screen.getByText('Gifted Transactions:')).toBeInTheDocument();
     expect(screen.getByText('Can Trial:')).toBeInTheDocument();
-    expect(screen.getByText('Can Grace Period:')).toBeInTheDocument();
     expect(screen.getByText('Legacy Soft Cap:')).toBeInTheDocument();
     expect(screen.getByText('Soft Cap By Category:')).toBeInTheDocument();
   });
@@ -184,20 +189,18 @@ describe('CustomerOverview', () => {
     expect(screen.getByText('Total: $0.00 / $3,000,000.00')).toBeInTheDocument();
 
     // CPE information
-    expect(screen.getByText('Pay-as-you-go Cost-Per-Event Errors:')).toBeInTheDocument();
+    expect(screen.getByText('On-Demand Cost-Per-Event Errors:')).toBeInTheDocument();
     expect(screen.getByText('$0.12345678')).toBeInTheDocument();
     expect(
-      screen.getByText('Pay-as-you-go Cost-Per-Event Performance units:')
+      screen.getByText('On-Demand Cost-Per-Event Performance units:')
     ).toBeInTheDocument();
     expect(screen.getByText('$1.00000000')).toBeInTheDocument();
-    expect(screen.getByText('Pay-as-you-go Cost-Per-Event Replays:')).toBeInTheDocument();
+    expect(screen.getByText('On-Demand Cost-Per-Event Replays:')).toBeInTheDocument();
     expect(screen.getByText('$0.50000000')).toBeInTheDocument();
-    expect(
-      screen.getByText('Pay-as-you-go Cost-Per-Event Attachments:')
-    ).toBeInTheDocument();
+    expect(screen.getByText('On-Demand Cost-Per-Event Attachments:')).toBeInTheDocument();
     expect(screen.getByText('$0.20300000')).toBeInTheDocument();
     expect(
-      screen.getByText('Pay-as-you-go Cost-Per-Event Cron monitors:')
+      screen.getByText('On-Demand Cost-Per-Event Cron monitors:')
     ).toBeInTheDocument();
     expect(screen.getByText('$0.07550000')).toBeInTheDocument();
   });
@@ -303,7 +306,7 @@ describe('CustomerOverview', () => {
 
   it('renders reserved budget data', () => {
     const organization = OrganizationFixture();
-    const subscription = SubscriptionWithSeerFixture({organization});
+    const subscription = SubscriptionWithLegacySeerFixture({organization});
     subscription.reservedBudgets = [
       SeerReservedBudgetFixture({
         totalReservedSpend: 20_00,
@@ -392,9 +395,36 @@ describe('CustomerOverview', () => {
     expect(screen.queryByText('Transactions:')).not.toBeInTheDocument();
   });
 
+  it('renders SIZE_ANALYSIS admin-only product trials (GA, no feature flag required)', () => {
+    // SIZE_ANALYSIS is now GA: adminOnlyProductTrialFeature is true, no feature flag check needed
+    const organization = OrganizationFixture({
+      features: [], // No feature flags needed
+    });
+    const subscription = SubscriptionFixture({
+      organization,
+      plan: 'am3_f',
+      planTier: PlanTier.AM3,
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    expect(screen.getByText('Product Trials')).toBeInTheDocument();
+    // SIZE_ANALYSIS always appears (graduated)
+    expect(screen.getByText('Size Analysis Builds:')).toBeInTheDocument();
+    // Regular product trials should still appear
+    expect(screen.getByText('Spans:')).toBeInTheDocument();
+    expect(screen.getByText('Replays:')).toBeInTheDocument();
+  });
+
   it('renders product trials based on current subscription state', () => {
     const organization = OrganizationFixture();
-    const am3_subscription = SubscriptionFixture({
+    const am3Subscription = SubscriptionFixture({
       organization,
       plan: 'am3_f',
       planTier: PlanTier.AM3,
@@ -429,10 +459,14 @@ describe('CustomerOverview', () => {
         },
       ],
     });
+    am3Subscription.addOns!.seer = {
+      ...am3Subscription.addOns!.seer!,
+      isAvailable: false,
+    };
 
     render(
       <CustomerOverview
-        customer={am3_subscription}
+        customer={am3Subscription}
         onAction={jest.fn()}
         organization={organization}
       />
@@ -459,11 +493,12 @@ describe('CustomerOverview', () => {
       DataCategory.PROFILE_DURATION,
       DataCategory.PROFILE_DURATION_UI,
       DataCategory.LOG_BYTE,
-      ReservedBudgetCategoryType.SEER,
+      DataCategory.SIZE_ANALYSIS,
+      AddOnCategory.LEGACY_SEER,
     ];
 
     const assertProductTrialActions = (
-      category: DataCategory | ReservedBudgetCategoryType,
+      category: DataCategory | AddOnCategory,
       formattedDisplayName: string,
       shouldNotIncludeTrialCategory = false
     ) => {
@@ -489,26 +524,38 @@ describe('CustomerOverview', () => {
           name: 'Stop Trial',
         });
         expect(stopTrialButton).toBeInTheDocument();
+        const extendTrialButton = within(definition).getByRole('button', {
+          name: 'Extend Trial',
+        });
+        expect(extendTrialButton).toBeInTheDocument();
 
         if (category === DataCategory.REPLAYS) {
           expect(allowTrialButton).toBeDisabled();
           expect(startTrialButton).toBeDisabled();
           expect(stopTrialButton).toBeEnabled();
-          expect(within(definition).getByText('Active')).toBeInTheDocument();
+          expect(extendTrialButton).toBeEnabled();
+          expect(
+            within(definition).getByText(/Active \(until .* UTC\)/)
+          ).toBeInTheDocument();
         } else if (category === DataCategory.SPANS) {
           expect(allowTrialButton).toBeDisabled();
           expect(startTrialButton).toBeDisabled();
           expect(stopTrialButton).toBeDisabled();
-          expect(within(definition).getByText(/Active \(/)).toBeInTheDocument();
-        } else if (category === ReservedBudgetCategoryType.SEER) {
+          expect(extendTrialButton).toBeEnabled();
+          expect(
+            within(definition).getByText(/Active \(until .* UTC\)/)
+          ).toBeInTheDocument();
+        } else if (category === AddOnCategory.LEGACY_SEER) {
           expect(allowTrialButton).toBeEnabled();
           expect(startTrialButton).toBeDisabled();
           expect(stopTrialButton).toBeDisabled();
+          expect(extendTrialButton).toBeDisabled();
           expect(within(definition).getByText('Used')).toBeInTheDocument();
         } else {
           expect(allowTrialButton).toBeDisabled();
           expect(startTrialButton).toBeEnabled();
           expect(stopTrialButton).toBeDisabled();
+          expect(extendTrialButton).toBeDisabled();
           expect(within(definition).getByText('Available')).toBeInTheDocument();
         }
       } else {
@@ -518,26 +565,25 @@ describe('CustomerOverview', () => {
       }
     };
 
-    am3_subscription.planDetails.categories.forEach(category => {
+    am3Subscription.planDetails.categories.forEach(category => {
       const formattedDisplayName = toTitleCase(
-        am3_subscription.planDetails.categoryDisplayNames?.[category]?.plural ?? category,
+        am3Subscription.planDetails.categoryDisplayNames?.[category]?.plural ?? category,
         {allowInnerUpperCase: true}
       );
       assertProductTrialActions(category, formattedDisplayName);
     });
-    Object.values(am3_subscription.planDetails.availableReservedBudgetTypes).forEach(
-      productGroup => {
-        const formattedDisplayName = toTitleCase(productGroup.productName, {
+    Object.values(am3Subscription.addOns || {}).forEach(addOn => {
+      const formattedDisplayName =
+        toTitleCase(addOn.productName, {
           allowInnerUpperCase: true,
-        });
-        assertProductTrialActions(productGroup.apiName, formattedDisplayName);
-      }
-    );
+        }) + (addOn.apiName === AddOnCategory.LEGACY_SEER ? ' (Legacy)' : '');
+      assertProductTrialActions(addOn.apiName, formattedDisplayName);
+    });
 
     possibleTrialCategories.forEach(category => {
       if (
-        !am3_subscription.planDetails.categories.includes(category as DataCategory) &&
-        !Object.keys(am3_subscription.planDetails.availableReservedBudgetTypes).includes(
+        !am3Subscription.planDetails.categories.includes(category as DataCategory) &&
+        !Object.keys(am3Subscription.planDetails.availableReservedBudgetTypes).includes(
           category
         )
       ) {
@@ -550,26 +596,289 @@ describe('CustomerOverview', () => {
     });
   });
 
-  it('render dynamic sampling rate for am3 account', () => {
+  it('render dynamic sampling rate for am3 account', async () => {
     const organization = OrganizationFixture({
       features: ['dynamic-sampling'],
       desiredSampleRate: 0.75,
     });
-    const am3_subscription = SubscriptionFixture({
+    const am3Subscription = SubscriptionFixture({
       organization,
       plan: 'am3_team',
       planTier: PlanTier.AM3,
     });
 
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/sampling/effective-sample-rate/`,
+      body: {effectiveSampleRate: 0.75},
+    });
+
     render(
       <CustomerOverview
-        customer={am3_subscription}
+        customer={am3Subscription}
         onAction={jest.fn()}
         organization={organization}
       />
     );
 
     expect(screen.getByText('Team Plan (am3)')).toBeInTheDocument();
-    expect(screen.getByText('75.00%')).toBeInTheDocument();
+    await waitFor(() => {
+      const term = screen.getByText('Sample Rate (24h):');
+      const definition = term.nextElementSibling;
+      expect(definition).toHaveTextContent('75.00%');
+    });
+  });
+
+  it('renders matching sample rate without comparison string', async () => {
+    const organization = OrganizationFixture({
+      features: ['dynamic-sampling'],
+      desiredSampleRate: 1.0,
+    });
+    const subscription = SubscriptionFixture({
+      organization,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/sampling/effective-sample-rate/`,
+      body: {effectiveSampleRate: 1.0},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    await waitFor(() => {
+      const term = screen.getByText('Sample Rate (24h):');
+      const definition = term.nextElementSibling;
+      expect(definition).toHaveTextContent('100.00%');
+      expect(definition).not.toHaveTextContent('instead of');
+    });
+  });
+
+  it('renders matching rate without comparison when floating-point diff is near zero', async () => {
+    const organization = OrganizationFixture({
+      features: ['dynamic-sampling'],
+      desiredSampleRate: 0.6,
+    });
+    const subscription = SubscriptionFixture({
+      organization,
+    });
+
+    // Simulates floating-point imprecision: 0.600001 * 100 !== 0.6 * 100
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/sampling/effective-sample-rate/`,
+      body: {effectiveSampleRate: 0.600001},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    await waitFor(() => {
+      const term = screen.getByText('Sample Rate (24h):');
+      const definition = term.nextElementSibling;
+      expect(definition).toHaveTextContent('60.00%');
+      expect(definition).not.toHaveTextContent('instead of');
+    });
+  });
+
+  it('renders effective sample rate with desired comparison string', async () => {
+    const organization = OrganizationFixture({
+      features: ['dynamic-sampling'],
+      desiredSampleRate: 0.6,
+    });
+    const subscription = SubscriptionFixture({
+      organization,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/sampling/effective-sample-rate/`,
+      body: {effectiveSampleRate: 0.54},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+    await screen.findByText('54.00% instead of 60.00% (~6.00%)');
+  });
+
+  it('renders decimal sample rates preserving trailing zeros', async () => {
+    const organization = OrganizationFixture({
+      features: ['dynamic-sampling'],
+      desiredSampleRate: 0.6,
+    });
+    const subscription = SubscriptionFixture({
+      organization,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/sampling/effective-sample-rate/`,
+      body: {effectiveSampleRate: 0.501},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+    await screen.findByText('50.10% instead of 60.00% (~9.90%)');
+  });
+
+  it('renders n/a when effective sample rate is missing', async () => {
+    const organization = OrganizationFixture({
+      features: ['dynamic-sampling'],
+      desiredSampleRate: 0.75,
+    });
+    const subscription = SubscriptionFixture({
+      organization,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/${organization.slug}/sampling/effective-sample-rate/`,
+      body: {effectiveSampleRate: null},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    await waitFor(() => {
+      const term = screen.getByText('Sample Rate (24h):');
+      expect(term.nextElementSibling).toHaveTextContent('n/a');
+    });
+  });
+
+  it('renders retention settings', () => {
+    const organization = OrganizationFixture({});
+    const subscription = SubscriptionFixture({
+      organization,
+      plan: 'am3_f',
+    });
+
+    subscription.planDetails = {
+      ...subscription.planDetails,
+      retentions: {
+        [DataCategory.SPANS]: {standard: 1234567, downsampled: 7654321},
+        [DataCategory.LOG_BYTE]: {standard: 1470369, downsampled: 9630741},
+        [DataCategory.ERRORS]: {standard: 2581471, downsampled: 1741852},
+      },
+    };
+
+    subscription.categories.spans = MetricHistoryFixture({
+      ...subscription.categories.spans,
+      category: DataCategory.SPANS,
+      retention: {standard: 13579, downsampled: 24680},
+    });
+
+    subscription.categories.logBytes = MetricHistoryFixture({
+      ...subscription.categories.logBytes,
+      category: DataCategory.LOG_BYTE,
+      retention: {standard: 97531, downsampled: null},
+    });
+
+    subscription.categories.errors = MetricHistoryFixture({
+      ...subscription.categories.errors,
+      category: DataCategory.ERRORS,
+      retention: {standard: 36925, downsampled: 52963},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    expect(screen.getByText('Retention Settings')).toBeInTheDocument();
+
+    // planDetails downsampled for span and logs in document, but not for errors
+    expect(screen.getByText('7654321')).toBeInTheDocument();
+    expect(screen.getByText('9630741')).toBeInTheDocument();
+    expect(screen.queryByText('1741852')).not.toBeInTheDocument();
+
+    // categories downsampled for span and logs in document, but not for errors
+    expect(screen.getByText('13579')).toBeInTheDocument();
+    expect(screen.getByText('null')).toBeInTheDocument();
+    expect(screen.queryByText('36925')).not.toBeInTheDocument();
+  });
+
+  it('renders org retention', () => {
+    const organization = OrganizationFixture({});
+    const subscription = SubscriptionFixture({
+      organization,
+      plan: 'am3_f',
+      orgRetention: {standard: 1234567, downsampled: null},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    expect(screen.getByText('1234567 days')).toBeInTheDocument();
+  });
+
+  it('renders errors retention default', () => {
+    const organization = OrganizationFixture({});
+    const subscription = SubscriptionFixture({
+      organization,
+      plan: 'am3_f',
+      orgRetention: {standard: null, downsampled: null},
+      categories: {
+        errors: MetricHistoryFixture({
+          retention: {standard: 987, downsampled: null},
+        }),
+      },
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    expect(screen.getByText('987 days')).toBeInTheDocument();
+  });
+
+  it('renders org retention default', () => {
+    const organization = OrganizationFixture({});
+    const subscription = SubscriptionFixture({
+      organization,
+      plan: 'am3_f',
+      orgRetention: {standard: null, downsampled: null},
+    });
+
+    render(
+      <CustomerOverview
+        customer={subscription}
+        onAction={jest.fn()}
+        organization={organization}
+      />
+    );
+
+    expect(screen.getByText('90 days')).toBeInTheDocument();
   });
 });

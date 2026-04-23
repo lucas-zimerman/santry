@@ -1,37 +1,32 @@
 import {Fragment, useState} from 'react';
-import styled from '@emotion/styled';
-import type {Location} from 'history';
 
-import {Button} from 'sentry/components/core/button';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import Pagination from 'sentry/components/pagination';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import SimilarSpectrum from 'sentry/components/similarSpectrum';
+import {Button} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
+import {Pagination} from 'sentry/components/pagination';
+import {Panel} from 'sentry/components/panels/panel';
+import {PanelBody} from 'sentry/components/panels/panelBody';
+import {SimilarSpectrum} from 'sentry/components/similarSpectrum';
 import {t} from 'sentry/locale';
-import type {SimilarItem} from 'sentry/stores/groupingStore';
-import {space} from 'sentry/styles/space';
-import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
-import useOrganization from 'sentry/utils/useOrganization';
 
 import {SimilarStackTraceItem} from './item';
-import Toolbar from './toolbar';
-
-type DefaultProps = {
-  filteredItems: SimilarItem[];
-};
+import {SimilarToolbar} from './toolbar';
+import type {SimilarItem} from './types';
 
 type Props = {
+  busyIds: ReadonlySet<string>;
+  checkedIds: ReadonlySet<string>;
+  filteredItems: SimilarItem[];
   groupId: string;
   hasSimilarityEmbeddingsFeature: boolean;
   items: SimilarItem[];
-  location: Location;
   onMerge: () => void;
-  orgId: Organization['id'];
+  onToggle: (id: string) => void;
   pageLinks: string | null;
   project: Project;
-} & DefaultProps;
+};
 
 function Empty() {
   return (
@@ -45,15 +40,16 @@ function Empty() {
   );
 }
 
-function List({
-  orgId,
+export function List({
   groupId,
   project,
   items,
   filteredItems = [],
   pageLinks,
   onMerge,
-  location,
+  onToggle,
+  checkedIds,
+  busyIds,
   hasSimilarityEmbeddingsFeature,
 }: Props) {
   const [showAllItems, setShowAllItems] = useState(false);
@@ -61,13 +57,6 @@ function List({
   const hasHiddenItems = !!filteredItems.length;
   const hasResults = items.length > 0 || hasHiddenItems;
   const itemsWithFiltered = items.concat(showAllItems ? filteredItems : []);
-  const organization = useOrganization();
-  const itemsWouldGroup = hasSimilarityEmbeddingsFeature
-    ? itemsWithFiltered.map(item => ({
-        id: item.issue.id,
-        shouldBeGrouped: item.aggregate?.shouldBeGrouped,
-      }))
-    : undefined;
 
   if (!hasResults) {
     return <Empty />;
@@ -75,7 +64,7 @@ function List({
 
   return (
     <Fragment>
-      <Header>
+      <Flex justify="end" marginBottom="md">
         {!hasSimilarityEmbeddingsFeature && (
           <SimilarSpectrum
             highSpectrumLabel={t('Similar')}
@@ -88,14 +77,11 @@ function List({
             lowSpectrumLabel={t('Less Similar')}
           />
         )}
-      </Header>
+      </Flex>
       <Panel>
-        <Toolbar
+        <SimilarToolbar
           onMerge={onMerge}
-          groupId={groupId}
-          project={project}
-          organization={organization}
-          itemsWouldGroup={itemsWouldGroup}
+          mergeCount={checkedIds.size}
           hasSimilarityEmbeddingsFeature={hasSimilarityEmbeddingsFeature}
         />
 
@@ -103,21 +89,22 @@ function List({
           {itemsWithFiltered.map(item => (
             <SimilarStackTraceItem
               key={item.issue.id}
-              orgId={orgId}
               groupId={groupId}
               project={project}
-              location={location}
               hasSimilarityEmbeddingsFeature={hasSimilarityEmbeddingsFeature}
+              checked={checkedIds.has(item.issue.id)}
+              busy={busyIds.has(item.issue.id)}
+              onToggle={onToggle}
               {...item}
             />
           ))}
 
           {hasHiddenItems && !showAllItems && !hasSimilarityEmbeddingsFeature && (
-            <Footer>
+            <Flex justify="center" padding="lg">
               <Button onClick={() => setShowAllItems(true)}>
                 {t('Show %s issues below threshold', filteredItems.length)}
               </Button>
-            </Footer>
+            </Flex>
           )}
         </PanelBody>
       </Panel>
@@ -125,17 +112,3 @@ function List({
     </Fragment>
   );
 }
-
-export default List;
-
-const Header = styled('div')`
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: ${space(1)};
-`;
-
-const Footer = styled('div')`
-  display: flex;
-  justify-content: center;
-  padding: ${space(1.5)};
-`;

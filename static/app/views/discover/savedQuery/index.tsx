@@ -6,38 +6,35 @@ import {AnimatePresence} from 'framer-motion';
 import type {Location} from 'history';
 import isEqual from 'lodash/isEqual';
 
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {Input} from '@sentry/scraps/input';
+import {Flex, Grid, type GridProps} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
 import type {Client} from 'sentry/api';
 import Feature from 'sentry/components/acl/feature';
-import FeatureDisabled from 'sentry/components/acl/featureDisabled';
-import GuideAnchor from 'sentry/components/assistant/guideAnchor';
-import Banner from 'sentry/components/banner';
-import {Button} from 'sentry/components/core/button';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Input} from 'sentry/components/core/input';
-import {Flex} from 'sentry/components/core/layout';
-import {Tooltip} from 'sentry/components/core/tooltip';
+import {FeatureDisabled} from 'sentry/components/acl/featureDisabled';
+import {GuideAnchor} from 'sentry/components/assistant/guideAnchor';
+import {Banner} from 'sentry/components/banner';
 import {CreateAlertFromViewButton} from 'sentry/components/createAlertButton';
 import type {MenuItemProps} from 'sentry/components/dropdownMenu';
 import {DropdownMenu} from 'sentry/components/dropdownMenu';
 import {Hovercard} from 'sentry/components/hovercard';
 import {Overlay, PositionWrapper} from 'sentry/components/overlay';
-import {IconBookmark, IconDelete, IconEllipsis, IconStar} from 'sentry/icons';
+import {IconBookmark, IconEllipsis, IconStar} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import type {InjectedRouter} from 'sentry/types/legacyReactRouter';
 import type {Organization, SavedQuery} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import {defined} from 'sentry/utils';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {browserHistory} from 'sentry/utils/browserHistory';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {DiscoverDatasets} from 'sentry/utils/discover/types';
 import {getDiscoverQueriesUrl} from 'sentry/utils/discover/urls';
-import normalizeUrl from 'sentry/utils/url/normalizeUrl';
-import useOverlay from 'sentry/utils/useOverlay';
-import withApi from 'sentry/utils/withApi';
-import withProjects from 'sentry/utils/withProjects';
+import {normalizeUrl} from 'sentry/utils/url/normalizeUrl';
+import {useOverlay} from 'sentry/utils/useOverlay';
+import {withApi} from 'sentry/utils/withApi';
+import {withProjects} from 'sentry/utils/withProjects';
 import {DashboardWidgetSource} from 'sentry/views/dashboards/types';
 import {hasDatasetSelector} from 'sentry/views/dashboards/utils';
 import {DEFAULT_EVENT_VIEW} from 'sentry/views/discover/results/data';
@@ -83,7 +80,7 @@ type SaveAsDropdownProps = {
   queryName: string;
 };
 
-function SaveAsDropdown({
+export function SaveAsDropdown({
   queryName,
   disabled,
   onChangeInput,
@@ -103,7 +100,7 @@ function SaveAsDropdown({
         aria-label={t('Save as')}
         disabled={disabled}
       >
-        {`${t('Save as')}\u2026`}
+        {t('Save as')}
       </Button>
       <AnimatePresence>
         {isOpen && (
@@ -158,12 +155,12 @@ type Props = DefaultProps & {
   organization: Organization;
   projects: Project[];
   queryDataLoading: boolean;
-  router: InjectedRouter;
   savedQuery: SavedQuery | undefined;
   setHomepageQuery: (homepageQuery?: SavedQuery) => void;
   setSavedQuery: (savedQuery: SavedQuery) => void;
   updateCallback: () => void;
   yAxis: string[];
+  hasPageFrameFeature?: boolean;
   homepageQuery?: SavedQuery;
   isHomepage?: boolean;
 };
@@ -437,25 +434,6 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
     return this.renderButtonSaveAs(disabled);
   }
 
-  renderButtonDelete(disabled: boolean) {
-    const {isNewQuery} = this.state;
-
-    if (isNewQuery) {
-      return null;
-    }
-
-    return (
-      <Button
-        data-test-id="discover2-savedquery-button-delete"
-        onClick={this.handleDeleteQuery}
-        disabled={disabled}
-        size="sm"
-        icon={<IconDelete />}
-        aria-label={t('Delete')}
-      />
-    );
-  }
-
   renderButtonCreateAlert() {
     const {eventView, organization, projects, location, savedQuery} = this.props;
     const currentDataset = getDatasetFromLocationOrSavedQueryDataset(
@@ -465,7 +443,8 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
 
     if (
       currentDataset === DiscoverDatasets.TRANSACTIONS &&
-      deprecateTransactionAlerts(organization)
+      (deprecateTransactionAlerts(organization) ||
+        organization.features.includes('discover-saved-queries-deprecation'))
     ) {
       return null;
     }
@@ -500,7 +479,6 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
           onClick={this.handleCreateAlertSuccess}
           referrer="discover"
           size="sm"
-          aria-label={t('Create Alert')}
           data-test-id="discover2-create-from-discover"
           alertType={alertType}
         />
@@ -509,7 +487,7 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
   }
 
   renderButtonAddToDashboard() {
-    const {organization, eventView, savedQuery, yAxis, router, location} = this.props;
+    const {organization, eventView, savedQuery, yAxis, location} = this.props;
     return (
       <Button
         key="add-dashboard-widget-from-discover"
@@ -522,7 +500,6 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
             eventView,
             query: savedQuery,
             yAxis,
-            router,
             widgetType: hasDatasetSelector(organization)
               ? // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
                 SAVED_QUERY_DATASET_TO_WIDGET_TYPE[
@@ -632,8 +609,15 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
   }
 
   render() {
-    const {organization, eventView, savedQuery, yAxis, router, location, isHomepage} =
-      this.props;
+    const {
+      organization,
+      eventView,
+      savedQuery,
+      yAxis,
+      location,
+      isHomepage,
+      hasPageFrameFeature,
+    } = this.props;
 
     const currentDataset = getDatasetFromLocationOrSavedQueryDataset(
       location,
@@ -666,7 +650,6 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
             eventView,
             query: savedQuery,
             yAxis,
-            router,
             widgetType: hasDatasetSelector(organization)
               ? // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
                 SAVED_QUERY_DATASET_TO_WIDGET_TYPE[
@@ -711,13 +694,17 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
 
     return (
       <ResponsiveButtonBar>
-        {this.renderQueryButton(disabled => this.renderSaveAsHomepage(disabled))}
-        {this.renderQueryButton(disabled => this.renderButtonSave(disabled))}
-        <Feature organization={organization} features="incidents">
-          {({hasFeature}) => hasFeature && this.renderButtonCreateAlert()}
-        </Feature>
+        {!hasPageFrameFeature &&
+          this.renderQueryButton(disabled => this.renderSaveAsHomepage(disabled))}
+        {!hasPageFrameFeature &&
+          this.renderQueryButton(disabled => this.renderButtonSave(disabled))}
+        {!hasPageFrameFeature && (
+          <Feature organization={organization} features="incidents">
+            {({hasFeature}) => hasFeature && this.renderButtonCreateAlert()}
+          </Feature>
+        )}
 
-        {contextMenuItems.length > 0 && contextMenu}
+        {!hasPageFrameFeature && contextMenuItems.length > 0 && contextMenu}
 
         {this.renderQueryButton(disabled => this.renderButtonViewSaved(disabled))}
       </ResponsiveButtonBar>
@@ -725,28 +712,30 @@ class SavedQueryButtonGroup extends PureComponent<Props, State> {
   }
 }
 
-const ResponsiveButtonBar = styled(ButtonBar)`
+const ResponsiveButtonBar = styled((props: GridProps) => (
+  <Grid flow="column" align="center" gap="md" {...props} />
+))`
   @media (min-width: ${p => p.theme.breakpoints.md}) {
     margin-top: 0;
   }
 `;
 
 const StyledOverlay = styled(Overlay)`
-  padding: ${space(1)};
+  padding: ${p => p.theme.space.md};
 `;
 
 const SaveAsButton = styled(Button)`
   width: 100%;
 `;
 
-const IconUpdate = styled('div')`
+export const IconUpdate = styled('div')`
   display: inline-block;
   width: 10px;
   height: 10px;
 
-  margin-right: ${space(0.75)};
+  margin-right: ${p => p.theme.space.sm};
   border-radius: 5px;
-  background-color: ${p => p.theme.yellow300};
+  background-color: ${p => p.theme.colors.yellow400};
 `;
 
 export default withProjects(withApi(SavedQueryButtonGroup));

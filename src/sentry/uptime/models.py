@@ -3,26 +3,23 @@ import logging
 from datetime import timedelta
 from typing import ClassVar, Literal, Self, cast, override
 
-from django.conf import settings
 from django.db import models
-from django.db.models import Count, Q
-from django.db.models.functions import Now
+from django.db.models import Count
 
 from sentry.backup.scopes import RelocationScope
 from sentry.constants import ObjectStatus
 from sentry.db.models import (
+    BoundedBigIntegerField,
     DefaultFieldsModel,
     DefaultFieldsModelExisting,
     FlexibleForeignKey,
-    region_silo_model,
+    cell_silo_model,
 )
-from sentry.db.models.fields.bounded import BoundedPositiveBigIntegerField
-from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
 from sentry.db.models.manager.base import BaseManager
 from sentry.deletions.base import ModelRelation
+from sentry.models.files.file import File
 from sentry.models.organization import Organization
 from sentry.remote_subscriptions.models import BaseRemoteSubscription
-from sentry.types.actor import Actor
 from sentry.uptime.types import (
     DATA_SOURCE_UPTIME_SUBSCRIPTION,
     GROUP_TYPE_UPTIME_DOMAIN_CHECK_FAILURE,
@@ -35,6 +32,9 @@ from sentry.workflow_engine.types import DataSourceTypeHandler
 
 logger = logging.getLogger(__name__)
 
+# Separator used in UptimeResponseCapture file storage format.
+RESPONSE_BODY_SEPARATOR = b"\r\n\r\n---BODY---\r\n\r\n"
+
 SupportedHTTPMethodsLiteral = Literal["GET", "POST", "HEAD", "PUT", "DELETE", "PATCH", "OPTIONS"]
 IntervalSecondsLiteral = Literal[60, 300, 600, 1200, 1800, 3600]
 
@@ -44,7 +44,7 @@ class UptimeStatus(enum.IntEnum):
     FAILED = 2
 
 
-@region_silo_model
+@cell_silo_model
 class UptimeSubscription(BaseRemoteSubscription, DefaultFieldsModelExisting):
     # TODO: This should be included in export/import, but right now it has no relation to
     # any projects/orgs. Will fix this in a later pr
@@ -97,12 +97,16 @@ class UptimeSubscription(BaseRemoteSubscription, DefaultFieldsModelExisting):
     # How to sample traces for this monitor. Note that we always send a trace_id, so any errors will
     # be associated, this just controls the span sampling.
     trace_sampling = models.BooleanField(default=False, db_default=False)
-    # Tracks the current status of this subscription. This is possibly going
-    # to be replaced in the future with open-periods as we replace
-    # ProjectUptimeSubscription with Detectors.
-    uptime_status = models.PositiveSmallIntegerField(db_default=UptimeStatus.OK.value)
-    # (Likely) temporary column to keep track of the current uptime status of this monitor
-    uptime_status_update_date = models.DateTimeField(db_default=Now())
+
+    # User-controlled setting to enable/disable response capture feature entirely.
+    response_capture_enabled = models.BooleanField(default=True, db_default=True)
+
+    # Whether to capture response body and headers on check failures.
+    # System-managed flag - disabled after first capture to reduce bandwidth.
+    capture_response_on_failure = models.BooleanField(default=True, db_default=True)
+
+    # runtime assertion executed by the checker against the response body
+    assertion = models.JSONField(null=True)
 
     objects: ClassVar[BaseManager[Self]] = BaseManager(
         cache_fields=["pk", "subscription_id"],
@@ -115,11 +119,10 @@ class UptimeSubscription(BaseRemoteSubscription, DefaultFieldsModelExisting):
 
         indexes = [
             models.Index(fields=("url_domain_suffix", "url_domain")),
-            models.Index(fields=("uptime_status", "uptime_status_update_date")),
         ]
 
 
-@region_silo_model
+@cell_silo_model
 class UptimeSubscriptionRegion(DefaultFieldsModel):
     __relocation_scope__ = RelocationScope.Excluded
 
@@ -147,82 +150,6 @@ class UptimeSubscriptionRegion(DefaultFieldsModel):
                 name="uptime_uptimesubscription_region_slug_unique",
             ),
         ]
-
-
-@region_silo_model
-class ProjectUptimeSubscription(DefaultFieldsModelExisting):
-    # TODO: This should be included in export/import, but right now it has no relation to
-    # any projects/orgs. Will fix this in a later pr
-
-    __relocation_scope__ = RelocationScope.Excluded
-
-    project = FlexibleForeignKey("sentry.Project")
-    environment = FlexibleForeignKey(
-        "sentry.Environment", db_index=True, db_constraint=False, null=True
-    )
-    uptime_subscription = FlexibleForeignKey("uptime.UptimeSubscription", on_delete=models.PROTECT)
-    status = BoundedPositiveBigIntegerField(
-        choices=ObjectStatus.as_choices(), db_default=ObjectStatus.ACTIVE
-    )
-    mode = models.SmallIntegerField(
-        default=UptimeMonitorMode.MANUAL.value,
-        db_default=UptimeMonitorMode.MANUAL.value,
-    )
-    # Date of the last time we updated the status for this monitor
-    name = models.TextField()
-    owner_user_id = HybridCloudForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete="SET_NULL")
-    owner_team = FlexibleForeignKey("sentry.Team", null=True, on_delete=models.SET_NULL)
-
-    objects: ClassVar[BaseManager[Self]] = BaseManager(
-        cache_fields=["pk"], cache_ttl=int(timedelta(hours=1).total_seconds())
-    )
-
-    class Meta:
-        app_label = "uptime"
-        db_table = "uptime_projectuptimesubscription"
-
-        indexes = [
-            models.Index(fields=("project", "mode")),
-        ]
-
-        constraints = [
-            # We might not actually need this constraint - there's no ddos potential of a user making a lot of uptime
-            # monitors to the same uptime_subscription, since we'll de-dupe. We can always remove this constraint if
-            # we want to allow this in the future.
-            models.UniqueConstraint(
-                fields=["project_id", "uptime_subscription"],
-                name="uptime_projectuptimesubscription_unique_manual_project_subscription",
-                condition=Q(mode=UptimeMonitorMode.MANUAL.value),
-            ),
-            models.UniqueConstraint(
-                fields=["project_id", "uptime_subscription"],
-                name="uptime_projectuptimesubscription_unique_auto_project_subscription",
-                condition=Q(
-                    mode__in=(
-                        UptimeMonitorMode.AUTO_DETECTED_ONBOARDING.value,
-                        UptimeMonitorMode.AUTO_DETECTED_ACTIVE.value,
-                    )
-                ),
-            ),
-        ]
-
-    @property
-    def owner(self) -> Actor | None:
-        return Actor.from_id(user_id=self.owner_user_id, team_id=self.owner_team_id)
-
-    def get_audit_log_data(self):
-        return {
-            "project": self.project.id,
-            "name": self.name,
-            "owner_user_id": self.owner_user_id,
-            "owner_team_id": self.owner_team_id,
-            "url": self.uptime_subscription.url,
-            "interval_seconds": self.uptime_subscription.interval_seconds,
-            "timeout": self.uptime_subscription.timeout_ms,
-            "method": self.uptime_subscription.method,
-            "headers": self.uptime_subscription.headers,
-            "body": self.uptime_subscription.body,
-        }
 
 
 def get_org_from_detector(detector: Detector) -> tuple[Organization]:
@@ -274,6 +201,7 @@ class UptimeRegionScheduleMode(enum.StrEnum):
 
 @data_source_type_registry.register(DATA_SOURCE_UPTIME_SUBSCRIPTION)
 class UptimeSubscriptionDataSourceHandler(DataSourceTypeHandler[UptimeSubscription]):
+    @override
     @staticmethod
     def bulk_get_query_object(
         data_sources: list[DataSource],
@@ -298,6 +226,7 @@ class UptimeSubscriptionDataSourceHandler(DataSourceTypeHandler[UptimeSubscripti
         }
         return {ds.id: qs_lookup.get(ds.source_id) for ds in data_sources}
 
+    @override
     @staticmethod
     def related_model(instance) -> list[ModelRelation]:
         return [ModelRelation(UptimeSubscription, {"id": instance.source_id})]
@@ -312,6 +241,11 @@ class UptimeSubscriptionDataSourceHandler(DataSourceTypeHandler[UptimeSubscripti
     def get_current_instance_count(org: Organization) -> int:
         # We don't have a limit at the moment, so no need to count.
         raise NotImplementedError
+
+    @override
+    @staticmethod
+    def get_relocation_model_name() -> str:
+        return "uptime.uptimesubscription"
 
 
 def get_detector(uptime_subscription: UptimeSubscription, prefetch_workflow_data=False) -> Detector:
@@ -343,17 +277,8 @@ def get_uptime_subscription(detector: Detector) -> UptimeSubscription:
     return UptimeSubscription.objects.get_from_cache(id=int(data_source.source_id))
 
 
-def get_project_subscription(detector: Detector) -> ProjectUptimeSubscription:
-    """
-    Given a detector get the matching project subscription
-    """
-    data_source = detector.data_sources.first()
-    assert data_source
-    return ProjectUptimeSubscription.objects.get(uptime_subscription_id=int(data_source.source_id))
-
-
 def get_audit_log_data(detector: Detector):
-    """Get audit log data from a detector instead of a ProjectUptimeSubscription instance."""
+    """Get audit log data from a detector."""
     uptime_subscription = get_uptime_subscription(detector)
 
     owner_user_id = None
@@ -376,3 +301,37 @@ def get_audit_log_data(detector: Detector):
         "headers": uptime_subscription.headers,
         "body": uptime_subscription.body,
     }
+
+
+@cell_silo_model
+class UptimeResponseCapture(DefaultFieldsModel):
+    """
+    Stores HTTP response data captured during uptime check failures.
+
+    When an uptime monitor detects a failure, the response body and headers
+    are captured to help users debug why their endpoint is failing. This data
+    is stored as a raw HTTP response format in an associated File.
+    """
+
+    __relocation_scope__ = RelocationScope.Excluded
+
+    uptime_subscription = FlexibleForeignKey(
+        "uptime.UptimeSubscription", related_name="response_captures"
+    )
+    file_id = BoundedBigIntegerField()
+    scheduled_check_time_ms = BoundedBigIntegerField()
+
+    class Meta:
+        app_label = "uptime"
+        db_table = "uptime_uptimeresponsecapture"
+        indexes = [
+            models.Index(fields=["uptime_subscription", "scheduled_check_time_ms"]),
+            models.Index(fields=["date_added"]),
+        ]
+
+    def delete(self, *args, **kwargs):
+        try:
+            File.objects.get(pk=self.file_id).delete()
+        except File.DoesNotExist:
+            pass
+        return super().delete(*args, **kwargs)

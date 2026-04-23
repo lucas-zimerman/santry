@@ -1,6 +1,7 @@
 import logging
 
 from django.db import router, transaction
+from taskbroker_client.retry import Retry
 
 from sentry.integrations.models.integration import Integration
 from sentry.integrations.models.organization_integration import OrganizationIntegration
@@ -10,9 +11,7 @@ from sentry.integrations.services.integration.service import integration_service
 from sentry.models.project import Project
 from sentry.models.rule import Rule
 from sentry.tasks.base import instrumented_task, retry
-from sentry.taskworker.config import TaskworkerConfig
 from sentry.taskworker.namespaces import integrations_tasks
-from sentry.taskworker.retry import Retry
 
 ALERT_LEGACY_INTEGRATIONS = {"id": "sentry.rules.actions.notify_event.NotifyEventAction"}
 ALERT_LEGACY_INTEGRATIONS_WITH_NAME = {
@@ -24,16 +23,8 @@ logger = logging.getLogger(__name__)
 
 @instrumented_task(
     name="sentry.integrations.opsgenie.tasks.migrate_opsgenie_plugins",
-    queue="integrations",
-    default_retry_delay=60 * 5,
-    max_retries=5,
-    taskworker_config=TaskworkerConfig(
-        namespace=integrations_tasks,
-        retry=Retry(
-            times=5,
-            delay=60 * 5,
-        ),
-    ),
+    namespace=integrations_tasks,
+    retry=Retry(times=5, delay=60 * 5),
 )
 @retry(exclude=(Integration.DoesNotExist, OrganizationIntegration.DoesNotExist))
 def migrate_opsgenie_plugin(integration_id: int, organization_id: int) -> None:

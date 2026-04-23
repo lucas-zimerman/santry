@@ -1,8 +1,10 @@
+import {ActorFixture} from 'sentry-fixture/actor';
 import {AutomationFixture} from 'sentry-fixture/automations';
 import {
   CronDetectorFixture,
   CronMonitorDataSourceFixture,
   CronMonitorEnvironmentFixture,
+  IssueStreamDetectorFixture,
   MetricDetectorFixture,
   SnubaQueryDataSourceFixture,
   UptimeDetectorFixture,
@@ -16,10 +18,16 @@ import {UserFixture} from 'sentry-fixture/user';
 
 import {render, screen, userEvent, waitFor} from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
-import TeamStore from 'sentry/stores/teamStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
+import {TeamStore} from 'sentry/stores/teamStore';
+import {
+  Dataset,
+  EventTypes,
+  ExtrapolationMode,
+} from 'sentry/views/alerts/rules/metric/types';
 import {CheckStatus} from 'sentry/views/alerts/rules/uptime/types';
 import DetectorDetails from 'sentry/views/detectors/detail';
+import {SAMPLING_MODE} from 'sentry/views/explore/hooks/useProgressiveQuery';
 
 describe('DetectorDetails', () => {
   const organization = OrganizationFixture({features: ['workflow-engine-ui']});
@@ -28,9 +36,9 @@ describe('DetectorDetails', () => {
   const ownerTeam = TeamFixture();
   const dataSource = SnubaQueryDataSourceFixture({
     queryObj: {
-      ...defaultDataSource.queryObj!,
+      ...defaultDataSource.queryObj,
       snubaQuery: {
-        ...defaultDataSource.queryObj!.snubaQuery,
+        ...defaultDataSource.queryObj.snubaQuery,
         query: 'test',
         environment: 'test-environment',
       },
@@ -43,6 +51,11 @@ describe('DetectorDetails', () => {
     route: '/organizations/:orgId/issues/detectors/:detectorId/',
   };
 
+  const issueStreamDetector = IssueStreamDetectorFixture({
+    id: 'issue-stream-1',
+    projectId: project.id,
+  });
+
   beforeEach(() => {
     ProjectsStore.loadInitialData([project]);
     TeamStore.loadInitialData([ownerTeam]);
@@ -52,7 +65,7 @@ describe('DetectorDetails', () => {
         AutomationFixture({id: '1', name: 'Automation 1'}),
         AutomationFixture({id: '2', name: 'Automation 2'}),
       ],
-      match: [MockApiClient.matchQuery({id: ['1', '2']})],
+      match: [(_url, options) => options.query?.detector !== undefined],
     });
     MockApiClient.addMockResponse({
       url: `/organizations/${organization.slug}/users/`,
@@ -72,12 +85,35 @@ describe('DetectorDetails', () => {
       },
     });
     MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/issues/',
+      body: [],
+    });
+    MockApiClient.addMockResponse({
       url: '/organizations/org-slug/issues/?limit=5&query=is%3Aunresolved%20detector%3A1&statsPeriod=14d',
       body: [GroupFixture()],
     });
     MockApiClient.addMockResponse({
       url: '/organizations/org-slug/open-periods/',
       body: [],
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/issues/1/',
+      body: GroupFixture(),
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/detectors/',
+      body: [issueStreamDetector],
+      match: [
+        MockApiClient.matchQuery({
+          query: 'type:issue_stream',
+          project: [Number(project.id)],
+        }),
+      ],
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/workflows/',
+      body: [],
+      match: [(_url, options) => options.query?.detector === undefined],
     });
   });
 
@@ -86,7 +122,7 @@ describe('DetectorDetails', () => {
       id: '1',
       projectId: project.id,
       dataSources: [dataSource],
-      owner: `team:${ownerTeam.id}`,
+      owner: ActorFixture({id: ownerTeam.id, name: ownerTeam.slug, type: 'team'}),
       workflowIds: ['1', '2'], // Add workflow IDs for connected automations
     });
 
@@ -113,13 +149,16 @@ describe('DetectorDetails', () => {
         await screen.findByRole('heading', {name: snubaQueryDetector.name})
       ).toBeInTheDocument();
       // Displays the snuba query
-      expect(screen.getByText('event.type:error test')).toBeInTheDocument();
+      expect(screen.getByLabelText('event.type:error test')).toBeInTheDocument();
       // Displays the environment
       expect(
-        screen.getByText(dataSource.queryObj!.snubaQuery.environment!)
+        screen.getByText(dataSource.queryObj.snubaQuery.environment!)
       ).toBeInTheDocument();
       // Displays the owner team
-      expect(screen.getByText(`Assign to #${ownerTeam.slug}`)).toBeInTheDocument();
+      expect(screen.getByText('Assign to')).toBeInTheDocument();
+      expect(
+        await screen.findByRole('link', {name: `#${ownerTeam.slug}`})
+      ).toBeInTheDocument();
     });
 
     it('can edit the detector when the user has alerts:write access', async () => {
@@ -133,7 +172,7 @@ describe('DetectorDetails', () => {
 
       await waitFor(() => {
         expect(router.location.pathname).toBe(
-          `/organizations/${organization.slug}/issues/monitors/${snubaQueryDetector.id}/edit/`
+          `/organizations/${organization.slug}/monitors/${snubaQueryDetector.id}/edit/`
         );
       });
     });
@@ -151,39 +190,6 @@ describe('DetectorDetails', () => {
 
       const editButton = await screen.findByRole('button', {name: 'Edit'});
       expect(editButton).toHaveAttribute('aria-disabled', 'true');
-    });
-
-    describe('connected automations', () => {
-      it('displays empty message when no automations are connected', async () => {
-        MockApiClient.addMockResponse({
-          url: `/organizations/${organization.slug}/detectors/${snubaQueryDetector.id}/`,
-          body: {
-            ...snubaQueryDetector,
-            workflowIds: [],
-          },
-        });
-        render(<DetectorDetails />, {
-          organization,
-          initialRouterConfig,
-        });
-        expect(await screen.findByText('No automations connected')).toBeInTheDocument();
-      });
-
-      it('displays connected automations', async () => {
-        render(<DetectorDetails />, {
-          organization,
-          initialRouterConfig,
-        });
-
-        // Verify both automations are displayed
-        expect(await screen.findByText('Automation 1')).toBeInTheDocument();
-        expect(await screen.findByText('Automation 2')).toBeInTheDocument();
-
-        // Verify the table shows the correct columns
-        expect(screen.getByText('Name')).toBeInTheDocument();
-        expect(screen.getByText('Last Triggered')).toBeInTheDocument();
-        expect(screen.getByText('Actions')).toBeInTheDocument();
-      });
     });
 
     it('displays ongoing issues for the detector', async () => {
@@ -216,7 +222,7 @@ describe('DetectorDetails', () => {
     const uptimeDetector = UptimeDetectorFixture({
       id: '1',
       projectId: project.id,
-      owner: `team:${ownerTeam.id}`,
+      owner: ActorFixture({id: ownerTeam.id, name: ownerTeam.slug, type: 'team'}),
       workflowIds: ['1', '2'], // Add workflow IDs for connected automations
     });
 
@@ -230,6 +236,12 @@ describe('DetectorDetails', () => {
         url: '/organizations/org-slug/events/',
         method: 'GET',
         body: [],
+      });
+
+      // Mock uptime summary endpoint
+      MockApiClient.addMockResponse({
+        url: '/organizations/org-slug/uptime-summary/',
+        body: {},
       });
 
       // Mock uptime checks endpoint
@@ -264,17 +276,13 @@ describe('DetectorDetails', () => {
         await screen.findByRole('heading', {name: uptimeDetector.name})
       ).toBeInTheDocument();
 
-      expect(screen.getByText('Three consecutive failed checks.')).toBeInTheDocument();
-      expect(
-        screen.getByText('Three consecutive successful checks.')
-      ).toBeInTheDocument();
+      expect(screen.getByText('3 consecutive failed checks.')).toBeInTheDocument();
+      expect(screen.getByText('1 successful check.')).toBeInTheDocument();
 
       // Interval
       expect(screen.getByText('Every 1 minute')).toBeInTheDocument();
-      // URL
-      expect(screen.getByText('https://example.com')).toBeInTheDocument();
-      // Method
-      expect(screen.getByText('GET')).toBeInTheDocument();
+      // URL + Method
+      expect(screen.getByText('GET https://example.com')).toBeInTheDocument();
       // Environment
       expect(screen.getByText('production')).toBeInTheDocument();
 
@@ -284,7 +292,7 @@ describe('DetectorDetails', () => {
       // Edit button takes you to the edit page
       expect(screen.getByRole('button', {name: 'Edit'})).toHaveAttribute(
         'href',
-        '/organizations/org-slug/issues/monitors/1/edit/'
+        '/organizations/org-slug/monitors/1/edit/'
       );
     });
 
@@ -296,28 +304,17 @@ describe('DetectorDetails', () => {
 
       expect(await screen.findByText('Recent Check-Ins')).toBeInTheDocument();
 
-      // Verify check-in data is displayed
-      expect(screen.getByText('Uptime')).toBeInTheDocument();
+      // Verify check-in data is displayed - wait for table to fully render
+      await waitFor(() => expect(screen.getAllByText('Uptime')).toHaveLength(4)); // breadcrumb + section heading + timeline legend + check-in row
       expect(screen.getByText('200')).toBeInTheDocument();
       expect(screen.getByText('US East')).toBeInTheDocument();
-      expect(screen.getByText('Failure')).toBeInTheDocument();
+      expect(screen.getAllByText('Failure')).toHaveLength(2); // timeline legend + check-in row
       expect(screen.getByText('500')).toBeInTheDocument();
       expect(screen.getByText('US West')).toBeInTheDocument();
     });
   });
 
   describe('cron detectors', () => {
-    beforeEach(() => {
-      MockApiClient.addMockResponse({
-        url: '/projects/org-slug/project-slug/monitors/test-monitor/checkins/',
-        body: [],
-      });
-      MockApiClient.addMockResponse({
-        url: `/organizations/${organization.slug}/detectors/${cronDetector.id}/`,
-        body: cronDetector,
-      });
-    });
-
     const cronMonitorDataSource = CronMonitorDataSourceFixture({
       queryObj: {
         ...CronMonitorDataSourceFixture().queryObj,
@@ -332,9 +329,24 @@ describe('DetectorDetails', () => {
     const cronDetector = CronDetectorFixture({
       id: '1',
       projectId: project.id,
-      owner: `team:${ownerTeam.id}`,
+      owner: ActorFixture({id: ownerTeam.id, name: ownerTeam.slug, type: 'team'}),
       workflowIds: ['1', '2'],
       dataSources: [cronMonitorDataSource],
+    });
+
+    beforeEach(() => {
+      MockApiClient.addMockResponse({
+        url: '/projects/org-slug/project-slug/monitors/test-monitor/checkins/',
+        body: [],
+      });
+      MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/detectors/${cronDetector.id}/`,
+        body: cronDetector,
+      });
+      MockApiClient.addMockResponse({
+        url: `/projects/org-slug/${project.id}/monitors/${cronMonitorDataSource.queryObj.slug}/processing-errors/`,
+        body: [],
+      });
     });
 
     it('displays correct detector details', async () => {
@@ -359,6 +371,69 @@ describe('DetectorDetails', () => {
 
       // Connected automation
       expect(await screen.findByText('Automation 1')).toBeInTheDocument();
+    });
+
+    it('uses serverOnly extrapolation mode when detector has it configured', async () => {
+      const spanDetectorWithExtrapolation = MetricDetectorFixture({
+        id: '1',
+        projectId: project.id,
+        dataSources: [
+          SnubaQueryDataSourceFixture({
+            queryObj: {
+              id: '1',
+              status: 1,
+              subscription: '1',
+              snubaQuery: {
+                aggregate: 'count()',
+                dataset: Dataset.EVENTS_ANALYTICS_PLATFORM,
+                id: '',
+                query: '',
+                timeWindow: 3600,
+                eventTypes: [EventTypes.TRACE_ITEM_SPAN],
+                extrapolationMode: ExtrapolationMode.SERVER_WEIGHTED,
+              },
+            },
+          }),
+        ],
+        owner: ActorFixture({id: ownerTeam.id, name: ownerTeam.slug, type: 'team'}),
+        workflowIds: ['1', '2'],
+      });
+
+      MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/detectors/${spanDetectorWithExtrapolation.id}/`,
+        body: spanDetectorWithExtrapolation,
+      });
+
+      const eventsStatsRequest = MockApiClient.addMockResponse({
+        url: `/organizations/${organization.slug}/events-stats/`,
+        body: {
+          data: [
+            [1543449600, [20, 12]],
+            [1543449601, [10, 5]],
+          ],
+        },
+      });
+
+      render(<DetectorDetails />, {
+        organization,
+        initialRouterConfig,
+      });
+
+      expect(
+        await screen.findByRole('heading', {name: spanDetectorWithExtrapolation.name})
+      ).toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(eventsStatsRequest).toHaveBeenCalledWith(
+          `/organizations/${organization.slug}/events-stats/`,
+          expect.objectContaining({
+            query: expect.objectContaining({
+              extrapolationMode: 'serverOnly',
+              sampling: SAMPLING_MODE.NORMAL,
+            }),
+          })
+        );
+      });
     });
   });
 });

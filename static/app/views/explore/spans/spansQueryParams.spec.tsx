@@ -1,8 +1,6 @@
 import type {Location} from 'history';
 import {LocationFixture} from 'sentry-fixture/locationFixture';
 
-import {initializeOrg} from 'sentry-test/initializeOrg';
-
 import {Mode} from 'sentry/views/explore/queryParams/mode';
 import type {ReadableQueryParamsOptions} from 'sentry/views/explore/queryParams/readableQueryParams';
 import {ReadableQueryParams} from 'sentry/views/explore/queryParams/readableQueryParams';
@@ -18,12 +16,13 @@ function readableQueryParamOptions(
   options: Partial<ReadableQueryParamsOptions> = {}
 ): ReadableQueryParamsOptions {
   return {
+    extrapolate: true,
     mode: Mode.SAMPLES,
     query: '',
     cursor: '',
     fields: [
       'id',
-      'span.op',
+      'span.name',
       'span.description',
       'span.duration',
       'transaction',
@@ -43,17 +42,31 @@ function readableQueryParamOptions(
 }
 
 describe('getReadableQueryParamsFromLocation', () => {
-  const {organization} = initializeOrg();
-
   it('decodes defaults correctly', () => {
     const location = locationFixture({});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(new ReadableQueryParams(readableQueryParamOptions()));
+  });
+
+  it('decodes extrapolation on correctly', () => {
+    const location = locationFixture({extrapolate: '1'});
+    const queryParams = getReadableQueryParamsFromLocation(location);
+    expect(queryParams).toEqual(
+      new ReadableQueryParams(readableQueryParamOptions({extrapolate: true}))
+    );
+  });
+
+  it('decodes extrapolation off correctly', () => {
+    const location = locationFixture({extrapolate: '0'});
+    const queryParams = getReadableQueryParamsFromLocation(location);
+    expect(queryParams).toEqual(
+      new ReadableQueryParams(readableQueryParamOptions({extrapolate: false}))
+    );
   });
 
   it('decodes samples mode correctly', () => {
     const location = locationFixture({mode: 'samples'});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(readableQueryParamOptions({mode: Mode.SAMPLES}))
     );
@@ -61,7 +74,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes aggregate mode correctly', () => {
     const location = locationFixture({mode: 'aggregate'});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(readableQueryParamOptions({mode: Mode.AGGREGATE}))
     );
@@ -69,7 +82,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('defaults to samples mode for invalid mode values', () => {
     const location = locationFixture({mode: 'invalid'});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(readableQueryParamOptions({mode: Mode.SAMPLES}))
     );
@@ -77,7 +90,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes empty query correctly', () => {
     const location = locationFixture({query: ''});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(readableQueryParamOptions({query: ''}))
     );
@@ -85,7 +98,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes custom query parameter correctly', () => {
     const location = locationFixture({query: 'span.op:db'});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(readableQueryParamOptions({query: 'span.op:db'}))
     );
@@ -93,7 +106,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes empty cursor correctly', () => {
     const location = locationFixture({cursor: ''});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({cursor: '', aggregateCursor: ''})
@@ -102,47 +115,30 @@ describe('getReadableQueryParamsFromLocation', () => {
   });
 
   it('decodes custom cursor parameter correctly', () => {
-    const location = locationFixture({cursor: '0:0:1'});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const location = locationFixture({cursor: '0:0:1', aggregateCursor: '50:0:1'});
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
-        readableQueryParamOptions({cursor: '0:0:1', aggregateCursor: '0:0:1'})
+        readableQueryParamOptions({cursor: '0:0:1', aggregateCursor: '50:0:1'})
       )
     );
   });
 
   it('decodes empty fields correctly', () => {
     const location = locationFixture({field: []});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
-    expect(queryParams).toEqual(
-      new ReadableQueryParams(
-        readableQueryParamOptions({
-          fields: [
-            'id',
-            'span.op',
-            'span.description',
-            'span.duration',
-            'transaction',
-            'timestamp',
-          ],
-        })
-      )
-    );
+    const queryParams = getReadableQueryParamsFromLocation(location);
+    expect(queryParams).toEqual(new ReadableQueryParams(readableQueryParamOptions()));
   });
 
-  it('decodes empty fields correctly for otel', () => {
-    const {organization: org} = initializeOrg({
-      organization: {
-        features: ['performance-otel-friendly-ui'],
-      },
-    });
+  it('strips empty field values from location', () => {
+    const location = locationFixture({field: ['timestamp', '', 'span.op']});
+    const queryParams = getReadableQueryParamsFromLocation(location);
 
-    const location = locationFixture({field: []});
-    const queryParams = getReadableQueryParamsFromLocation(location, org);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
-          fields: ['id', 'span.name', 'span.duration', 'timestamp'],
+          fields: ['timestamp', 'span.op'],
+          sortBys: [{field: 'timestamp', kind: 'desc'}],
         })
       )
     );
@@ -152,7 +148,7 @@ describe('getReadableQueryParamsFromLocation', () => {
     const location = locationFixture({
       field: ['id', 'span.op', 'span.duration', 'timestamp'],
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -164,7 +160,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes custom sortBys correctly', () => {
     const location = locationFixture({sort: ['-span.duration', 'timestamp']});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -179,7 +175,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('uses timestamp sort when fields include timestamp', () => {
     const location = locationFixture({field: ['id', 'span.op', 'timestamp'], sort: []});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -192,7 +188,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('falls back to first field when fields do not include timestamp', () => {
     const location = locationFixture({field: ['id', 'span.op'], sort: []});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -205,7 +201,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes empty sort correctly', () => {
     const location = locationFixture({sort: []});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -217,7 +213,7 @@ describe('getReadableQueryParamsFromLocation', () => {
 
   it('decodes custom group bys correctly', () => {
     const location = locationFixture({groupBy: ['span.op', 'transaction']});
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -235,7 +231,7 @@ describe('getReadableQueryParamsFromLocation', () => {
     const location = locationFixture({
       visualize: JSON.stringify({yAxes: ['count(span.duration)', 'avg(span.self_time)']}),
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams.aggregateFields).toHaveLength(3);
     expect(queryParams.aggregateFields[0]).toEqual({groupBy: ''});
     expect(queryParams.aggregateFields[1]).toEqual(
@@ -264,7 +260,7 @@ describe('getReadableQueryParamsFromLocation', () => {
         chartType: ChartType.LINE,
       }),
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -286,7 +282,7 @@ describe('getReadableQueryParamsFromLocation', () => {
         {yAxes: ['p50(span.duration)', 'p75(span.duration)']},
       ].map(aggregateField => JSON.stringify(aggregateField)),
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -307,7 +303,7 @@ describe('getReadableQueryParamsFromLocation', () => {
         JSON.stringify({yAxes: ['count(span.duration)'], chartType: ChartType.LINE}),
       ],
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -324,7 +320,7 @@ describe('getReadableQueryParamsFromLocation', () => {
     const location = locationFixture({
       aggregateField: [JSON.stringify({groupBy: 'span.op'})],
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams.aggregateFields).toHaveLength(2);
     expect(queryParams.aggregateFields[0]).toEqual({groupBy: 'span.op'});
     expect(queryParams.aggregateFields[1]).toEqual(
@@ -351,7 +347,7 @@ describe('getReadableQueryParamsFromLocation', () => {
       ].map(aggregateField => JSON.stringify(aggregateField)),
       aggregateSort: ['-span.op', 'avg(span.duration)'],
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({
@@ -376,7 +372,7 @@ describe('getReadableQueryParamsFromLocation', () => {
       ),
       aggregateSort: ['-avg(span.duration)'],
     });
-    const queryParams = getReadableQueryParamsFromLocation(location, organization);
+    const queryParams = getReadableQueryParamsFromLocation(location);
     expect(queryParams).toEqual(
       new ReadableQueryParams(
         readableQueryParamOptions({

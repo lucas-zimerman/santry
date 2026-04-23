@@ -1,5 +1,6 @@
-import ResolveActions from 'sentry/components/actions/resolve';
-import useProjects from 'sentry/utils/useProjects';
+import {ResolveActions} from 'sentry/components/actions/resolve';
+import {useProjects} from 'sentry/utils/useProjects';
+import {useProjectReleaseVersionIsSemver} from 'sentry/views/issueDetails/useProjectReleaseVersionIsSemver';
 
 import type {getConfirm, getLabel} from './utils';
 import {ConfirmAction} from './utils';
@@ -13,7 +14,7 @@ type Props = {
   selectedProjectSlug: string | undefined;
 };
 
-function ResolveActionsContainer({
+export function ResolveActionsContainer({
   anySelected,
   onShouldConfirm,
   onUpdate,
@@ -35,6 +36,13 @@ function ResolveActionsContainer({
   const latestRelease =
     project && 'latestRelease' in project ? project.latestRelease : undefined;
 
+  const projHasSemverRelease = useProjectReleaseVersionIsSemver({
+    version: project?.latestRelease?.version,
+    enabled: Boolean(project),
+  });
+
+  const hasSemverReleaseFeature = projHasSemverRelease;
+
   // resolve requires a single project to be active in an org context
   // projectId is null when 0 or >1 projects are selected.
   const resolveDisabled = Boolean(!anySelected || fetchError);
@@ -55,8 +63,7 @@ function ResolveActionsContainer({
       disabled={resolveDisabled}
       disableDropdown={resolveDropdownDisabled}
       projectFetchError={Boolean(fetchError)}
+      hasSemverReleaseFeature={hasSemverReleaseFeature}
     />
   );
 }
-
-export default ResolveActionsContainer;

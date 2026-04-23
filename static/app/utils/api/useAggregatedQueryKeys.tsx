@@ -1,14 +1,13 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {useQueryClient} from '@tanstack/react-query';
 
 import type {ApiResult} from 'sentry/api';
 import {defined} from 'sentry/utils';
 import {uniq} from 'sentry/utils/array/uniq';
 import type {ApiQueryKey} from 'sentry/utils/queryClient';
-import {fetchDataQuery, QueryObserver, useQueryClient} from 'sentry/utils/queryClient';
+import {fetchDataQuery} from 'sentry/utils/queryClient';
 
 const BUFFER_WAIT_MS = 20;
-
-type Subscription = () => void;
 
 interface Props<AggregatableQueryKey, Data> {
   /**
@@ -49,8 +48,8 @@ interface Props<AggregatableQueryKey, Data> {
   onError?: (error: Error) => void;
 }
 
-function isQueryKeyInList<AggregatableQueryKey>(queryList: AggregatableQueryKey[]) {
-  return ({queryKey}: any) => queryList.includes(queryKey[4] as AggregatableQueryKey);
+function isQueryKeyInList(queryList: unknown[]) {
+  return ({queryKey}: any) => queryList.includes(queryKey[4]);
 }
 
 /**
@@ -78,7 +77,7 @@ function isQueryKeyInList<AggregatableQueryKey>(queryList: AggregatableQueryKey[
  * - You will implement `responseReducer(prev: Data, result: ApiResult)` which
  *   combines `defaultData` with the data that was fetched with the queryKey.
  */
-export default function useAggregatedQueryKeys<AggregatableQueryKey, Data>({
+export function useAggregatedQueryKeys<AggregatableQueryKey, Data>({
   cacheKey,
   getQueryKey,
   onError,
@@ -90,14 +89,6 @@ export default function useAggregatedQueryKeys<AggregatableQueryKey, Data>({
 
   const key = getQueryKey([]).at(0);
 
-  const subscriptions = useRef<Subscription[]>([]);
-  useEffect(() => {
-    const subs = subscriptions.current;
-    return () => {
-      subs.forEach(unsubscribe => unsubscribe());
-    };
-  }, []);
-
   // The query keys that this instance cares about
   const prevQueryKeys = useRef<AggregatableQueryKey[]>([]);
 
@@ -107,9 +98,9 @@ export default function useAggregatedQueryKeys<AggregatableQueryKey, Data>({
         .findAll({queryKey: [key]})
         .map(({queryKey}) => queryClient.getQueryData<ApiResult>(queryKey))
         .filter(defined)
-        .reduce(
+        .reduce<Data | undefined>(
           (prevValue, val) => responseReducer(prevValue, val, prevQueryKeys.current),
-          undefined as Data | undefined
+          undefined
         ),
     [cache, key, queryClient, responseReducer]
   );
@@ -148,19 +139,17 @@ export default function useAggregatedQueryKeys<AggregatableQueryKey, Data>({
       });
 
       const queryKey = getQueryKey(queuedAggregatableBatch);
-      queryClient.fetchQuery({
-        queryKey,
-        queryFn: fetchDataQuery,
-      });
-
-      const observer = new QueryObserver(queryClient, {queryKey});
-      const unsubscribe = observer.subscribe(_result => {
-        queryClient.removeQueries({
-          queryKey: ['aggregate', cacheKey, key, 'inFlight'],
-          predicate: isQueryKeyInBatch,
+      queryClient
+        .fetchQuery({
+          queryKey,
+          queryFn: fetchDataQuery,
+        })
+        .finally(() => {
+          queryClient.removeQueries({
+            queryKey: ['aggregate', cacheKey, key, 'inFlight'],
+            predicate: isQueryKeyInBatch,
+          });
         });
-      });
-      subscriptions.current.push(unsubscribe);
 
       if (allQueuedQueries.length > queuedQueriesBatch.length) {
         fetchData();

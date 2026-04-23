@@ -3,27 +3,26 @@ import styled from '@emotion/styled';
 import type {Location, Query} from 'history';
 import moment from 'moment-timezone';
 
-import {resetPageFilters} from 'sentry/actionCreators/pageFilters';
+import {Button} from '@sentry/scraps/button';
+
 import type {Client} from 'sentry/api';
 import Feature from 'sentry/components/acl/feature';
-import {Button} from 'sentry/components/core/button';
 import type {MenuItemProps} from 'sentry/components/dropdownMenu';
 import {DropdownMenu} from 'sentry/components/dropdownMenu';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import Pagination from 'sentry/components/pagination';
-import TimeSince from 'sentry/components/timeSince';
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
+import {resetPageFilters} from 'sentry/components/pageFilters/actions';
+import {Pagination} from 'sentry/components/pagination';
+import {TimeSince} from 'sentry/components/timeSince';
 import {IconEllipsis} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import type {InjectedRouter} from 'sentry/types/legacyReactRouter';
 import type {NewQuery, Organization, SavedQuery} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {browserHistory} from 'sentry/utils/browserHistory';
-import EventView from 'sentry/utils/discover/eventView';
+import {EventView} from 'sentry/utils/discover/eventView';
 import {SavedQueryDatasets} from 'sentry/utils/discover/types';
-import parseLinkHeader from 'sentry/utils/parseLinkHeader';
+import {parseLinkHeader} from 'sentry/utils/parseLinkHeader';
 import {decodeList} from 'sentry/utils/queryString';
-import withApi from 'sentry/utils/withApi';
+import {withApi} from 'sentry/utils/withApi';
 import {DashboardWidgetSource} from 'sentry/views/dashboards/types';
 import {hasDatasetSelector} from 'sentry/views/dashboards/utils';
 
@@ -35,7 +34,7 @@ import {
   handleUpdateHomepageQuery,
 } from './savedQuery/utils';
 import MiniGraph from './miniGraph';
-import QueryCard from './querycard';
+import {QueryCard} from './querycard';
 import {
   getPrebuiltQueries,
   handleAddQueryToDashboard,
@@ -49,7 +48,6 @@ type Props = {
   pageLinks: string;
   refetchSavedQueries: () => void;
   renderPrebuilt: boolean;
-  router: InjectedRouter;
   savedQueries: SavedQuery[];
   savedQuerySearchQuery: string;
 };
@@ -124,7 +122,7 @@ class QueryList extends Component<Props> {
             {...triggerProps}
             aria-label={t('Query actions')}
             size="xs"
-            borderless
+            priority="transparent"
             onClick={e => {
               e.stopPropagation();
               e.preventDefault();
@@ -142,7 +140,7 @@ class QueryList extends Component<Props> {
   }
 
   renderPrebuiltQueries() {
-    const {api, location, organization, savedQuerySearchQuery, router} = this.props;
+    const {api, location, organization, savedQuerySearchQuery} = this.props;
     const views = getPrebuiltQueries(organization);
 
     const hasSearchQuery =
@@ -190,7 +188,6 @@ class QueryList extends Component<Props> {
               query: view,
               organization,
               yAxis: view?.yAxis,
-              router,
               widgetType: hasDatasetSelector(organization)
                 ? // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
                   SAVED_QUERY_DATASET_TO_WIDGET_TYPE[
@@ -252,7 +249,7 @@ class QueryList extends Component<Props> {
   }
 
   renderSavedQueries() {
-    const {api, savedQueries, location, organization, router} = this.props;
+    const {api, savedQueries, location, organization} = this.props;
 
     if (!savedQueries || !Array.isArray(savedQueries) || savedQueries.length === 0) {
       return [];
@@ -288,7 +285,6 @@ class QueryList extends Component<Props> {
                     query: savedQuery,
                     organization,
                     yAxis: savedQuery?.yAxis ?? eventView.yAxis,
-                    router,
                     widgetType: hasDatasetSelector(organization)
                       ? // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
                         SAVED_QUERY_DATASET_TO_WIDGET_TYPE[
@@ -394,7 +390,7 @@ const PaginationRow = styled(Pagination)`
 const QueryGrid = styled('div')`
   display: grid;
   grid-template-columns: minmax(100px, 1fr);
-  gap: ${space(2)};
+  gap: ${p => p.theme.space.xl};
 
   @media (min-width: ${p => p.theme.breakpoints.md}) {
     grid-template-columns: repeat(2, minmax(100px, 1fr));
@@ -406,7 +402,7 @@ const QueryGrid = styled('div')`
 `;
 
 const DropdownTrigger = styled(Button)`
-  transform: translateX(${space(1)});
+  transform: translateX(${p => p.theme.space.md});
 `;
 
 const StyledEmptyStateWarning = styled(EmptyStateWarning)`

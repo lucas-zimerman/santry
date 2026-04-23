@@ -1,93 +1,111 @@
-import {Fragment, useCallback} from 'react';
+import {Fragment, useState} from 'react';
+
+import {Alert} from '@sentry/scraps/alert';
+import {Button, LinkButton} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
 
 import {addSuccessMessage} from 'sentry/actionCreators/indicator';
 import {Breadcrumbs} from 'sentry/components/breadcrumbs';
-import {Button} from 'sentry/components/core/button';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Flex} from 'sentry/components/core/layout';
 import {DateTime} from 'sentry/components/dateTime';
-import ErrorBoundary from 'sentry/components/errorBoundary';
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
 import {KeyValueTable, KeyValueTableRow} from 'sentry/components/keyValueTable';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import {DatePageFilter} from 'sentry/components/organizations/datePageFilter';
-import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
-import Pagination from 'sentry/components/pagination';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
-import TimeSince from 'sentry/components/timeSince';
-import DetailLayout from 'sentry/components/workflowEngine/layout/detail';
-import Section from 'sentry/components/workflowEngine/ui/section';
-import {useWorkflowEngineFeatureGate} from 'sentry/components/workflowEngine/useWorkflowEngineFeatureGate';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {PageFiltersContainer} from 'sentry/components/pageFilters/container';
+import {DatePageFilter} from 'sentry/components/pageFilters/date/datePageFilter';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
+import {Placeholder} from 'sentry/components/placeholder';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
+import {TimeSince} from 'sentry/components/timeSince';
+import {DetailLayout} from 'sentry/components/workflowEngine/layout/detail';
+import {DetailSection} from 'sentry/components/workflowEngine/ui/detailSection';
 import {IconEdit} from 'sentry/icons';
-import {t, tct} from 'sentry/locale';
+import {t} from 'sentry/locale';
 import type {Automation} from 'sentry/types/workflowEngine/automations';
-import getDuration from 'sentry/utils/duration/getDuration';
-import {useLocation} from 'sentry/utils/useLocation';
-import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {defined} from 'sentry/utils';
+import {getUtcDateString} from 'sentry/utils/dates';
+import {getDuration} from 'sentry/utils/duration/getDuration';
+import {VisuallyCompleteWithData} from 'sentry/utils/performanceForSentry';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
-import useUserFromId from 'sentry/utils/useUserFromId';
-import AutomationHistoryList from 'sentry/views/automations/components/automationHistoryList';
+import {useUserFromId} from 'sentry/utils/useUserFromId';
+import {AutomationFeedbackButton} from 'sentry/views/automations/components/automationFeedbackButton';
+import {AutomationHistoryList} from 'sentry/views/automations/components/automationHistoryList';
 import {AutomationStatsChart} from 'sentry/views/automations/components/automationStatsChart';
-import ConditionsPanel from 'sentry/views/automations/components/conditionsPanel';
-import ConnectedMonitorsList from 'sentry/views/automations/components/connectedMonitorsList';
+import {ConditionsPanel} from 'sentry/views/automations/components/conditionsPanel';
+import {ConnectedMonitorsList} from 'sentry/views/automations/components/connectedMonitorsList';
+import {ConnectedProjectsList} from 'sentry/views/automations/components/connectedProjectsList';
+import {DisabledAlert} from 'sentry/views/automations/components/disabledAlert';
 import {useAutomationQuery, useUpdateAutomation} from 'sentry/views/automations/hooks';
-import {makeAutomationBasePathname} from 'sentry/views/automations/pathnames';
-import {useDetectorsQuery} from 'sentry/views/detectors/hooks';
-
-const AUTOMATION_DETECTORS_LIMIT = 10;
+import {getAutomationActionsWarning} from 'sentry/views/automations/hooks/utils';
+import {
+  makeAutomationBasePathname,
+  makeAutomationEditPathname,
+} from 'sentry/views/automations/pathnames';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 
 function AutomationDetailContent({automation}: {automation: Automation}) {
   const organization = useOrganization();
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  const {data: createdByUser} = useUserFromId({id: Number(automation.createdBy)});
-
-  const {
-    data: detectors,
-    isLoading,
-    isError,
-    getResponseHeader,
-  } = useDetectorsQuery(
-    {
-      ids: automation.detectorIds,
-      limit: AUTOMATION_DETECTORS_LIMIT,
-      cursor: location.query.cursor as string | undefined,
-    },
-    {
-      enabled: automation.detectorIds.length > 0,
-    }
-  );
-
+  const hasPageFrameFeature = useHasPageFrameFeature();
   const {selection} = usePageFilters();
   const {start, end, period, utc} = selection.datetime;
 
+  const warning = getAutomationActionsWarning(automation);
+  const [monitorListCursor, setMonitorListCursor] = useState<string | undefined>(
+    undefined
+  );
+  const breadcrumbs = (
+    <Breadcrumbs
+      crumbs={[
+        {
+          label: t('Alerts'),
+          to: makeAutomationBasePathname(organization.slug),
+        },
+        {label: automation.name},
+      ]}
+    />
+  );
+
   return (
-    <SentryDocumentTitle title={automation.name} noSuffix>
+    <SentryDocumentTitle title={automation.name}>
       <DetailLayout>
-        <DetailLayout.Header>
-          <DetailLayout.HeaderContent>
-            <Breadcrumbs
-              crumbs={[
-                {
-                  label: t('Automations'),
-                  to: makeAutomationBasePathname(organization.slug),
-                },
-                {label: automation.name},
-              ]}
-            />
-            <DetailLayout.Title title={automation.name} />
-          </DetailLayout.HeaderContent>
-          <DetailLayout.Actions>
-            <Actions automation={automation} />
-          </DetailLayout.Actions>
-        </DetailLayout.Header>
+        {hasPageFrameFeature ? (
+          <Fragment>
+            <TopBar.Slot name="title">{breadcrumbs}</TopBar.Slot>
+            <AutomationFeedbackButton />
+          </Fragment>
+        ) : (
+          <DetailLayout.Header>
+            <DetailLayout.HeaderContent>
+              {breadcrumbs}
+              <DetailLayout.Title title={automation.name} />
+            </DetailLayout.HeaderContent>
+            <DetailLayout.Actions>
+              <AutomationFeedbackButton />
+              <Actions automation={automation} size="sm" />
+            </DetailLayout.Actions>
+          </DetailLayout.Header>
+        )}
         <DetailLayout.Body>
           <DetailLayout.Main>
+            <DisabledAlert automation={automation} />
+            {automation.enabled && warning && (
+              <Alert variant={warning.color === 'warning' ? 'warning' : 'danger'}>
+                {warning.message}
+              </Alert>
+            )}
             <PageFiltersContainer>
-              <DatePageFilter />
+              {hasPageFrameFeature ? (
+                <Flex align="center" justify="between" gap="md">
+                  <DatePageFilter />
+                  <Flex flex={1} justify="end" gap="md">
+                    <Actions automation={automation} size="sm" />
+                  </Flex>
+                </Flex>
+              ) : (
+                <DatePageFilter />
+              )}
               <ErrorBoundary>
                 <AutomationStatsChart
                   automationId={automation.id}
@@ -97,46 +115,48 @@ function AutomationDetailContent({automation}: {automation: Automation}) {
                   utc={utc ?? null}
                 />
               </ErrorBoundary>
-              <Section title={t('History')}>
+              <DetailSection title={t('History')}>
                 <ErrorBoundary mini>
                   <AutomationHistoryList
                     automationId={automation.id}
                     query={{
                       ...(period && {statsPeriod: period}),
-                      start,
-                      end,
-                      utc,
+                      start: start ? getUtcDateString(start) : undefined,
+                      end: end ? getUtcDateString(end) : undefined,
+                      utc: utc ? 'true' : undefined,
                     }}
                   />
                 </ErrorBoundary>
-              </Section>
-              <Section title={t('Connected Monitors')}>
+              </DetailSection>
+              <DetailSection
+                title={t('Connected Projects')}
+                description={t(
+                  'All issues belonging to a connected project will trigger this alert when conditions are met.'
+                )}
+              >
+                <ErrorBoundary mini>
+                  <ConnectedProjectsList automationId={automation.id} />
+                </ErrorBoundary>
+              </DetailSection>
+              <DetailSection
+                title={t('Connected Monitors')}
+                description={t(
+                  'Issues created by a connected monitor will trigger this alert when conditions are met.'
+                )}
+              >
                 <ErrorBoundary mini>
                   <ConnectedMonitorsList
-                    detectors={detectors ?? []}
-                    isLoading={isLoading}
-                    isError={isError}
-                    connectedDetectorIds={automation.detectorIds}
-                    numSkeletons={Math.min(
-                      automation.detectorIds.length,
-                      AUTOMATION_DETECTORS_LIMIT
-                    )}
-                  />
-                  <Pagination
-                    pageLinks={getResponseHeader?.('Link')}
-                    onCursor={cursor => {
-                      navigate({
-                        pathname: location.pathname,
-                        query: {...location.query, cursor},
-                      });
-                    }}
+                    workflowId={automation.id}
+                    cursor={monitorListCursor}
+                    onCursor={setMonitorListCursor}
+                    query="!type:issue_stream"
                   />
                 </ErrorBoundary>
-              </Section>
+              </DetailSection>
             </PageFiltersContainer>
           </DetailLayout.Main>
           <DetailLayout.Sidebar>
-            <Section title={t('Last Triggered')}>
+            <DetailSection title={t('Last Triggered')}>
               {automation.lastTriggered ? (
                 <Flex gap="md">
                   <TimeSince date={automation.lastTriggered} />
@@ -147,24 +167,24 @@ function AutomationDetailContent({automation}: {automation: Automation}) {
               ) : (
                 t('Never')
               )}
-            </Section>
-            <Section title={t('Environment')}>
+            </DetailSection>
+            <DetailSection title={t('Environment')}>
               {automation.environment || t('All environments')}
-            </Section>
-            <Section title={t('Action Interval')}>
-              {tct('Every [frequency]', {
-                frequency: getDuration((automation.config.frequency || 0) * 60),
-              })}
-            </Section>
-            <Section title={t('Conditions')}>
+            </DetailSection>
+            <DetailSection title={t('Throttling')}>
+              {automation.config.frequency
+                ? getDuration(automation.config.frequency * 60)
+                : t('Notify on every trigger')}
+            </DetailSection>
+            <DetailSection title={t('Conditions')}>
               <ErrorBoundary mini>
                 <ConditionsPanel
                   triggers={automation.triggers}
                   actionFilters={automation.actionFilters}
                 />
               </ErrorBoundary>
-            </Section>
-            <Section title={t('Details')}>
+            </DetailSection>
+            <DetailSection title={t('Details')}>
               <ErrorBoundary mini>
                 <KeyValueTable>
                   <KeyValueTableRow
@@ -173,7 +193,7 @@ function AutomationDetailContent({automation}: {automation: Automation}) {
                   />
                   <KeyValueTableRow
                     keyName={t('Created by')}
-                    value={createdByUser?.name || createdByUser?.email || t('Unknown')}
+                    value={<UserDisplayName id={automation.createdBy} />}
                   />
                   <KeyValueTableRow
                     keyName={t('Last modified')}
@@ -181,7 +201,7 @@ function AutomationDetailContent({automation}: {automation: Automation}) {
                   />
                 </KeyValueTable>
               </ErrorBoundary>
-            </Section>
+            </DetailSection>
           </DetailLayout.Sidebar>
         </DetailLayout.Body>
       </DetailLayout>
@@ -189,32 +209,52 @@ function AutomationDetailContent({automation}: {automation: Automation}) {
   );
 }
 
-export default function AutomationDetail() {
-  useWorkflowEngineFeatureGate({redirect: true});
-  const params = useParams<{automationId: string}>();
-
+function AutomationDetailLoadingStates({automationId}: {automationId: string}) {
   const {
     data: automation,
     isPending,
     isError,
+    error,
     refetch,
-  } = useAutomationQuery(params.automationId);
+  } = useAutomationQuery(automationId);
 
   if (isPending) {
     return <LoadingIndicator />;
   }
 
   if (isError) {
-    return <LoadingError onRetry={refetch} />;
+    return (
+      <LoadingError
+        message={error.status === 404 ? t('The alert could not be found.') : undefined}
+        onRetry={refetch}
+      />
+    );
   }
 
   return <AutomationDetailContent automation={automation} />;
 }
 
-function Actions({automation}: {automation: Automation}) {
+export default function AutomationDetail() {
+  const params = useParams<{automationId: string}>();
+
+  const {data: automation, isPending} = useAutomationQuery(params.automationId);
+
+  return (
+    <VisuallyCompleteWithData
+      id="AutomationDetails-Body"
+      isLoading={isPending}
+      hasData={defined(automation)}
+    >
+      <AutomationDetailLoadingStates automationId={params.automationId} />
+    </VisuallyCompleteWithData>
+  );
+}
+
+function Actions({automation, size}: {automation: Automation; size?: 'sm'}) {
+  const organization = useOrganization();
   const {mutate: updateAutomation, isPending: isUpdating} = useUpdateAutomation();
 
-  const toggleDisabled = useCallback(() => {
+  const toggleDisabled = () => {
     const newEnabled = !automation.enabled;
     updateAutomation(
       {
@@ -224,22 +264,38 @@ function Actions({automation}: {automation: Automation}) {
       },
       {
         onSuccess: () => {
-          addSuccessMessage(
-            newEnabled ? t('Automation enabled') : t('Automation disabled')
-          );
+          addSuccessMessage(newEnabled ? t('Alert enabled') : t('Alert disabled'));
         },
       }
     );
-  }, [updateAutomation, automation]);
+  };
 
   return (
     <Fragment>
-      <Button priority="default" size="sm" onClick={toggleDisabled} busy={isUpdating}>
+      <Button priority="default" size={size} onClick={toggleDisabled} busy={isUpdating}>
         {automation.enabled ? t('Disable') : t('Enable')}
       </Button>
-      <LinkButton to="edit" priority="primary" icon={<IconEdit />} size="sm">
+      <LinkButton
+        to={makeAutomationEditPathname(organization.slug, automation.id)}
+        priority="primary"
+        icon={<IconEdit />}
+        size={size}
+      >
         {t('Edit')}
       </LinkButton>
     </Fragment>
   );
+}
+
+function UserDisplayName({id}: {id: string | undefined}) {
+  const {data: createdByUser, isPending} = useUserFromId({
+    id: id ? Number(id) : undefined,
+  });
+  if (!id) {
+    return '—';
+  }
+  if (isPending) {
+    return <Placeholder height="20px" />;
+  }
+  return createdByUser?.name || createdByUser?.email || t('Unknown');
 }

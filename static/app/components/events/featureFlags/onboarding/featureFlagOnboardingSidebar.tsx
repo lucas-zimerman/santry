@@ -1,42 +1,44 @@
 import type {ReactNode} from 'react';
 import {Fragment, useEffect, useMemo, useRef, useState} from 'react';
 import styled from '@emotion/styled';
+import {parseAsString, useQueryState} from 'nuqs';
 
 import HighlightTopRightPattern from 'sentry-images/pattern/highlight-top-right.svg';
 
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {CompactSelect} from 'sentry/components/core/compactSelect';
-import {ExternalLink} from 'sentry/components/core/link';
+import {LinkButton} from '@sentry/scraps/button';
+import {CompactSelect} from '@sentry/scraps/compactSelect';
+import {useDrawer} from '@sentry/scraps/drawer';
+import {Container, Flex, Stack} from '@sentry/scraps/layout';
+import {ExternalLink} from '@sentry/scraps/link';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+
 import {FeatureFlagOnboardingLayout} from 'sentry/components/events/featureFlags/onboarding/featureFlagOnboardingLayout';
 import {FeatureFlagOtherPlatformOnboarding} from 'sentry/components/events/featureFlags/onboarding/featureFlagOtherPlatformOnboarding';
 import {SdkProviderEnum} from 'sentry/components/events/featureFlags/utils';
-import RadioGroup from 'sentry/components/forms/controls/radioGroup';
-import useDrawer from 'sentry/components/globalDrawer';
-import IdBadge from 'sentry/components/idBadge';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import useCurrentProjectState from 'sentry/components/onboarding/gettingStartedDoc/utils/useCurrentProjectState';
+import {RadioGroup} from 'sentry/components/forms/controls/radioGroup';
+import {IdBadge} from 'sentry/components/idBadge';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {useCurrentProjectState} from 'sentry/components/onboarding/gettingStartedDoc/utils/useCurrentProjectState';
 import {useLoadGettingStarted} from 'sentry/components/onboarding/gettingStartedDoc/utils/useLoadGettingStarted';
-import SidebarPanel from 'sentry/components/sidebar/sidebarPanel';
-import type {CommonSidebarProps} from 'sentry/components/sidebar/types';
-import {SidebarPanelKey} from 'sentry/components/sidebar/types';
-import TextOverflow from 'sentry/components/textOverflow';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {featureFlagOnboardingPlatforms} from 'sentry/data/platformCategories';
-import platforms, {otherPlatform} from 'sentry/data/platforms';
+import {otherPlatform, allPlatforms as platforms} from 'sentry/data/platforms';
 import {t, tct} from 'sentry/locale';
-import SidebarPanelStore from 'sentry/stores/sidebarPanelStore';
+import {
+  OnboardingDrawerKey,
+  OnboardingDrawerStore,
+} from 'sentry/stores/onboardingDrawerStore';
 import {useLegacyStore} from 'sentry/stores/useLegacyStore';
-import {space} from 'sentry/styles/space';
 import type {SelectValue} from 'sentry/types/core';
 import type {Project} from 'sentry/types/project';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import useUrlParams from 'sentry/utils/url/useUrlParams';
-import useOrganization from 'sentry/utils/useOrganization';
-import TextBlock from 'sentry/views/settings/components/text/textBlock';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {TextBlock} from 'sentry/views/settings/components/text/textBlock';
 
 export function useFeatureFlagOnboardingDrawer() {
   const organization = useOrganization();
-  const currentPanel = useLegacyStore(SidebarPanelStore);
-  const isActive = currentPanel === SidebarPanelKey.FEATURE_FLAG_ONBOARDING;
+  const currentPanel = useLegacyStore(OnboardingDrawerStore);
+  const isActive = currentPanel === OnboardingDrawerKey.FEATURE_FLAG_ONBOARDING;
   const hasProjectAccess = organization.access.includes('project:read');
   const initialPathname = useRef<string | null>(null);
 
@@ -54,34 +56,9 @@ export function useFeatureFlagOnboardingDrawer() {
       });
 
       // Reset store
-      SidebarPanelStore.hidePanel();
+      OnboardingDrawerStore.close();
     }
   }, [isActive, hasProjectAccess, openDrawer]);
-}
-
-/**
- * @deprecated Use useFeatureFlagOnboardingDrawer instead.
- */
-function LegacyFeatureFlagOnboardingSidebar(props: CommonSidebarProps) {
-  const {currentPanel, collapsed, hidePanel, orientation} = props;
-  const organization = useOrganization();
-
-  const isActive = currentPanel === SidebarPanelKey.FEATURE_FLAG_ONBOARDING;
-  const hasProjectAccess = organization.access.includes('project:read');
-
-  if (!isActive || !hasProjectAccess) {
-    return null;
-  }
-
-  return (
-    <TaskSidebarPanel
-      orientation={orientation}
-      collapsed={collapsed}
-      hidePanel={hidePanel}
-    >
-      <SidebarContent />
-    </TaskSidebarPanel>
-  );
 }
 
 function SidebarContent() {
@@ -92,8 +69,8 @@ function SidebarContent() {
     supportedProjects,
     unsupportedProjects,
   } = useCurrentProjectState({
-    currentPanel: SidebarPanelKey.FEATURE_FLAG_ONBOARDING,
-    targetPanel: SidebarPanelKey.FEATURE_FLAG_ONBOARDING,
+    currentPanel: OnboardingDrawerKey.FEATURE_FLAG_ONBOARDING,
+    targetPanel: OnboardingDrawerKey.FEATURE_FLAG_ONBOARDING,
     onboardingPlatforms: featureFlagOnboardingPlatforms,
     allPlatforms: featureFlagOnboardingPlatforms,
   });
@@ -142,7 +119,7 @@ function SidebarContent() {
       <TopRightBackgroundImage src={HighlightTopRightPattern} />
       <TaskList>
         <Heading>{t('Debug Issues with Feature Flag Context')}</Heading>
-        <HeaderActions>
+        <Flex justify="between" gap="2xl">
           <div
             onClick={e => {
               // we need to stop bubbling the CompactSelect click event
@@ -153,18 +130,6 @@ function SidebarContent() {
             }}
           >
             <CompactSelect
-              triggerLabel={
-                currentProject ? (
-                  <StyledIdBadge
-                    project={currentProject}
-                    avatarSize={16}
-                    hideOverflow
-                    disableLink
-                  />
-                ) : (
-                  t('Select a project')
-                )
-              }
               value={currentProject?.id}
               onChange={opt => {
                 const newProject = allProjects.find(p => p.id === opt.value);
@@ -174,12 +139,28 @@ function SidebarContent() {
                   platform: newProject?.platform,
                 });
               }}
-              triggerProps={{'aria-label': currentProject?.slug}}
+              trigger={triggerProps => (
+                <OverlayTrigger.Button
+                  {...triggerProps}
+                  aria-label={currentProject?.slug}
+                >
+                  {currentProject ? (
+                    <StyledIdBadge
+                      project={currentProject}
+                      avatarSize={16}
+                      hideOverflow
+                      disableLink
+                    />
+                  ) : (
+                    t('Select a project')
+                  )}
+                </OverlayTrigger.Button>
+              )}
               options={projectSelectOptions}
               position="bottom-end"
             />
           </div>
-        </HeaderActions>
+        </Flex>
         {currentProject ? (
           <OnboardingContent currentProject={currentProject} />
         ) : (
@@ -215,10 +196,9 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
     label?: ReactNode;
   }>(sdkProviderOptions[0]!);
 
-  const defaultTab = 'sdkSelect';
-  const {getParamValue: setupMode, setParamValue: setSetupMode} = useUrlParams(
+  const [setupMode, setSetupMode] = useQueryState(
     'mode',
-    defaultTab
+    parseAsString.withDefault('sdkSelect').withOptions({history: 'push', throttleMs: 0})
   );
 
   const currentPlatform = currentProject.platform
@@ -238,7 +218,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
   });
 
   const header = (
-    <ContentHeader>
+    <Container padding="xl 0">
       <h3>{t('Set Up Evaluation Tracking')}</h3>
       <p>{t('Configure Sentry to track feature flag evaluations on error events.')}</p>
       <RadioGroup
@@ -246,12 +226,16 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
         choices={[
           [
             'sdkSelect',
-            <SdkSelect key="sdkSelect">
+            <Flex align="center" wrap="wrap" gap="md" key="sdkSelect">
               {tct('I use a Feature Flag SDK from [sdkSelect]', {
                 sdkSelect: (
                   <CompactSelect
                     size="xs"
-                    triggerLabel={sdkProvider.label}
+                    trigger={triggerProps => (
+                      <OverlayTrigger.Button {...triggerProps}>
+                        {sdkProvider.label ?? triggerProps.children}
+                      </OverlayTrigger.Button>
+                    )}
                     value={sdkProvider.value}
                     onChange={value => {
                       setsdkProvider(value);
@@ -264,11 +248,11 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
                     options={sdkProviderOptions}
                     position="bottom-end"
                     key={sdkProvider.value}
-                    disabled={setupMode() === 'generic'}
+                    disabled={setupMode === 'generic'}
                   />
                 ),
               })}
-            </SdkSelect>,
+            </Flex>,
           ],
           [
             'generic',
@@ -277,7 +261,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
             </div>,
           ],
         ]}
-        value={setupMode()}
+        value={setupMode}
         onChange={value => {
           setSetupMode(value);
           if (value === 'generic') {
@@ -290,7 +274,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
           window.location.hash = ORIGINAL_HASH;
         }}
       />
-    </ContentHeader>
+    </Container>
   );
 
   if (isProjKeysLoading) {
@@ -310,7 +294,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
     <Fragment>
       <div>
         {tct(
-          'Tracking flag evaluations is not supported for [platform] yet. It is currently available for Python and JavaScript projects through the Feature Flags SDK. You can [link:read the docs] to learn more.',
+          'Tracking flag evaluations is not supported for [platform] yet. It is currently available for Python, JavaScript, and Node.js projects through the Feature Flags SDK. You can [link:read the docs] to learn more.',
           {
             link: (
               <ExternalLink href="https://docs.sentry.io/product/explore/feature-flags/" />
@@ -319,7 +303,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
           }
         )}
       </div>
-      <StyledDefaultContent>
+      <Stack align="start" margin="md 0" gap="xl">
         {t(
           'To see which feature flags changed over time, visit the settings page to set up a webhook for your Feature Flag provider.'
         )}
@@ -329,7 +313,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
         >
           {t('Go to Feature Flag Settings')}
         </LinkButton>
-      </StyledDefaultContent>
+      </Stack>
     </Fragment>
   );
 
@@ -340,7 +324,7 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
         <FeatureFlagOtherPlatformOnboarding
           projectSlug={currentProject.slug}
           integration={
-            setupMode() === 'generic' ? SdkProviderEnum.GENERIC : sdkProvider.value
+            setupMode === 'generic' ? SdkProviderEnum.GENERIC : sdkProvider.value
           }
         />
       </Fragment>
@@ -363,26 +347,13 @@ function OnboardingContent({currentProject}: {currentProject: Project}) {
         platformKey={currentPlatform.id}
         project={currentProject}
         integration={
-          setupMode() === 'generic' ? SdkProviderEnum.GENERIC : sdkProvider.value
+          setupMode === 'generic' ? SdkProviderEnum.GENERIC : sdkProvider.value
         }
         configType="featureFlagOnboarding"
       />
     </Fragment>
   );
 }
-
-const StyledDefaultContent = styled('div')`
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: ${space(2)};
-  margin: ${space(1)} 0;
-`;
-
-const TaskSidebarPanel = styled(SidebarPanel)`
-  width: 600px;
-  max-width: 100%;
-`;
 
 const TopRightBackgroundImage = styled('img')`
   position: absolute;
@@ -396,18 +367,19 @@ const TaskList = styled('div')`
   display: grid;
   grid-auto-flow: row;
   grid-template-columns: 100%;
-  gap: ${space(1)};
-  margin: 50px ${space(4)} ${space(4)} ${space(4)};
+  gap: ${p => p.theme.space.md};
+  margin: 50px ${p => p.theme.space['3xl']} ${p => p.theme.space['3xl']}
+    ${p => p.theme.space['3xl']};
 `;
 
 const Heading = styled('div')`
   display: flex;
-  color: ${p => p.theme.activeText};
-  font-size: ${p => p.theme.fontSize.xs};
+  color: ${p => p.theme.tokens.interactive.link.accent.rest};
+  font-size: ${p => p.theme.font.size.xs};
   text-transform: uppercase;
-  font-weight: ${p => p.theme.fontWeight.bold};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
   line-height: 1;
-  margin-top: ${space(3)};
+  margin-top: ${p => p.theme.space['2xl']};
 `;
 
 const StyledIdBadge = styled(IdBadge)`
@@ -415,23 +387,3 @@ const StyledIdBadge = styled(IdBadge)`
   white-space: nowrap;
   flex-shrink: 1;
 `;
-
-const HeaderActions = styled('div')`
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  gap: ${space(3)};
-`;
-
-const ContentHeader = styled('div')`
-  padding: ${space(2)} 0;
-`;
-
-const SdkSelect = styled('div')`
-  display: flex;
-  gap: ${space(1)};
-  align-items: center;
-  flex-wrap: wrap;
-`;
-
-export default LegacyFeatureFlagOnboardingSidebar;

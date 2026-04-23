@@ -1,19 +1,16 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 
-import HookStore from 'sentry/stores/hookStore';
+import {HookStore} from 'sentry/stores/hookStore';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import type {Fuse} from 'sentry/utils/fuzzySearch';
 import {createFuzzySearch} from 'sentry/utils/fuzzySearch';
-import replaceRouterParams from 'sentry/utils/replaceRouterParams';
-import useOrganization from 'sentry/utils/useOrganization';
+import {replaceRouterParams} from 'sentry/utils/replaceRouterParams';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useParams} from 'sentry/utils/useParams';
-import useProjectFromSlug from 'sentry/utils/useProjectFromSlug';
-import {prefersStackedNav} from 'sentry/views/nav/prefersStackedNav';
-import accountSettingsNavigation from 'sentry/views/settings/account/navigationConfiguration';
-import {getOrganizationNavigationConfiguration} from 'sentry/views/settings/organization/navigationConfiguration';
+import {useProjectFromSlug} from 'sentry/utils/useProjectFromSlug';
 import {getUserOrgNavigationConfiguration} from 'sentry/views/settings/organization/userOrgNavigationConfiguration';
-import projectSettingsNavigation from 'sentry/views/settings/project/navigationConfiguration';
+import {getNavigationConfiguration} from 'sentry/views/settings/project/navigationConfiguration';
 import type {NavigationItem, NavigationSection} from 'sentry/views/settings/types';
 
 import type {ChildProps, ResultItem} from './types';
@@ -58,7 +55,7 @@ interface Props {
   searchOptions?: Fuse.IFuseOptions<NavigationItem>;
 }
 
-function RouteSource({searchOptions, query, children}: Props) {
+export function RouteSource({searchOptions, query, children}: Props) {
   const params = useParams();
   const organization = useOrganization();
   const project = useProjectFromSlug({organization, projectSlug: params.projectId});
@@ -80,20 +77,11 @@ function RouteSource({searchOptions, query, children}: Props) {
         )
       : [];
 
-    const searchMap: NavigationItem[] = (
-      prefersStackedNav(organization)
-        ? [
-            mapFunc(getUserOrgNavigationConfiguration, context),
-            mapFunc(projectSettingsNavigation, context),
-            mapFunc(navigationFromHook, context),
-          ]
-        : [
-            mapFunc(getOrganizationNavigationConfiguration, context),
-            mapFunc(accountSettingsNavigation, context),
-            mapFunc(projectSettingsNavigation, context),
-            mapFunc(navigationFromHook, context),
-          ]
-    ).flat(2);
+    const searchMap = [
+      mapFunc(getUserOrgNavigationConfiguration, context),
+      mapFunc(getNavigationConfiguration, context),
+      mapFunc(navigationFromHook, context),
+    ].flat(2);
 
     const search = await createFuzzySearch(searchMap, {
       ...searchOptions,
@@ -128,5 +116,3 @@ function RouteSource({searchOptions, query, children}: Props) {
 
   return children({isLoading: fuzzy === undefined, results});
 }
-
-export default RouteSource;

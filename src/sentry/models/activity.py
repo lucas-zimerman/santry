@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -17,7 +18,7 @@ from sentry.db.models import (
     BoundedPositiveIntegerField,
     FlexibleForeignKey,
     Model,
-    region_silo_model,
+    cell_silo_model,
     sane_repr,
 )
 from sentry.db.models.fields.hybrid_cloud_foreign_key import HybridCloudForeignKey
@@ -87,6 +88,7 @@ class ActivityManager(BaseManager["Activity"]):
         user_id: int | None = None,
         data: Mapping[str, Any] | None = None,
         send_notification: bool = True,
+        datetime: datetime | None = None,
     ) -> Activity:
         if user:
             user_id = user.id
@@ -98,6 +100,8 @@ class ActivityManager(BaseManager["Activity"]):
         }
         if user_id is not None:
             activity_args["user_id"] = user_id
+        if datetime is not None:
+            activity_args["datetime"] = datetime
         activity = self.create(**activity_args)
 
         if send_notification:
@@ -106,7 +110,7 @@ class ActivityManager(BaseManager["Activity"]):
         return activity
 
 
-@region_silo_model
+@cell_silo_model
 class Activity(Model):
     __relocation_scope__ = RelocationScope.Excluded
 

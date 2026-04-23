@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, MutableMapping
 from typing import Any
 from urllib.parse import urlparse
 
-from django import forms
 from django.http.request import HttpRequest
-from django.http.response import HttpResponseBase
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from rest_framework.fields import BooleanField, CharField, URLField
 
+from sentry import features
+from sentry.api.serializers.rest_framework.base import CamelSnakeSerializer
 from sentry.identity.gitlab.provider import GitlabIdentityProvider, get_oauth_data, get_user_info
-from sentry.identity.pipeline import IdentityPipeline
+from sentry.identity.oauth2 import OAuth2ApiStep
 from sentry.integrations.base import (
     FeatureDescription,
     IntegrationData,
@@ -19,48 +21,49 @@ from sentry.integrations.base import (
     IntegrationMetadata,
     IntegrationProvider,
 )
+from sentry.integrations.gitlab.constants import GITLAB_WEBHOOK_VERSION, GITLAB_WEBHOOK_VERSION_KEY
+from sentry.integrations.gitlab.types import GitLabIssueStatus
+from sentry.integrations.models.integration_external_project import IntegrationExternalProject
 from sentry.integrations.pipeline import IntegrationPipeline
-from sentry.integrations.referrer_ids import GITLAB_OPEN_PR_BOT_REFERRER, GITLAB_PR_BOT_REFERRER
+from sentry.integrations.referrer_ids import GITLAB_PR_BOT_REFERRER
+from sentry.integrations.services.integration import integration_service
+from sentry.integrations.services.repository import repository_service
 from sentry.integrations.services.repository.model import RpcRepository
 from sentry.integrations.source_code_management.commit_context import (
-    OPEN_PR_MAX_FILES_CHANGED,
-    OPEN_PR_MAX_LINES_CHANGED,
-    OPEN_PR_METRICS_BASE,
     CommitContextIntegration,
-    OpenPRCommentWorkflow,
     PRCommentWorkflow,
-    PullRequestFile,
-    PullRequestIssue,
-    _open_pr_comment_log,
 )
-from sentry.integrations.source_code_management.language_parsers import (
-    get_patch_parsers_for_organization,
+from sentry.integrations.source_code_management.repository import (
+    RepositoryInfo,
+    RepositoryIntegration,
 )
-from sentry.integrations.source_code_management.repository import RepositoryIntegration
 from sentry.integrations.types import IntegrationProviderSlug
 from sentry.models.group import Group
 from sentry.models.organization import Organization
 from sentry.models.pullrequest import PullRequest
 from sentry.models.repository import Repository
-from sentry.pipeline.views.base import PipelineView
-from sentry.pipeline.views.nested import NestedPipelineView
+from sentry.organizations.services.organization import organization_service
+from sentry.pipeline.types import PipelineStepResult
+from sentry.pipeline.views.base import ApiPipelineSteps
 from sentry.shared_integrations.exceptions import (
     ApiError,
+    ApiForbiddenError,
+    ApiUnauthorized,
+    IntegrationConfigurationError,
     IntegrationError,
     IntegrationProviderError,
 )
 from sentry.snuba.referrer import Referrer
-from sentry.templatetags.sentry_helpers import small_count
 from sentry.users.models.identity import Identity
 from sentry.utils import metrics
 from sentry.utils.hashlib import sha1_text
 from sentry.utils.http import absolute_uri
-from sentry.utils.patch_set import PatchParseError, patch_to_file_modifications
-from sentry.web.helpers import render_to_response
 
 from .client import GitLabApiClient, GitLabSetupApiClient
+from .issue_sync import GitlabIssueSyncSpec
 from .issues import GitlabIssuesSpec
 from .repository import GitlabRepositoryProvider
+from .utils import parse_gitlab_blob_url
 
 logger = logging.getLogger("sentry.integrations.gitlab")
 
@@ -121,19 +124,28 @@ metadata = IntegrationMetadata(
 )
 
 
-class GitlabIntegration(RepositoryIntegration, GitlabIssuesSpec, CommitContextIntegration):
+class GitlabIntegration(
+    RepositoryIntegration[GitLabApiClient],
+    GitlabIssuesSpec,
+    GitlabIssueSyncSpec,
+    CommitContextIntegration,
+):
     codeowners_locations = ["CODEOWNERS", ".gitlab/CODEOWNERS", "docs/CODEOWNERS"]
 
     @property
     def integration_name(self) -> str:
         return IntegrationProviderSlug.GITLAB
 
+    @property
+    def integration_id(self) -> int:
+        return self.model.id
+
     def get_client(self) -> GitLabApiClient:
         try:
             # eagerly populate this just for the error message
             self.default_identity
-        except Identity.DoesNotExist:
-            raise IntegrationError("Identity not found.")
+        except Identity.DoesNotExist as e:
+            raise IntegrationConfigurationError("Identity not found.") from e
         else:
             return GitLabApiClient(self)
 
@@ -157,13 +169,36 @@ class GitlabIntegration(RepositoryIntegration, GitlabIssuesSpec, CommitContextIn
         # TODO: define this, used to migrate repositories
         return False
 
+    def get_repo_external_id(self, repo: Mapping[str, Any]) -> str:
+        instance = self.model.metadata["instance"]
+        return f"{instance}:{repo['id']}"
+
     def get_repositories(
-        self, query: str | None = None, page_number_limit: int | None = None
-    ) -> list[dict[str, Any]]:
-        # Note: gitlab projects are the same things as repos everywhere else
-        group = self.get_group_id()
-        resp = self.get_client().search_projects(group, query)
-        return [{"identifier": repo["id"], "name": repo["name_with_namespace"]} for repo in resp]
+        self,
+        query: str | None = None,
+        page_number_limit: int | None = None,
+        accessible_only: bool = False,
+        use_cache: bool = False,
+    ) -> list[RepositoryInfo]:
+        try:
+            # Note: gitlab projects are the same things as repos everywhere else
+            group = self.get_group_id()
+            resp = self.get_client().search_projects(group, query)
+            instance = self.model.metadata["instance"]
+            return [
+                {
+                    "identifier": str(repo["id"]),
+                    "name": repo["name_with_namespace"],
+                    "external_id": self.get_repo_external_id(repo),
+                    "url": repo["web_url"],
+                    "instance": instance,
+                    "path": repo["path_with_namespace"],
+                    "project_id": repo["id"],
+                }
+                for repo in resp
+            ]
+        except (ApiForbiddenError, ApiUnauthorized) as e:
+            raise IntegrationConfigurationError(self.message_from_error(e)) from e
 
     def source_url_matches(self, url: str) -> bool:
         return url.startswith("https://{}".format(self.model.metadata["domain_name"]))
@@ -177,16 +212,207 @@ class GitlabIntegration(RepositoryIntegration, GitlabIssuesSpec, CommitContextIn
         return f"{base_url}/{repo_name}/blob/{branch}/{filepath}"
 
     def extract_branch_from_source_url(self, repo: Repository, url: str) -> str:
-        url = url.replace(f"{repo.url}/-/blob/", "")
-        url = url.replace(f"{repo.url}/blob/", "")
-        branch, _, _ = url.partition("/")
+        if not repo.url:
+            return ""
+        branch, _ = parse_gitlab_blob_url(repo.url, url)
         return branch
 
     def extract_source_path_from_source_url(self, repo: Repository, url: str) -> str:
-        url = url.replace(f"{repo.url}/-/blob/", "")
-        url = url.replace(f"{repo.url}/blob/", "")
-        _, _, source_path = url.partition("/")
+        if not repo.url:
+            return ""
+        _, source_path = parse_gitlab_blob_url(repo.url, url)
         return source_path
+
+    # IssueSyncIntegration methods
+
+    def _get_organization_config_default_values(self) -> list[dict[str, Any]]:
+        config: list[dict[str, Any]] = []
+
+        if self.check_feature_flag():
+            config.extend(
+                [
+                    {
+                        "name": self.inbound_assignee_key,
+                        "type": "boolean",
+                        "label": _("Sync GitLab Assignment to Sentry"),
+                        "help": _(
+                            "When an issue is assigned in GitLab, assign its linked Sentry issue to the same user."
+                        ),
+                        "default": False,
+                    },
+                    {
+                        "name": self.outbound_assignee_key,
+                        "type": "boolean",
+                        "label": _("Sync Sentry Assignment to GitLab"),
+                        "help": _(
+                            "When an issue is assigned in Sentry, assign its linked GitLab issue to the same user."
+                        ),
+                        "default": False,
+                    },
+                    {
+                        "name": self.comment_key,
+                        "type": "boolean",
+                        "label": _("Sync Sentry Comments to GitLab"),
+                        "help": _("Post comments from Sentry issues to linked GitLab issues"),
+                    },
+                    {
+                        "name": self.inbound_status_key,
+                        "type": "boolean",
+                        "label": _("Sync GitLab Status to Sentry"),
+                        "help": _(
+                            "When a GitLab issue is marked closed, resolve its linked issue in Sentry. "
+                            "When a GitLab issue is reopened, unresolve its linked Sentry issue."
+                        ),
+                        "default": False,
+                    },
+                    {
+                        "name": self.resolution_strategy_key,
+                        "label": "Resolve",
+                        "type": "select",
+                        "placeholder": "Resolve",
+                        "choices": [
+                            ("resolve", "Resolve"),
+                            ("resolve_current_release", "Resolve in Current Release"),
+                            ("resolve_next_release", "Resolve in Next Release"),
+                        ],
+                        "help": _(
+                            "Select what action to take on Sentry Issue when GitLab ticket is marked Closed."
+                        ),
+                    },
+                ]
+            )
+
+        return config
+
+    def get_organization_config(self) -> list[dict[str, Any]]:
+        config = self._get_organization_config_default_values()
+
+        context = organization_service.get_organization_by_id(
+            id=self.organization_id, include_projects=False, include_teams=False
+        )
+        assert context, "organizationcontext must exist to get org"
+        organization = context.organization
+
+        has_issue_sync = features.has("organizations:integrations-issue-sync", organization)
+
+        # Add outbound status sync configuration if feature flag is enabled
+        if self.check_feature_flag():
+            # Get currently configured external projects to display their labels
+            current_project_items = []
+            if self.org_integration:
+                external_projects = IntegrationExternalProject.objects.filter(
+                    organization_integration_id=self.org_integration.id
+                )
+
+                if external_projects.exists():
+                    current_project_items = [
+                        {"value": project.external_id, "label": project.name}
+                        for project in external_projects
+                    ]
+
+            config.insert(
+                0,
+                {
+                    "name": self.outbound_status_key,
+                    "type": "choice_mapper",
+                    "label": _("Sync Sentry Status to GitLab"),
+                    "help": _(
+                        "When a Sentry issue changes status, change the status of the linked ticket in GitLab."
+                    ),
+                    "addButtonText": _("Add GitLab Project"),
+                    "addDropdown": {
+                        "emptyMessage": _("All projects configured"),
+                        "noResultsMessage": _("Could not find GitLab project"),
+                        "items": current_project_items,
+                        "url": reverse(
+                            "sentry-extensions-gitlab-search",
+                            args=[organization.slug, self.model.id],
+                        ),
+                        "searchField": "project",
+                    },
+                    "mappedSelectors": {
+                        "on_resolve": {"choices": GitLabIssueStatus.get_choices()},
+                        "on_unresolve": {"choices": GitLabIssueStatus.get_choices()},
+                    },
+                    "columnLabels": {
+                        "on_resolve": _("When resolved"),
+                        "on_unresolve": _("When unresolved"),
+                    },
+                    "mappedColumnLabel": _("GitLab Project"),
+                    "formatMessageValue": False,
+                },
+            )
+
+        if not has_issue_sync:
+            for field in config:
+                field["disabled"] = True
+                field["disabledReason"] = _(
+                    "Your organization does not have access to this feature"
+                )
+
+        return config
+
+    def update_organization_config(self, data: MutableMapping[str, Any]) -> None:
+        if not self.org_integration:
+            return
+
+        config = self.org_integration.config
+
+        # Handle status sync configuration
+        if "sync_status_forward" in data:
+            project_mappings = data.pop("sync_status_forward")
+
+            # Validate that all mappings have both statuses
+            if any(
+                not mapping.get("on_unresolve") or not mapping.get("on_resolve")
+                for mapping in project_mappings.values()
+            ):
+                raise IntegrationError("Resolve and unresolve status are required.")
+
+            data["sync_status_forward"] = bool(project_mappings)
+
+            IntegrationExternalProject.objects.filter(
+                organization_integration_id=self.org_integration.id
+            ).delete()
+
+            for project_path, statuses in project_mappings.items():
+                # Validate status values
+                valid_statuses = {GitLabIssueStatus.OPENED.value, GitLabIssueStatus.CLOSED.value}
+                if statuses["on_resolve"] not in valid_statuses:
+                    raise IntegrationError(
+                        f"Invalid resolve status: {statuses['on_resolve']}. Must be 'opened' or 'closed'."
+                    )
+                if statuses["on_unresolve"] not in valid_statuses:
+                    raise IntegrationError(
+                        f"Invalid unresolve status: {statuses['on_unresolve']}. Must be 'opened' or 'closed'."
+                    )
+
+                IntegrationExternalProject.objects.create(
+                    organization_integration_id=self.org_integration.id,
+                    external_id=project_path,
+                    name=project_path,
+                    resolved_status=statuses["on_resolve"],
+                    unresolved_status=statuses["on_unresolve"],
+                )
+
+        # Check webhook version BEFORE updating config to determine if migration is needed
+        current_webhook_version = config.get(GITLAB_WEBHOOK_VERSION_KEY, 0)
+
+        config.update(data)
+
+        org_integration = integration_service.update_organization_integration(
+            org_integration_id=self.org_integration.id,
+            config=config,
+        )
+        if org_integration is not None:
+            self.org_integration = org_integration
+
+        # Only update webhooks if the webhook version is outdated
+        if current_webhook_version < GITLAB_WEBHOOK_VERSION:
+            repository_service.schedule_update_gitlab_project_webhooks(
+                integration_id=self.model.id,
+                organization_id=self.organization_id,
+            )
 
     # CommitContextIntegration methods
 
@@ -199,6 +425,9 @@ class GitlabIntegration(RepositoryIntegration, GitlabIssuesSpec, CommitContextIn
             return True
 
         return False
+
+    def _get_debug_metadata_keys(self) -> list[str]:
+        return ["domain_name", "group_id", "include_subgroups", "verify_ssl", "base_url"]
 
     # Gitlab only functions
 
@@ -222,15 +451,12 @@ class GitlabIntegration(RepositoryIntegration, GitlabIssuesSpec, CommitContextIn
     def get_pr_comment_workflow(self) -> PRCommentWorkflow:
         return GitlabPRCommentWorkflow(integration=self)
 
-    def get_open_pr_comment_workflow(self) -> OpenPRCommentWorkflow:
-        return GitlabOpenPRCommentWorkflow(integration=self)
-
 
 MERGED_PR_COMMENT_BODY_TEMPLATE = """\
 ## Issues attributed to commits in this merge request
 The following issues were detected after merging:
 
-{issue_list}"""
+{issue_list}""".rstrip()
 
 
 class GitlabPRCommentWorkflow(PRCommentWorkflow):
@@ -277,312 +503,76 @@ class GitlabPRCommentWorkflow(PRCommentWorkflow):
         }
 
 
-OPEN_PR_COMMENT_BODY_TEMPLATE = """\
-## 🔍 Existing Issues For Review
-Your merge request is modifying functions with the following pre-existing issues:
-
-{issue_tables}"""
-
-OPEN_PR_ISSUE_TABLE_TEMPLATE = """\
-📄 File: **{filename}**
-
-| Function | Unhandled Issue |
-| :------- | :----- |
-{issue_rows}"""
-
-OPEN_PR_ISSUE_TABLE_TOGGLE_TEMPLATE = """\
-<details>
-<summary><b>📄 File: {filename} (Click to Expand)</b></summary>
-
-| Function | Unhandled Issue |
-| :------- | :----- |
-{issue_rows}
-</details>"""
-
-OPEN_PR_ISSUE_DESCRIPTION_LENGTH = 52
+class InstallationConfigSerializer(CamelSnakeSerializer):
+    url = URLField(required=False, default="https://gitlab.com")
+    group = CharField(required=False, allow_blank=True, default="")
+    include_subgroups = BooleanField(required=False, default=False)
+    verify_ssl = BooleanField(required=False, default=True)
+    client_id = CharField(required=True)
+    client_secret = CharField(required=True)
 
 
-class GitlabOpenPRCommentWorkflow(OpenPRCommentWorkflow):
-    integration: GitlabIntegration
-    organization_option_key = "sentry:gitlab_open_pr_bot"
-    referrer = Referrer.GITLAB_PR_COMMENT_BOT
-    referrer_id = GITLAB_OPEN_PR_BOT_REFERRER
+class InstallationConfigApiStep:
+    """
+    Collects GitLab instance configuration: URL, group path, OAuth
+    credentials, and SSL/subgroup preferences.
 
-    def safe_for_comment(self, repo: Repository, pr: PullRequest) -> list[dict[str, Any]]:
-        client = self.integration.get_client()
+    On POST, validates the form data, binds ``installation_data`` and
+    ``oauth_config_information`` to pipeline state, then advances.
+    """
 
-        try:
-            diffs = client.get_pr_diffs(repo=repo, pr=pr)
-        except ApiError as e:
-            if e.code == 404:
-                return []
-            else:
-                raise
+    step_name = "installation_config"
 
-        changed_file_count = 0
-        changed_lines_count = 0
-        filtered_diffs = []
-
-        organization = Organization.objects.get_from_cache(id=repo.organization_id)
-        patch_parsers = get_patch_parsers_for_organization(organization)
-
-        for diff in diffs:
-            filename = diff["new_path"]
-            # we only count the file if it's modified and if the file extension is in the list of supported file extensions
-            # we cannot look at deleted or newly added files because we cannot extract functions from the diffs
-
-            if filename.split(".")[-1] not in patch_parsers:
-                continue
-
-            try:
-                file_modifications = patch_to_file_modifications(diff["diff"])
-            except PatchParseError:
-                # TODO: This is caused because of the diffs are not in the correct format.
-                # This happens for Gitlab versions older than 16.5.
-                # The fix for this is to rebuild a consistent format using the other parts of the response.
-                # https://gitlab.com/gitlab-org/gitlab/-/issues/24913#note_1015454661
-                logger.warning(
-                    _open_pr_comment_log(
-                        integration_name=self.integration.integration_name,
-                        suffix="patch_parsing_error",
-                    )
-                )
-                continue
-            except Exception:
-                logger.exception(
-                    _open_pr_comment_log(
-                        integration_name=self.integration.integration_name,
-                        suffix="unexpected_error",
-                    )
-                )
-                continue
-
-            if not file_modifications.modified:
-                continue
-
-            changed_file_count += len(file_modifications.modified)
-            changed_lines_count += sum(
-                modification.lines_modified for modification in file_modifications.modified
-            )
-
-            filtered_diffs.append(diff)
-
-            if changed_file_count > OPEN_PR_MAX_FILES_CHANGED:
-                metrics.incr(
-                    OPEN_PR_METRICS_BASE.format(
-                        integration=self.integration.integration_name, key="rejected_comment"
-                    ),
-                    tags={"reason": "too_many_files"},
-                )
-                return []
-            if changed_lines_count > OPEN_PR_MAX_LINES_CHANGED:
-                metrics.incr(
-                    OPEN_PR_METRICS_BASE.format(
-                        integration=self.integration.integration_name, key="rejected_comment"
-                    ),
-                    tags={"reason": "too_many_lines"},
-                )
-                return []
-
-        return filtered_diffs
-
-    def get_pr_files_safe_for_comment(
-        self, repo: Repository, pr: PullRequest
-    ) -> list[PullRequestFile]:
-        pr_diffs = self.safe_for_comment(repo=repo, pr=pr)
-
-        if len(pr_diffs) == 0:
-            return []
-
-        pr_files = [
-            PullRequestFile(filename=diff["new_path"], patch=diff["diff"]) for diff in pr_diffs
-        ]
-
-        return pr_files
-
-    def get_comment_data(self, comment_body: str) -> dict[str, Any]:
+    def get_step_data(self, pipeline: IntegrationPipeline, request: HttpRequest) -> dict[str, Any]:
         return {
-            "body": comment_body,
+            "defaults": {
+                "verifySsl": True,
+                "includeSubgroups": False,
+            },
+            "setupValues": [
+                {"label": "Name", "value": "Sentry"},
+                {
+                    "label": "Redirect URI",
+                    "value": absolute_uri("/extensions/gitlab/setup/"),
+                },
+                {"label": "Scopes", "value": "api"},
+            ],
         }
 
-    @staticmethod
-    def format_comment_url(url: str, referrer: str) -> str:
-        return url + "?referrer=" + referrer
+    def get_serializer_cls(self) -> type:
+        return InstallationConfigSerializer
 
-    @staticmethod
-    def format_open_pr_comment(issue_tables: list[str]) -> str:
-        return OPEN_PR_COMMENT_BODY_TEMPLATE.format(issue_tables="\n".join(issue_tables))
-
-    @staticmethod
-    def format_open_pr_comment_subtitle(title_length, subtitle):
-        # the title length + " " + subtitle should be <= 52
-        subtitle_length = OPEN_PR_ISSUE_DESCRIPTION_LENGTH - title_length - 1
-        return (
-            subtitle[: subtitle_length - 3] + "..." if len(subtitle) > subtitle_length else subtitle
-        )
-
-    def format_issue_table(
+    def handle_post(
         self,
-        diff_filename: str,
-        issues: list[PullRequestIssue],
-        patch_parsers: dict[str, Any],
-        toggle: bool,
-    ) -> str:
-        language_parser = patch_parsers.get(diff_filename.split(".")[-1], None)
+        validated_data: dict[str, Any],
+        pipeline: IntegrationPipeline,
+        request: HttpRequest,
+    ) -> PipelineStepResult:
+        # Strip trailing slash from URL to avoid invalid URLs downstream
+        validated_data["url"] = validated_data["url"].rstrip("/")
 
-        if not language_parser:
-            return ""
+        pipeline.bind_state("installation_data", validated_data)
 
-        issue_row_template = language_parser.issue_row_template
-
-        issue_rows = "\n".join(
-            [
-                issue_row_template.format(
-                    title=issue.title,
-                    subtitle=self.format_open_pr_comment_subtitle(len(issue.title), issue.subtitle),
-                    url=self.format_comment_url(issue.url, GITLAB_OPEN_PR_BOT_REFERRER),
-                    event_count=small_count(issue.event_count),
-                    function_name=issue.function_name,
-                    affected_users=small_count(issue.affected_users),
-                )
-                for issue in issues
-            ]
-        )
-
-        if toggle:
-            return OPEN_PR_ISSUE_TABLE_TOGGLE_TEMPLATE.format(
-                filename=diff_filename, issue_rows=issue_rows
-            )
-
-        return OPEN_PR_ISSUE_TABLE_TEMPLATE.format(filename=diff_filename, issue_rows=issue_rows)
-
-
-class InstallationForm(forms.Form):
-    url = forms.CharField(
-        label=_("GitLab URL"),
-        help_text=_(
-            "The base URL for your GitLab instance, including the host and protocol. "
-            "Do not include the group path."
-            "<br>"
-            "If using gitlab.com, enter https://gitlab.com/"
-        ),
-        widget=forms.TextInput(attrs={"placeholder": "https://gitlab.example.com"}),
-    )
-    group = forms.CharField(
-        label=_("GitLab Group Path"),
-        help_text=_(
-            "This can be found in the URL of your group's GitLab page."
-            "<br>"
-            "For example, if your group URL is "
-            "https://gitlab.com/my-group/my-subgroup, enter `my-group/my-subgroup`."
-            "<br>"
-            "If you are trying to integrate an entire self-managed GitLab instance, "
-            "leave this empty. Doing so will also allow you to select projects in "
-            "all group and user namespaces (such as users' personal repositories and forks)."
-        ),
-        widget=forms.TextInput(attrs={"placeholder": _("my-group/my-subgroup")}),
-        required=False,
-    )
-    include_subgroups = forms.BooleanField(
-        label=_("Include Subgroups"),
-        help_text=_(
-            "Include projects in subgroups of the GitLab group."
-            "<br>"
-            "Not applicable when integrating an entire GitLab instance. "
-            "All groups are included for instance-level integrations."
-        ),
-        widget=forms.CheckboxInput(),
-        required=False,
-        initial=False,
-    )
-    verify_ssl = forms.BooleanField(
-        label=_("Verify SSL"),
-        help_text=_(
-            "By default, we verify SSL certificates "
-            "when delivering payloads to your GitLab instance, "
-            "and request GitLab to verify SSL when it delivers "
-            "webhooks to Sentry."
-        ),
-        widget=forms.CheckboxInput(),
-        required=False,
-        initial=True,
-    )
-    client_id = forms.CharField(
-        label=_("GitLab Application ID"),
-        widget=forms.TextInput(
-            attrs={
-                "placeholder": _("5832fc6e14300a0d962240a8144466eef4ee93ef0d218477e55f11cf12fc3737")
-            }
-        ),
-    )
-    client_secret = forms.CharField(
-        label=_("GitLab Application Secret"),
-        widget=forms.PasswordInput(attrs={"placeholder": _("***********************")}),
-    )
-
-    def clean_url(self):
-        """Strip off trailing / as they cause invalid URLs downstream"""
-        return self.cleaned_data["url"].rstrip("/")
-
-
-class InstallationConfigView:
-    def dispatch(self, request: HttpRequest, pipeline: IntegrationPipeline) -> HttpResponseBase:
-        if "goback" in request.GET:
-            pipeline.state.step_index = 0
-            return pipeline.current_step()
-
-        if request.method == "POST":
-            form = InstallationForm(request.POST)
-            if form.is_valid():
-                form_data = form.cleaned_data
-
-                pipeline.bind_state("installation_data", form_data)
-
-                pipeline.bind_state(
-                    "oauth_config_information",
-                    {
-                        "access_token_url": "{}/oauth/token".format(form_data.get("url")),
-                        "authorize_url": "{}/oauth/authorize".format(form_data.get("url")),
-                        "client_id": form_data.get("client_id"),
-                        "client_secret": form_data.get("client_secret"),
-                        "verify_ssl": form_data.get("verify_ssl"),
-                    },
-                )
-                pipeline.get_logger().info(
-                    "gitlab.setup.installation-config-view.success",
-                    extra={
-                        "base_url": form_data.get("url"),
-                        "client_id": form_data.get("client_id"),
-                        "verify_ssl": form_data.get("verify_ssl"),
-                    },
-                )
-                return pipeline.next_step()
-        else:
-            form = InstallationForm()
-
-        return render_to_response(
-            template="sentry/integrations/gitlab-config.html",
-            context={"form": form},
-            request=request,
-        )
-
-
-class InstallationGuideView:
-    def dispatch(self, request: HttpRequest, pipeline: IntegrationPipeline) -> HttpResponseBase:
-        if "completed_installation_guide" in request.GET:
-            return pipeline.next_step()
-        return render_to_response(
-            template="sentry/integrations/gitlab-config.html",
-            context={
-                "next_url": f'{absolute_uri("/extensions/gitlab/setup/")}?completed_installation_guide',
-                "setup_values": [
-                    {"label": "Name", "value": "Sentry"},
-                    {"label": "Redirect URI", "value": absolute_uri("/extensions/gitlab/setup/")},
-                    {"label": "Scopes", "value": "api"},
-                ],
+        pipeline.bind_state(
+            "oauth_config_information",
+            {
+                "access_token_url": f"{validated_data['url']}/oauth/token",
+                "authorize_url": f"{validated_data['url']}/oauth/authorize",
+                "client_id": validated_data["client_id"],
+                "client_secret": validated_data["client_secret"],
+                "verify_ssl": validated_data["verify_ssl"],
             },
-            request=request,
         )
+
+        pipeline.get_logger().info(
+            "gitlab.setup.installation-config-api-step.success",
+            extra={
+                "base_url": validated_data["url"],
+                "client_id": validated_data["client_id"],
+                "verify_ssl": validated_data["verify_ssl"],
+            },
+        )
+        return PipelineStepResult.advance()
 
 
 class GitlabIntegrationProvider(IntegrationProvider):
@@ -603,30 +593,6 @@ class GitlabIntegrationProvider(IntegrationProvider):
     )
 
     setup_dialog_config = {"width": 1030, "height": 1000}
-
-    def _make_identity_pipeline_view(self) -> PipelineView[IntegrationPipeline]:
-        """
-        Make the nested identity provider view. It is important that this view is
-        not constructed until we reach this step and the
-        ``oauth_config_information`` is available in the pipeline state. This
-        method should be late bound into the pipeline vies.
-        """
-        oauth_information = self.pipeline.fetch_state("oauth_config_information")
-        if oauth_information is None:
-            raise AssertionError("pipeline called out of order")
-
-        identity_pipeline_config = dict(
-            oauth_scopes=sorted(GitlabIdentityProvider.oauth_scopes),
-            redirect_url=absolute_uri("/extensions/gitlab/setup/"),
-            **oauth_information,
-        )
-
-        return NestedPipelineView(
-            bind_key="identity",
-            provider_key=IntegrationProviderSlug.GITLAB.value,
-            pipeline_cls=IdentityPipeline,
-            config=identity_pipeline_config,
-        )
 
     def get_group_info(self, access_token, installation_data):
         client = GitLabSetupApiClient(
@@ -657,19 +623,32 @@ class GitlabIntegrationProvider(IntegrationProvider):
                 f"The requested GitLab group {requested_group} could not be found."
             )
 
-    def get_pipeline_views(
-        self,
-    ) -> Sequence[
-        PipelineView[IntegrationPipeline] | Callable[[], PipelineView[IntegrationPipeline]]
-    ]:
-        return (
-            InstallationGuideView(),
-            InstallationConfigView(),
-            lambda: self._make_identity_pipeline_view(),
+    def get_pipeline_views(self) -> list:
+        return []
+
+    def _make_oauth_api_step(self) -> OAuth2ApiStep:
+        oauth_info = self.pipeline._fetch_state("oauth_config_information")
+        if oauth_info is None:
+            raise AssertionError("pipeline called out of order")
+        return OAuth2ApiStep(
+            authorize_url=oauth_info["authorize_url"],
+            client_id=oauth_info["client_id"],
+            client_secret=oauth_info["client_secret"],
+            access_token_url=oauth_info["access_token_url"],
+            scope=" ".join(sorted(GitlabIdentityProvider.oauth_scopes)),
+            redirect_url=absolute_uri("/extensions/gitlab/setup/"),
+            verify_ssl=oauth_info.get("verify_ssl", True),
+            bind_key="oauth_data",
         )
 
+    def get_pipeline_api_steps(self) -> ApiPipelineSteps[IntegrationPipeline]:
+        return [
+            InstallationConfigApiStep(),
+            lambda: self._make_oauth_api_step(),
+        ]
+
     def build_integration(self, state: Mapping[str, Any]) -> IntegrationData:
-        data = state["identity"]["data"]
+        data = state["oauth_data"]
 
         # Gitlab requires the client_id and client_secret for refreshing the access tokens
         oauth_config = state.get("oauth_config_information", {})

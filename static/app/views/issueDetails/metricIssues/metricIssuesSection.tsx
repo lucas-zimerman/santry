@@ -1,15 +1,17 @@
-import {LinkButton} from 'sentry/components/core/button/linkButton';
+import {LinkButton} from '@sentry/scraps/button';
+
 import {t} from 'sentry/locale';
 import type {Group} from 'sentry/types/group';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import {useLocation} from 'sentry/utils/useLocation';
-import RelatedIssues from 'sentry/views/alerts/rules/metric/details/relatedIssues';
-import RelatedTransactions from 'sentry/views/alerts/rules/metric/details/relatedTransactions';
+import {RelatedIssues} from 'sentry/views/alerts/rules/metric/details/relatedIssues';
+import {RelatedTransactions} from 'sentry/views/alerts/rules/metric/details/relatedTransactions';
 import {Dataset} from 'sentry/views/alerts/rules/metric/types';
 import {extractEventTypeFilterFromRule} from 'sentry/views/alerts/rules/metric/utils/getEventTypeFilter';
 import {isCrashFreeAlert} from 'sentry/views/alerts/rules/metric/utils/isCrashFreeAlert';
 import {useMetricRule} from 'sentry/views/alerts/rules/metric/utils/useMetricRule';
+import {useOpenPeriods} from 'sentry/views/detectors/hooks/useOpenPeriods';
 import {
   useMetricIssueAlertId,
   useMetricTimePeriod,
@@ -45,7 +47,8 @@ export function MetricIssuesSection({
       enabled: !!ruleId,
     }
   );
-  const timePeriod = useMetricTimePeriod({openPeriod: group.openPeriods?.[0]});
+  const {data: openPeriods} = useOpenPeriods({groupId: group.id});
+  const timePeriod = useMetricTimePeriod({openPeriod: openPeriods?.[0]});
 
   if (!rule || !timePeriod) {
     return null;

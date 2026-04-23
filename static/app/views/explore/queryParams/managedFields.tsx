@@ -1,5 +1,6 @@
 import {defined} from 'sentry/utils';
 import {parseFunction} from 'sentry/utils/discover/fields';
+import {isGroupBy, type GroupBy} from 'sentry/views/explore/queryParams/groupBy';
 import type {ReadableQueryParams} from 'sentry/views/explore/queryParams/readableQueryParams';
 import {
   isBaseVisualize,
@@ -112,7 +113,35 @@ function findAllFieldRefs(
   const readableRefs = new Map();
   const writableRefs = new Map();
 
-  const readableVisualizeFields: string[] =
+  // Group By
+
+  const readableGroupBys = readableQueryParams.groupBys.filter(Boolean);
+
+  readableGroupBys.forEach(groupBy => {
+    const count = readableRefs.get(groupBy) || 0;
+    readableRefs.set(groupBy, count + 1);
+  });
+
+  const writableGroupBys =
+    writableQueryParams.aggregateFields === null
+      ? // null means to clear it so make sure to handle it correctly
+        []
+      : defined(writableQueryParams.aggregateFields)
+        ? writableQueryParams.aggregateFields
+            .filter<GroupBy>(isGroupBy)
+            .map(groupBy => groupBy.groupBy)
+            .filter(Boolean)
+        : // undefined means it's unchanged so use the results from the readableQueryParams
+          readableGroupBys;
+
+  writableGroupBys.forEach(groupBy => {
+    const count = writableRefs.get(groupBy) || 0;
+    writableRefs.set(groupBy, count + 1);
+  });
+
+  // Visualizes
+
+  const readableVisualizeFields =
     readableQueryParams.visualizes.flatMap(getVisualizeFields);
 
   readableVisualizeFields.forEach(field => {
@@ -120,7 +149,7 @@ function findAllFieldRefs(
     readableRefs.set(field, count + 1);
   });
 
-  const writableVisualizeFields: string[] =
+  const writableVisualizeFields =
     writableQueryParams.aggregateFields === null
       ? // null means to clear it so make sure to handle it correctly
         []

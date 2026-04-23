@@ -6,8 +6,13 @@ import type {Key, Node} from '@react-types/shared';
 import type {
   SelectOptionOrSectionWithKey,
   SelectSectionWithKey,
-} from 'sentry/components/core/compactSelect/types';
-import type {ParseResultToken} from 'sentry/components/searchSyntax/parser';
+} from '@sentry/scraps/compactSelect';
+
+import {areWildcardOperatorsAllowed} from 'sentry/components/searchQueryBuilder/tokens/filter/utils';
+import {
+  WildcardOperators,
+  type ParseResultToken,
+} from 'sentry/components/searchSyntax/parser';
 import {defined} from 'sentry/utils';
 import {FieldKind, FieldValueType, type FieldDefinition} from 'sentry/utils/fields';
 
@@ -49,9 +54,8 @@ export function getDefaultValueForValueType(valueType: FieldValueType | null): s
       return 'true';
     case FieldValueType.INTEGER:
     case FieldValueType.NUMBER:
+    case FieldValueType.CURRENCY:
       return '100';
-    case FieldValueType.SMALL_INTEGER:
-      return '1';
     case FieldValueType.DATE:
       return '-24h';
     case FieldValueType.DURATION:
@@ -124,13 +128,17 @@ export function getInitialFilterText(
 
   switch (valueType) {
     case FieldValueType.INTEGER:
-    case FieldValueType.SMALL_INTEGER:
     case FieldValueType.NUMBER:
+    case FieldValueType.CURRENCY:
     case FieldValueType.DURATION:
     case FieldValueType.SIZE:
     case FieldValueType.PERCENTAGE:
       return `${keyText}:>${defaultValue}`;
-    case FieldValueType.STRING:
+    case FieldValueType.STRING: {
+      return areWildcardOperatorsAllowed(fieldDefinition)
+        ? `${keyText}:${WildcardOperators.CONTAINS}${defaultValue}`
+        : `${keyText}:${defaultValue}`;
+    }
     default:
       return `${keyText}:${defaultValue}`;
   }

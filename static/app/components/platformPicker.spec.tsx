@@ -1,8 +1,6 @@
-import {OrganizationFixture} from 'sentry-fixture/organization';
-
 import {render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
-import PlatformPicker from 'sentry/components/platformPicker';
+import {PlatformPicker} from 'sentry/components/platformPicker';
 import {gaming} from 'sentry/data/platformCategories';
 import {trackAnalytics} from 'sentry/utils/analytics';
 
@@ -119,15 +117,8 @@ describe('PlatformPicker', () => {
     expect(screen.getByTestId('platform-other')).toBeInTheDocument();
   });
 
-  it('shows gaming tab and consoles when the feature flag is enabled', async () => {
-    render(
-      <PlatformPicker
-        setPlatform={jest.fn()}
-        organization={OrganizationFixture({
-          features: ['project-creation-games-tab'],
-        })}
-      />
-    );
+  it('shows gaming tab and consoles', async () => {
+    render(<PlatformPicker setPlatform={jest.fn()} />);
 
     await userEvent.click(screen.getByRole('tab', {name: 'Gaming'}));
 
@@ -139,16 +130,6 @@ describe('PlatformPicker', () => {
 
     await userEvent.type(screen.getByPlaceholderText('Filter Platforms'), 'play');
 
-    expect(screen.getByTestId(`platform-playstation`)).toBeInTheDocument();
-  });
-
-  it('does not show gaming tab when feature flag is disabled', async () => {
-    render(<PlatformPicker setPlatform={jest.fn()} />);
-
-    expect(screen.queryByRole('tab', {name: 'Gaming'})).not.toBeInTheDocument();
-
-    await userEvent.type(screen.getByPlaceholderText('Filter Platforms'), 'play');
-
-    expect(screen.queryByTestId(`platform-playstation`)).not.toBeInTheDocument();
+    expect(screen.getByTestId('platform-playstation')).toBeInTheDocument();
   });
 });

@@ -7,7 +7,7 @@ import {getInterval} from 'sentry/components/charts/utils';
 import {wrapQueryInWildcards} from 'sentry/components/performance/searchBar';
 import type {Series, SeriesDataUnit} from 'sentry/types/echarts';
 import type {Project} from 'sentry/types/project';
-import type {AggregationKeyWithAlias, Field, Sort} from 'sentry/utils/discover/fields';
+import type {Field, Sort} from 'sentry/utils/discover/fields';
 import {generateFieldAsString} from 'sentry/utils/discover/fields';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {MutableSearch} from 'sentry/utils/tokenizeSearch';
@@ -28,8 +28,6 @@ import {
   platformToPerformanceType,
   ProjectPerformanceType,
 } from 'sentry/views/performance/utils';
-
-export const DEFAULT_MAX_DURATION = '15min';
 
 export const TRENDS_FUNCTIONS: TrendFunction[] = [
   {
@@ -106,22 +104,22 @@ export const TRENDS_PARAMETERS: TrendParameter[] = [
 export function makeTrendToColorMapping(theme: Theme) {
   return {
     [TrendChangeType.IMPROVED]: {
-      lighter: theme.green200,
-      default: theme.green300,
+      lighter: theme.colors.green200,
+      default: theme.colors.green400,
     },
     [TrendChangeType.REGRESSION]: {
-      lighter: theme.red200,
-      default: theme.red300,
+      lighter: theme.colors.red200,
+      default: theme.colors.red400,
     },
     neutral: {
-      lighter: theme.yellow200,
-      default: theme.yellow300,
+      lighter: theme.colors.yellow200,
+      default: theme.colors.yellow400,
     },
     // TODO remove this once backend starts sending
     // TrendChangeType.IMPROVED as change type
     improvement: {
-      lighter: theme.green200,
-      default: theme.green300,
+      lighter: theme.colors.green200,
+      default: theme.colors.green400,
     },
   };
 }
@@ -197,12 +195,7 @@ function generateTrendFunctionAsString(
 ): string {
   return generateFieldAsString({
     kind: 'function',
-    function: [
-      trendFunction as AggregationKeyWithAlias,
-      trendParameter,
-      undefined,
-      undefined,
-    ],
+    function: [trendFunction, trendParameter, undefined, undefined],
   });
 }
 
@@ -297,7 +290,7 @@ export function normalizeTrends(
       ...row,
       received_at,
       transaction: row.transaction,
-    } as NormalizedTrendsTransaction;
+    };
   });
 }
 
@@ -325,10 +318,6 @@ function getLimitTransactionItems(query: string) {
 
 const smoothTrend = (data: Array<[number, number]>, resolution = 100) => {
   return ASAP(data, resolution);
-};
-
-export const replaceSeriesName = (seriesName: string) => {
-  return ['p50', 'p75'].find(aggregate => seriesName.includes(aggregate));
 };
 
 export function transformEventStatsSmoothed(data?: Series[], seriesName?: string) {

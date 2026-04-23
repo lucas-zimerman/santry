@@ -1,4 +1,5 @@
-import {FeatureBadge} from 'sentry/components/core/badge/featureBadge';
+import {FeatureBadge} from '@sentry/scraps/badge';
+
 import {t} from 'sentry/locale';
 import {hasDynamicSamplingCustomFeature} from 'sentry/utils/dynamicSampling/features';
 import type {NavigationSection} from 'sentry/views/settings/types';
@@ -127,32 +128,17 @@ export function getUserOrgNavigationConfiguration(): NavigationSection[] {
           id: 'audit-log',
         },
         {
-          path: `${organizationSettingsPathPrefix}/rate-limits/`,
-          title: t('Rate Limits'),
-          show: ({features}) => features?.has('legacy-rate-limits') ?? false,
-          description: t('Configure rate limits for all projects in the organization'),
-          id: 'rate-limits',
+          path: `${organizationSettingsPathPrefix}/data-forwarding/`,
+          title: t('Data Forwarding'),
+          description: t('Manage data forwarding across your organization'),
+          id: 'data-forwarding',
+          recordAnalytics: true,
         },
         {
           path: `${organizationSettingsPathPrefix}/relay/`,
           title: t('Relay'),
           description: t('Manage relays connected to the organization'),
           id: 'relay',
-        },
-        {
-          path: `${organizationSettingsPathPrefix}/repos/`,
-          title: t('Repositories'),
-          description: t('Manage repositories connected to the organization'),
-          id: 'repos',
-        },
-        {
-          path: `${organizationSettingsPathPrefix}/integrations/`,
-          title: t('Integrations'),
-          description: t(
-            'Manage organization-level integrations, including: Slack, Github, Bitbucket, Jira, and Azure DevOps'
-          ),
-          id: 'integrations',
-          recordAnalytics: true,
         },
         {
           path: `${organizationSettingsPathPrefix}/early-features/`,
@@ -178,12 +164,53 @@ export function getUserOrgNavigationConfiguration(): NavigationSection[] {
         },
         {
           path: `${organizationSettingsPathPrefix}/seer/`,
-          title: t('Seer Automation'),
+          title: t('Seer'),
           description: t(
             "Manage settings for Seer's automated analysis across your organization"
           ),
-          show: ({organization}) => !!organization && !organization.hideAiFeatures,
           id: 'seer',
+        },
+        {
+          path: `${organizationSettingsPathPrefix}/console-sdk-invites/`,
+          title: t('Console SDK Invites'),
+          description: t('Manage access to our private console SDK repositories'),
+          show: ({organization}) =>
+            !!organization && (organization.enabledConsolePlatforms?.length ?? 0) > 0,
+          id: 'console-sdk-invites',
+        },
+      ],
+    },
+    {
+      id: 'settings-integrations',
+      name: t('Integrations'),
+      items: [
+        {
+          path: `${organizationSettingsPathPrefix}/mcp-cli/`,
+          title: t('MCP & CLI'),
+          description: t('Connect to Sentry via MCP server or the Sentry CLI'),
+          id: 'mcp-cli',
+        },
+        {
+          path: `${organizationSettingsPathPrefix}/integrations/`,
+          title: t('Integrations'),
+          description: t(
+            'Manage organization-level integrations, including: Slack, GitHub, Bitbucket, Jira, and Azure DevOps'
+          ),
+          id: 'integrations',
+          recordAnalytics: true,
+        },
+        {
+          path: `${organizationSettingsPathPrefix}/repos/`,
+          title: t('Repositories'),
+          description: t('Manage repositories connected to the organization'),
+          id: 'repos',
+          recordAnalytics: true,
+        },
+        {
+          path: `${organizationSettingsPathPrefix}/developer-settings/`,
+          title: t('Custom Integrations'),
+          description: t('Manage custom integrations'),
+          id: 'developer-settings',
         },
       ],
     },
@@ -205,14 +232,8 @@ export function getUserOrgNavigationConfiguration(): NavigationSection[] {
           ),
         },
         {
-          path: `${organizationSettingsPathPrefix}/developer-settings/`,
-          title: t('Custom Integrations'),
-          description: t('Manage custom integrations'),
-          id: 'developer-settings',
-        },
-        {
           path: `${userSettingsPathPrefix}/api/applications/`,
-          title: t('Applications'),
+          title: t('OAuth Applications'),
           description: t('Add and configure OAuth2 applications'),
         },
       ],

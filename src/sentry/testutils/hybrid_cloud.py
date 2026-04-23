@@ -16,7 +16,7 @@ from django.db.backends.base.base import BaseDatabaseWrapper
 from sentry.db.postgres.transactions import in_test_transaction_enforcement
 from sentry.deletions.models.scheduleddeletion import (
     BaseScheduledDeletion,
-    get_regional_scheduled_deletion,
+    get_cell_scheduled_deletion,
 )
 from sentry.models.organizationmember import OrganizationMember
 from sentry.models.organizationmembermapping import OrganizationMemberMapping
@@ -27,7 +27,7 @@ from sentry.testutils.silo import assume_test_silo_mode
 class HybridCloudTestMixin:
     @property
     def ScheduledDeletion(self) -> type[BaseScheduledDeletion]:
-        return get_regional_scheduled_deletion(SiloMode.get_current_mode())
+        return get_cell_scheduled_deletion(SiloMode.get_current_mode())
 
     @assume_test_silo_mode(SiloMode.CONTROL)
     def assert_org_member_mapping(self, org_member: OrganizationMember, expected=None):
@@ -118,7 +118,7 @@ class EnforceNoCrossTransactionWrapper:
         # Ideally, restructure transactions that span different databases into separate discrete blocks.
         # It is fine to nest transactions so long as they are operating on the same database.
         # Alternatively, it may be possible you are hitting this due to limitations in the test environment, such as
-        # when celery tasks fire synchronously, or other work is done in a test that would normally be separated by
+        # when tasks fire synchronously, or other work is done in a test that would normally be separated by
         # different connections / processes.  If you believe this is the case, context the #project-hybrid-cloud channel
         # for assistance.
         if len(open_transactions) >= 2:
@@ -266,8 +266,8 @@ def use_split_dbs() -> bool:
 
 
 @contextmanager
-def override_allowed_region_silo_ip_addresses(*allowed_ip_addresses):
-    with patch("sentry.silo.client.get_region_ip_addresses") as mock_get_region_ip_addresses:
+def override_allowed_cell_silo_ip_addresses(*allowed_ip_addresses):
+    with patch("sentry.silo.client.get_cell_ip_addresses") as mock_get_cell_ip_addresses:
         override_value = frozenset(ipaddress.ip_address(str(ip)) for ip in allowed_ip_addresses)
-        mock_get_region_ip_addresses.return_value = override_value
+        mock_get_cell_ip_addresses.return_value = override_value
         yield

@@ -1,24 +1,24 @@
 from datetime import datetime, timedelta
 
 from django.utils import timezone
-from rest_framework.exceptions import ParseError
 from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry import features
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.exceptions import ResourceDoesNotExist
+from sentry.api.helpers.deprecation import deprecated
 from sentry.api.helpers.environments import get_environments
 from sentry.api.helpers.events import get_query_builder_for_group
 from sentry.api.paginator import DateTimePaginator
 from sentry.api.serializers import EventAttachmentSerializer, serialize
 from sentry.api.utils import get_date_range_from_params, handle_query_errors
-from sentry.exceptions import InvalidParams
+from sentry.constants import CELL_API_DEPRECATION_DATE
 from sentry.issues.endpoints.bases.group import GroupEndpoint
 from sentry.models.eventattachment import EventAttachment, event_attachment_screenshot_filter
 from sentry.models.group import Group
-from sentry.search.events.types import ParamsType
+from sentry.search.events.types import SnubaParams
 
 
 def get_event_ids_from_filters(
@@ -44,20 +44,18 @@ def get_event_ids_from_filters(
     if not query and not environments:
         return None
 
-    params: ParamsType = {
-        "project_id": [group.project_id],
-        "organization_id": group.project.organization_id,
-        "start": start if start else default_start,
-        "end": end if end else default_end,
-    }
-
-    if environments:
-        params["environment"] = [env.name for env in environments]
+    snuba_params = SnubaParams(
+        start=start if start else default_start,
+        end=end if end else default_end,
+        environments=environments,
+        projects=[group.project],
+        organization=group.project.organization,
+    )
 
     with handle_query_errors():
         snuba_query = get_query_builder_for_group(
             query=query,
-            snuba_params=params,
+            snuba_params=snuba_params,
             group=group,
             limit=10000,
             offset=0,
@@ -68,12 +66,13 @@ def get_event_ids_from_filters(
     return [evt["id"] for evt in results["data"]]
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class GroupAttachmentsEndpoint(GroupEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PRIVATE,
     }
 
+    @deprecated(CELL_API_DEPRECATION_DATE, url_names=["sentry-api-0-group-attachments"])
     def get(self, request: Request, group) -> Response:
         """
         List Event Attachments
@@ -102,10 +101,7 @@ class GroupAttachmentsEndpoint(GroupEndpoint):
         event_ids = request.GET.getlist("event_id") or None
         screenshot = "screenshot" in request.GET
 
-        try:
-            start, end = get_date_range_from_params(request.GET, optional=True)
-        except InvalidParams as e:
-            raise ParseError(detail=str(e))
+        start, end = get_date_range_from_params(request.GET, optional=True)
 
         if start:
             attachments = attachments.filter(date_added__gte=start)

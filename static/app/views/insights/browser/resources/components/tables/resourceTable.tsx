@@ -1,22 +1,23 @@
 import {Fragment, useEffect} from 'react';
 import {useTheme} from '@emotion/react';
-import styled from '@emotion/styled';
 import {PlatformIcon} from 'platformicons';
 
+import {Flex} from '@sentry/scraps/layout';
+
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
+import {Pagination} from 'sentry/components/pagination';
 import type {GridColumnHeader} from 'sentry/components/tables/gridEditable';
-import GridEditable, {COL_WIDTH_UNDEFINED} from 'sentry/components/tables/gridEditable';
+import {COL_WIDTH_UNDEFINED, GridEditable} from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {IconImage} from 'sentry/icons';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
 import {DismissId, usePageAlert} from 'sentry/utils/performance/contexts/pageAlert';
 import {decodeScalar} from 'sentry/utils/queryString';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useResourcesQuery} from 'sentry/views/insights/browser/common/queries/useResourcesQuery';
 import {
   FONT_FILE_EXTENSIONS,
@@ -31,7 +32,7 @@ import {useResourceModuleFilters} from 'sentry/views/insights/browser/resources/
 import type {ValidSort} from 'sentry/views/insights/browser/resources/utils/useResourceSort';
 import {DurationCell} from 'sentry/views/insights/common/components/tableCells/durationCell';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
-import ResourceSizeCell from 'sentry/views/insights/common/components/tableCells/resourceSizeCell';
+import {ResourceSizeCell} from 'sentry/views/insights/common/components/tableCells/resourceSizeCell';
 import {SpanDescriptionCell} from 'sentry/views/insights/common/components/tableCells/spanDescriptionCell';
 import {ThroughputCell} from 'sentry/views/insights/common/components/tableCells/throughputCell';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
@@ -54,7 +55,7 @@ const {
 const {EPM} = SpanFunction;
 
 const RESOURCE_SIZE_ALERT = t(
-  `If you're noticing unusually large resource sizes, try updating to SDK version 7.82.0 or higher.`
+  "If you're noticing unusually large resource sizes, try updating to SDK version 7.82.0 or higher."
 );
 
 type Row = Pick<
@@ -85,7 +86,7 @@ type Props = {
   defaultResourceTypes?: string[];
 };
 
-function ResourceTable({sort, defaultResourceTypes}: Props) {
+export function ResourceTable({sort, defaultResourceTypes}: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const theme = useTheme();
@@ -141,7 +142,7 @@ function ResourceTable({sort, defaultResourceTypes}: Props) {
     const {key} = col;
 
     if (key === NORMALIZED_DESCRIPTION) {
-      const fileExtension = row[NORMALIZED_DESCRIPTION].split('.').pop() || '';
+      const fileExtension = (row[NORMALIZED_DESCRIPTION] ?? '').split('.').pop() || '';
       const extraLinkQueryParams = {};
       if (filters[SpanFields.USER_GEO_SUBREGION]) {
         // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
@@ -149,17 +150,17 @@ function ResourceTable({sort, defaultResourceTypes}: Props) {
           filters[SpanFields.USER_GEO_SUBREGION];
       }
       return (
-        <DescriptionWrapper>
+        <Flex wrap="wrap" gap="md">
           <ResourceIcon fileExtension={fileExtension} spanOp={row[SPAN_OP]} />
           <SpanDescriptionCell
             moduleName={ModuleName.RESOURCE}
             projectId={row[PROJECT_ID]}
             spanOp={row[SPAN_OP]}
-            description={row[NORMALIZED_DESCRIPTION]}
+            description={row[NORMALIZED_DESCRIPTION] ?? ''}
             group={row[SPAN_GROUP]}
             extraLinkQueryParams={extraLinkQueryParams}
           />
-        </DescriptionWrapper>
+        </Flex>
       );
     }
     if (key === 'epm()') {
@@ -168,11 +169,11 @@ function ResourceTable({sort, defaultResourceTypes}: Props) {
     if (key === 'avg(http.response_content_length)') {
       return <ResourceSizeCell bytes={row[key]} />;
     }
-    if (key === `avg(span.self_time)`) {
+    if (key === 'avg(span.self_time)') {
       return <DurationCell milliseconds={row[key]} />;
     }
     if (key === SPAN_OP) {
-      const fileExtension = row[NORMALIZED_DESCRIPTION].split('.').pop() || '';
+      const fileExtension = (row[NORMALIZED_DESCRIPTION] ?? '').split('.').pop() || '';
       const spanOp = row[key];
       if (fileExtension === 'js' || spanOp === 'resource.script') {
         return <span>{t('JavaScript')}</span>;
@@ -201,13 +202,16 @@ function ResourceTable({sort, defaultResourceTypes}: Props) {
       query: {...query, [QueryParameterNames.SPANS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...columnOrder],
+  });
 
   return (
     <Fragment>
       <GridEditable
         data={data}
         isLoading={isPending}
-        columnOrder={columnOrder}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -222,6 +226,7 @@ function ResourceTable({sort, defaultResourceTypes}: Props) {
               sort,
             }),
           renderBodyCell,
+          onResizeColumn: handleResizeColumn,
         }}
       />
       <Pagination
@@ -256,11 +261,3 @@ function ResourceIcon(props: {fileExtension: string; spanOp: string}) {
   }
   return <PlatformIcon platform="unknown" />;
 }
-
-export default ResourceTable;
-
-const DescriptionWrapper = styled('div')`
-  display: flex;
-  flex-wrap: wrap;
-  gap: ${space(1)};
-`;

@@ -1,8 +1,7 @@
 import {t} from 'sentry/locale';
-import type {Organization} from 'sentry/types/organization';
 import type {PlatformKey} from 'sentry/types/project';
 
-const popularPlatformCategories: Set<PlatformKey> = new Set([
+const popularPlatformCategories = new Set<PlatformKey>([
   'javascript-nextjs',
   'javascript-react',
   'react-native',
@@ -33,7 +32,7 @@ const popularPlatformCategories: Set<PlatformKey> = new Set([
   'javascript-remix',
 ]);
 
-const browser: Set<PlatformKey> = new Set([
+const browser = new Set<PlatformKey>([
   'dart',
   'flutter',
   'javascript',
@@ -57,7 +56,7 @@ const browser: Set<PlatformKey> = new Set([
   'unity',
 ]);
 
-const server: Set<PlatformKey> = new Set([
+const server = new Set<PlatformKey>([
   'bun',
   'dart',
   'deno',
@@ -104,6 +103,7 @@ const server: Set<PlatformKey> = new Set([
   'python-falcon',
   'python-fastapi',
   'python-flask',
+  'python-litestar',
   'python-pyramid',
   'python-quart',
   'python-rq',
@@ -118,7 +118,7 @@ const server: Set<PlatformKey> = new Set([
   'rust',
 ]);
 
-const mobile: Set<PlatformKey> = new Set([
+const mobile = new Set<PlatformKey>([
   'android',
   'apple-ios',
   'capacitor',
@@ -133,7 +133,7 @@ const mobile: Set<PlatformKey> = new Set([
   'unreal',
 ]);
 
-const desktop: Set<PlatformKey> = new Set([
+const desktop = new Set<PlatformKey>([
   'apple-macos',
   'dotnet',
   'dotnet-maui',
@@ -152,7 +152,7 @@ const desktop: Set<PlatformKey> = new Set([
   'unreal',
 ]);
 
-const serverless: Set<PlatformKey> = new Set([
+const serverless = new Set<PlatformKey>([
   'dotnet-awslambda',
   'dotnet-gcpfunctions',
   'node-awslambda',
@@ -165,7 +165,7 @@ const serverless: Set<PlatformKey> = new Set([
   'python-serverless',
 ]);
 
-const gaming: Set<PlatformKey> = new Set([
+const gaming = new Set<PlatformKey>([
   'godot',
   'native',
   'nintendo-switch',
@@ -175,7 +175,7 @@ const gaming: Set<PlatformKey> = new Set([
   'xbox',
 ]);
 
-export const createablePlatforms: Set<PlatformKey> = new Set([
+export const createablePlatforms = new Set<PlatformKey>([
   ...popularPlatformCategories,
   ...browser,
   ...server,
@@ -191,7 +191,7 @@ export const filterAliases: Partial<Record<PlatformKey, string[]>> = {
   native: ['cpp', 'c++'],
 };
 
-const categoryList = [
+export const categoryList = [
   {id: 'popular', name: t('Popular'), platforms: popularPlatformCategories},
   {id: 'browser', name: t('Browser'), platforms: browser},
   {id: 'server', name: t('Server'), platforms: server},
@@ -202,8 +202,6 @@ const categoryList = [
     id: 'gaming',
     name: t('Gaming'),
     platforms: gaming,
-    display: (organization?: Organization) =>
-      organization?.features.includes('project-creation-games-tab') ?? false,
   },
   {
     id: 'all',
@@ -211,7 +209,3 @@ const categoryList = [
     platforms: createablePlatforms,
   },
 ];
-
-export function getCategoryList(organization?: Organization) {
-  return categoryList.filter(({display}) => display?.(organization) ?? true);
-}

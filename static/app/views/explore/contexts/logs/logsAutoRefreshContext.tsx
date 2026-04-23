@@ -1,12 +1,15 @@
 import {useCallback, useRef, useState} from 'react';
+import {useQueryClient} from '@tanstack/react-query';
 import type {Location} from 'history';
 
 import {createDefinedContext} from 'sentry/utils/performance/contexts/utils';
-import {useQueryClient} from 'sentry/utils/queryClient';
 import {decodeInteger, decodeScalar} from 'sentry/utils/queryString';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import {useLogsQueryKeyWithInfinite} from 'sentry/views/explore/logs/useLogsQuery';
+import {
+  useLogsQueryHighFidelity,
+  useLogsQueryKeyWithInfinite,
+} from 'sentry/views/explore/logs/useLogsQuery';
 
 export const LOGS_AUTO_REFRESH_KEY = 'live';
 export const LOGS_REFRESH_INTERVAL_KEY = 'refreshEvery';
@@ -27,6 +30,7 @@ export type AutoRefreshState =
 
 interface LogsAutoRefreshContextValue {
   autoRefresh: AutoRefreshState;
+  hasInitialized: boolean;
   isTableFrozen: boolean | undefined;
   pausedAt: number | undefined;
   refreshInterval: number;
@@ -62,7 +66,7 @@ export function LogsAutoRefreshProvider({
   }
 
   const rawState = decodeScalar(location.query[LOGS_AUTO_REFRESH_KEY]);
-  const autoRefresh: AutoRefreshState =
+  const autoRefresh =
     rawState && allowedStates.includes(rawState as AutoRefreshState)
       ? (rawState as AutoRefreshState)
       : 'idle';
@@ -84,6 +88,7 @@ export function LogsAutoRefreshProvider({
         isTableFrozen,
         pausedAt,
         setPausedAt,
+        hasInitialized: hasInitialized.current,
         ..._testContext,
       }}
     >
@@ -121,9 +126,11 @@ function pausedAtAllowedToContinue(pausedAt: number | undefined) {
 export function useSetLogsAutoRefresh() {
   const location = useLocation();
   const navigate = useNavigate();
+  const highFidelity = useLogsQueryHighFidelity();
   const {queryKey} = useLogsQueryKeyWithInfinite({
     referrer: 'api.explore.logs-table',
     autoRefresh: true,
+    highFidelity,
   });
   const queryClient = useQueryClient();
   const {setPausedAt, pausedAt: currentPausedAt} = useLogsAutoRefresh();

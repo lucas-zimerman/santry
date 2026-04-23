@@ -1,20 +1,24 @@
 import {Fragment, useCallback, useEffect, useMemo} from 'react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 import type {Location} from 'history';
 
+import {Alert} from '@sentry/scraps/alert';
+import {Stack} from '@sentry/scraps/layout';
+import {TabList, Tabs} from '@sentry/scraps/tabs';
+
 import Feature from 'sentry/components/acl/feature';
-import {Alert} from 'sentry/components/core/alert';
-import {TabList, Tabs} from 'sentry/components/core/tabs';
-import type {SmartSearchBarProps} from 'sentry/components/deprecatedSmartSearchBar';
-import FeedbackWidgetButton from 'sentry/components/feedback/widget/feedbackWidgetButton';
+import {FeedbackButton} from 'sentry/components/feedbackButton/feedbackButton';
 import * as Layout from 'sentry/components/layouts/thirds';
-import {DatePageFilter} from 'sentry/components/organizations/datePageFilter';
-import {EnvironmentPageFilter} from 'sentry/components/organizations/environmentPageFilter';
-import PageFilterBar from 'sentry/components/organizations/pageFilterBar';
-import PageFiltersContainer from 'sentry/components/organizations/pageFilters/container';
-import {ProjectPageFilter} from 'sentry/components/organizations/projectPageFilter';
+import {ALL_ACCESS_PROJECTS} from 'sentry/components/pageFilters/constants';
+import {PageFiltersContainer} from 'sentry/components/pageFilters/container';
+import {DatePageFilter} from 'sentry/components/pageFilters/date/datePageFilter';
+import {EnvironmentPageFilter} from 'sentry/components/pageFilters/environment/environmentPageFilter';
+import {PageFilterBar} from 'sentry/components/pageFilters/pageFilterBar';
+import {ProjectPageFilter} from 'sentry/components/pageFilters/project/projectPageFilter';
+import {usePageFilters} from 'sentry/components/pageFilters/usePageFilters';
 import {PageHeadingQuestionTooltip} from 'sentry/components/pageHeadingQuestionTooltip';
-import Pagination from 'sentry/components/pagination';
+import {Pagination} from 'sentry/components/pagination';
 import {TransactionSearchQueryBuilder} from 'sentry/components/performance/transactionSearchQueryBuilder';
 import {
   ContinuousProfilingBetaAlertBanner,
@@ -22,25 +26,27 @@ import {
   ProfilingBetaAlertBanner,
 } from 'sentry/components/profiling/billing/alerts';
 import {ProfileEventsTable} from 'sentry/components/profiling/profileEventsTable';
-import QuestionTooltip from 'sentry/components/questionTooltip';
-import SentryDocumentTitle from 'sentry/components/sentryDocumentTitle';
-import {ALL_ACCESS_PROJECTS} from 'sentry/constants/pageFilters';
+import {QuestionTooltip} from 'sentry/components/questionTooltip';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
+import {DataCategory} from 'sentry/types/core';
 import type {PageFilters} from 'sentry/types/core';
 import type {Project} from 'sentry/types/project';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import {browserHistory} from 'sentry/utils/browserHistory';
-import {useProfileEvents} from 'sentry/utils/profiling/hooks/useProfileEvents';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
+import {useProfileEventsApiOptions} from 'sentry/utils/profiling/hooks/useProfileEvents';
 import {formatError, formatSort} from 'sentry/utils/profiling/hooks/utils';
 import {decodeScalar} from 'sentry/utils/queryString';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
-import useProjects from 'sentry/utils/useProjects';
-import {usePrefersStackedNav} from 'sentry/views/nav/usePrefersStackedNav';
+import {useDatePageFilterProps} from 'sentry/utils/useDatePageFilterProps';
+import {useLocation} from 'sentry/utils/useLocation';
+import {useMaxPickableDays} from 'sentry/utils/useMaxPickableDays';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 import {LandingAggregateFlamegraph} from 'sentry/views/profiling/landingAggregateFlamegraph';
 import {Onboarding} from 'sentry/views/profiling/onboarding';
-import {DEFAULT_PROFILING_DATETIME_SELECTION} from 'sentry/views/profiling/utils';
 
 import {LandingWidgetSelector} from './landing/landingWidgetSelector';
 import type {DataState} from './useLandingAnalytics';
@@ -49,10 +55,6 @@ import {useLandingAnalytics} from './useLandingAnalytics';
 const LEFT_WIDGET_CURSOR = 'leftCursor';
 const RIGHT_WIDGET_CURSOR = 'rightCursor';
 const CURSOR_PARAMS = [LEFT_WIDGET_CURSOR, RIGHT_WIDGET_CURSOR];
-
-interface ProfilingContentProps {
-  location: Location;
-}
 
 function validateTab(tab: unknown): tab is 'flamegraph' | 'transactions' {
   return tab === 'flamegraph' || tab === 'transactions';
@@ -64,10 +66,12 @@ function decodeTab(tab: unknown): 'flamegraph' | 'transactions' {
   return validateTab(tab) ? tab : 'transactions';
 }
 
-export default function ProfilingContent({location}: ProfilingContentProps) {
+export default function ProfilingContent() {
   const {selection} = usePageFilters();
   const organization = useOrganization();
   const {projects} = useProjects();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const dispatchDataState = useLandingAnalytics();
   const updateWidget1DataState = useCallback(
@@ -109,39 +113,53 @@ export default function ProfilingContent({location}: ProfilingContentProps) {
 
   const tab = decodeTab(location.query.tab);
 
-  const onTabChange = useCallback(
-    (newTab: 'flamegraph' | 'transactions') => {
-      // make sure to reset the state of the tabs
-      dispatchDataState({
-        dataKey: 'flamegraphData',
-        dataState: 'pending',
-      });
-      dispatchDataState({
-        dataKey: 'transactionsTableData',
-        dataState: 'pending',
-      });
+  const onTabChange = (newTab: 'flamegraph' | 'transactions') => {
+    // make sure to reset the state of the tabs
+    dispatchDataState({
+      dataKey: 'flamegraphData',
+      dataState: 'pending',
+    });
+    dispatchDataState({
+      dataKey: 'transactionsTableData',
+      dataState: 'pending',
+    });
 
-      trackAnalytics('profiling_views.landing.tab_change', {
-        organization,
+    trackAnalytics('profiling_views.landing.tab_change', {
+      organization,
+      tab: newTab,
+    });
+    navigate({
+      ...location,
+      query: {
+        ...location.query,
         tab: newTab,
-      });
-      browserHistory.push({
-        ...location,
-        query: {
-          ...location.query,
-          tab: newTab,
-        },
-      });
-    },
-    [dispatchDataState, location, organization]
-  );
+      },
+    });
+  };
+
+  const maxPickableDays = useMaxPickableDays({
+    dataCategories: [DataCategory.PROFILE_DURATION, DataCategory.PROFILE_DURATION_UI],
+  });
+  const datePageFilterProps = useDatePageFilterProps(maxPickableDays);
 
   return (
     <SentryDocumentTitle title={t('Profiling')} orgSlug={organization.slug}>
       <PageFiltersContainer
-        defaultSelection={{datetime: DEFAULT_PROFILING_DATETIME_SELECTION}}
+        maxPickableDays={datePageFilterProps.maxPickableDays}
+        defaultSelection={
+          datePageFilterProps.defaultPeriod
+            ? {
+                datetime: {
+                  period: datePageFilterProps.defaultPeriod,
+                  start: null,
+                  end: null,
+                  utc: null,
+                },
+              }
+            : undefined
+        }
       >
-        <Layout.Page>
+        <Stack flex={1}>
           <ProfilingBetaAlertBanner organization={organization} />
           <Feature features="continuous-profiling-beta-ui">
             <ContinuousProfilingBetaAlertBanner organization={organization} />
@@ -149,12 +167,15 @@ export default function ProfilingContent({location}: ProfilingContentProps) {
           </Feature>
           <ProfilingContentPageHeader />
           <LayoutBody>
-            <LayoutMain fullWidth>
+            <LayoutMain width="full">
               <ActionBar>
                 <PageFilterBar condensed>
                   <ProjectPageFilter resetParamsOnChange={CURSOR_PARAMS} />
                   <EnvironmentPageFilter resetParamsOnChange={CURSOR_PARAMS} />
-                  <DatePageFilter resetParamsOnChange={CURSOR_PARAMS} />
+                  <DatePageFilter
+                    {...datePageFilterProps}
+                    resetParamsOnChange={CURSOR_PARAMS}
+                  />
                 </PageFilterBar>
               </ActionBar>
               {showOnboardingPanel ? (
@@ -187,7 +208,7 @@ export default function ProfilingContent({location}: ProfilingContentProps) {
                   )}
                   <div>
                     <Tabs value={tab} onChange={onTabChange}>
-                      <TabList hideBorder>
+                      <TabList>
                         <TabList.Item key="transactions">
                           {t('Transactions')}
                           <StyledQuestionTooltip
@@ -224,7 +245,7 @@ export default function ProfilingContent({location}: ProfilingContentProps) {
               )}
             </LayoutMain>
           </LayoutBody>
-        </Layout.Page>
+        </Stack>
       </PageFiltersContainer>
     </SentryDocumentTitle>
   );
@@ -240,10 +261,11 @@ interface TabbedContentProps extends ProfilingTabProps {
 }
 
 function TransactionsTab({onDataState, location, selection}: TabbedContentProps) {
+  const navigate = useNavigate();
   const query = decodeScalar(location.query.query, '');
-  const handleSearch: SmartSearchBarProps['onSearch'] = useCallback(
+  const handleSearch = useCallback(
     (searchQuery: string) => {
-      browserHistory.push({
+      navigate({
         ...location,
         query: {
           ...location.query,
@@ -252,7 +274,7 @@ function TransactionsTab({onDataState, location, selection}: TabbedContentProps)
         },
       });
     },
-    [location]
+    [location, navigate]
   );
 
   const fields = ALL_FIELDS;
@@ -264,7 +286,7 @@ function TransactionsTab({onDataState, location, selection}: TabbedContentProps)
 
   const cursor = decodeScalar(location.query.cursor);
 
-  const transactions = useProfileEvents<FieldType>({
+  const transactionsOptions = useProfileEventsApiOptions<FieldType>({
     cursor,
     fields,
     query,
@@ -272,11 +294,17 @@ function TransactionsTab({onDataState, location, selection}: TabbedContentProps)
     limit: 50,
     referrer: 'api.profiling.landing-table',
   });
+  const transactions = useQuery({
+    ...transactionsOptions,
+    select: selectJsonWithHeaders,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
 
   const transactionsError =
     transactions.status === 'error' ? formatError(transactions.error) : '';
 
-  const hasData = (transactions.data?.data?.length || 0) > 0;
+  const hasData = (transactions.data?.json?.data?.length || 0) > 0;
   const isLoading = transactions.isPending;
   const isError = transactions.isError;
 
@@ -307,12 +335,12 @@ function TransactionsTab({onDataState, location, selection}: TabbedContentProps)
       </SearchbarContainer>
       {transactionsError && (
         <Alert.Container>
-          <Alert type="error">{transactionsError}</Alert>
+          <Alert variant="danger">{transactionsError}</Alert>
         </Alert.Container>
       )}
       <ProfileEventsTable
         columns={fields.slice()}
-        data={transactions.status === 'success' ? transactions.data : null}
+        data={transactions.status === 'success' ? transactions.data.json : null}
         error={transactions.status === 'error' ? t('Unable to load profiles') : null}
         isLoading={transactions.status === 'pending'}
         sort={sort}
@@ -320,9 +348,7 @@ function TransactionsTab({onDataState, location, selection}: TabbedContentProps)
       />
       <StyledPagination
         pageLinks={
-          transactions.status === 'success'
-            ? (transactions.getResponseHeader?.('Link') ?? null)
-            : null
+          transactions.status === 'success' ? transactions.data.headers.Link : null
         }
       />
     </Fragment>
@@ -355,11 +381,10 @@ function shouldShowProfilingOnboardingPanel(selection: PageFilters, projects: Pr
 }
 
 function ProfilingContentPageHeader() {
-  const prefersStackedNav = usePrefersStackedNav();
-
+  const hasPageFrameFeature = useHasPageFrameFeature();
   return (
-    <StyledLayoutHeader unified={prefersStackedNav}>
-      <StyledHeaderContent unified={prefersStackedNav}>
+    <StyledLayoutHeader unified>
+      <StyledHeaderContent unified>
         <Layout.Title>
           {t('Profiling')}
           <PageHeadingQuestionTooltip
@@ -369,7 +394,18 @@ function ProfilingContentPageHeader() {
             )}
           />
         </Layout.Title>
-        <FeedbackWidgetButton />
+        {hasPageFrameFeature ? (
+          <TopBar.Slot name="feedback">
+            <FeedbackButton
+              aria-label={t('Give Feedback')}
+              tooltipProps={{title: t('Give Feedback')}}
+            >
+              {null}
+            </FeedbackButton>
+          </TopBar.Slot>
+        ) : (
+          <FeedbackButton />
+        )}
       </StyledHeaderContent>
     </StyledLayoutHeader>
   );
@@ -378,7 +414,6 @@ function ProfilingContentPageHeader() {
 const ALL_FIELDS = [
   'transaction',
   'project.id',
-  'last_seen()',
   'p50()',
   'p75()',
   'p95()',
@@ -405,15 +440,15 @@ const LayoutMain = styled(Layout.Main)`
 const LandingAggregateFlamegraphSizer = styled('div')`
   height: 100%;
   min-height: max(80vh, 300px);
-  margin-bottom: ${space(2)};
-  margin-top: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
+  margin-top: ${p => p.theme.space.xl};
 `;
 
 const LandingAggregateFlamegraphContainer = styled('div')`
   height: 100%;
   position: relative;
-  border: 1px solid ${p => p.theme.border};
-  border-radius: ${p => p.theme.borderRadius};
+  border: 1px solid ${p => p.theme.tokens.border.primary};
+  border-radius: ${p => p.theme.radius.md};
 `;
 
 const StyledLayoutHeader = styled(Layout.Header)`
@@ -429,23 +464,23 @@ const StyledHeaderContent = styled(Layout.HeaderContent)`
 
 const ActionBar = styled('div')`
   display: grid;
-  gap: ${space(2)};
+  gap: ${p => p.theme.space.xl};
   grid-template-columns: min-content auto;
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
 `;
 
 const WidgetsContainer = styled('div')`
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: ${space(2)};
+  gap: ${p => p.theme.space.xl};
   @media (max-width: ${p => p.theme.breakpoints.sm}) {
     grid-template-columns: 1fr;
   }
 `;
 
 const SearchbarContainer = styled('div')`
-  margin-top: ${space(3)};
-  margin-bottom: ${space(2)};
+  margin-top: ${p => p.theme.space['2xl']};
+  margin-bottom: ${p => p.theme.space.xl};
 `;
 
 const StyledPagination = styled(Pagination)`
@@ -453,5 +488,5 @@ const StyledPagination = styled(Pagination)`
 `;
 
 const StyledQuestionTooltip = styled(QuestionTooltip)`
-  margin-left: ${space(0.5)};
+  margin-left: ${p => p.theme.space.xs};
 `;

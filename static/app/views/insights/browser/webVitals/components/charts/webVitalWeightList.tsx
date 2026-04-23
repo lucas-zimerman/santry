@@ -1,13 +1,11 @@
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 
-import {ExternalLink} from 'sentry/components/core/link';
-import {t} from 'sentry/locale';
-import {Dot} from 'sentry/views/insights/browser/webVitals/components/webVitalMeters';
-import {MODULE_DOC_LINK} from 'sentry/views/insights/browser/webVitals/settings';
-import type {WebVitals} from 'sentry/views/insights/browser/webVitals/types';
+import {ExternalLink} from '@sentry/scraps/link';
 
-import {ORDER} from './performanceScoreChart';
+import {t} from 'sentry/locale';
+import {MODULE_DOC_LINK} from 'sentry/views/insights/browser/webVitals/settings';
+import {ORDER, type WebVitals} from 'sentry/views/insights/browser/webVitals/types';
 
 interface WebVitalsWeightListProps {
   weights: Record<WebVitals, number>;
@@ -39,7 +37,7 @@ export function WebVitalsWeightList({weights}: WebVitalsWeightListProps) {
 }
 
 const Content = styled('div')`
-  font-size: ${p => p.theme.fontSize.sm};
+  font-size: ${p => p.theme.font.size.sm};
 `;
 
 const List = styled('ul')`
@@ -49,3 +47,12 @@ const List = styled('ul')`
 `;
 
 const ListItem = styled('li')``;
+
+const Dot = styled('span')<{color: string}>`
+  display: inline-block;
+  margin-right: ${p => p.theme.space.md};
+  border-radius: ${p => p.theme.radius.md};
+  width: ${p => p.theme.space.md};
+  height: ${p => p.theme.space.md};
+  background-color: ${p => p.color};
+`;

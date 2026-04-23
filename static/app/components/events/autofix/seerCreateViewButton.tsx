@@ -1,17 +1,19 @@
 import {useMemo} from 'react';
+import {useQuery} from '@tanstack/react-query';
+
+import {Button} from '@sentry/scraps/button';
 
 import {
   addErrorMessage,
   addLoadingMessage,
   addSuccessMessage,
 } from 'sentry/actionCreators/indicator';
-import {Button} from 'sentry/components/core/button';
 import {t} from 'sentry/locale';
 import type {Project} from 'sentry/types/project';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {useCreateGroupSearchView} from 'sentry/views/issueList/mutations/useCreateGroupSearchView';
 import {useUpdateGroupSearchViewStarred} from 'sentry/views/issueList/mutations/useUpdateGroupSearchViewStarred';
-import {useFetchGroupSearchViews} from 'sentry/views/issueList/queries/useFetchGroupSearchViews';
+import {groupSearchViewsApiOptions} from 'sentry/views/issueList/queries/useFetchGroupSearchViews';
 import {
   GroupSearchViewCreatedBy,
   type GroupSearchView,
@@ -23,7 +25,24 @@ interface StarFixabilityViewButtonProps {
   project: Project;
 }
 
-function StarFixabilityViewButton({isCompleted, project}: StarFixabilityViewButtonProps) {
+const TARGET_VIEW_PROPERTIES = {
+  name: 'Easy Fixes 🤖',
+  query: 'is:unresolved issue.seer_actionability:[high,super_high]',
+  querySort: IssueSortOptions.DATE,
+  projects: [],
+  environments: [],
+  timeFilters: {
+    start: null,
+    end: null,
+    period: '7d',
+    utc: null,
+  },
+};
+
+export function StarFixabilityViewButton({
+  isCompleted,
+  project,
+}: StarFixabilityViewButtonProps) {
   const organization = useOrganization();
 
   const {mutate: createIssueView} = useCreateGroupSearchView({
@@ -51,49 +70,33 @@ function StarFixabilityViewButton({isCompleted, project}: StarFixabilityViewButt
   });
 
   // Fetch all views to check for existing ones with our target name
-  const {data: othersViews = []} = useFetchGroupSearchViews({
-    orgSlug: organization.slug,
-    limit: 20,
-    query: 'Easy Fixes 🤖', // Search by name
-    sort: ['-popularity'],
-    createdBy: GroupSearchViewCreatedBy.OTHERS,
-  });
+  const {data: othersViews = []} = useQuery(
+    groupSearchViewsApiOptions({
+      orgSlug: organization.slug,
+      limit: 20,
+      query: 'Easy Fixes 🤖', // Search by name
+      sort: ['-popularity'],
+      createdBy: GroupSearchViewCreatedBy.OTHERS,
+    })
+  );
 
-  const {data: myViews = []} = useFetchGroupSearchViews({
-    orgSlug: organization.slug,
-    limit: 20,
-    query: 'Easy Fixes 🤖', // Search by name
-    sort: ['-popularity'],
-    createdBy: GroupSearchViewCreatedBy.ME,
-  });
+  const {data: myViews = []} = useQuery(
+    groupSearchViewsApiOptions({
+      orgSlug: organization.slug,
+      limit: 20,
+      query: 'Easy Fixes 🤖', // Search by name
+      sort: ['-popularity'],
+      createdBy: GroupSearchViewCreatedBy.ME,
+    })
+  );
 
   const allViews = useMemo(() => [...othersViews, ...myViews], [othersViews, myViews]);
-
-  // Define the properties of the view we want to create/find
-  const targetViewProperties = useMemo(
-    () => ({
-      name: 'Easy Fixes 🤖',
-      query: 'is:unresolved issue.seer_actionability:[high,super_high]',
-      querySort: IssueSortOptions.DATE,
-      projects: organization.features.includes('global-views')
-        ? []
-        : [Number(project.id)],
-      environments: [],
-      timeFilters: {
-        start: null,
-        end: null,
-        period: '7d',
-        utc: null,
-      },
-    }),
-    [organization.features, project.id]
-  );
 
   // Check if an existing view matches our criteria
   const existingMatchingView = useMemo(() => {
     return allViews.find((view: GroupSearchView) => {
       // Must have exact name match
-      if (view.name !== targetViewProperties.name) {
+      if (view.name !== TARGET_VIEW_PROPERTIES.name) {
         return false;
       }
 
@@ -117,7 +120,7 @@ function StarFixabilityViewButton({isCompleted, project}: StarFixabilityViewButt
 
       return true;
     });
-  }, [allViews, targetViewProperties, project.id]);
+  }, [allViews, project.id]);
 
   const handleStarFixabilityView = () => {
     if (existingMatchingView) {
@@ -129,22 +132,8 @@ function StarFixabilityViewButton({isCompleted, project}: StarFixabilityViewButt
       });
     } else {
       // Create a new view
-      let projects: number[] = [];
-      if (!organization.features.includes('global-views')) {
-        projects = [Number(project.id)];
-      }
       createIssueView({
-        name: 'Easy Fixes 🤖',
-        query: 'is:unresolved issue.seer_actionability:[high,super_high]',
-        querySort: IssueSortOptions.DATE,
-        projects,
-        environments: [],
-        timeFilters: {
-          start: null,
-          end: null,
-          period: '7d',
-          utc: null,
-        },
+        ...TARGET_VIEW_PROPERTIES,
         starred: true,
       });
     }
@@ -162,5 +151,3 @@ function StarFixabilityViewButton({isCompleted, project}: StarFixabilityViewButt
     </Button>
   );
 }
-
-export default StarFixabilityViewButton;

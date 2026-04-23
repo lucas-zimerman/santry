@@ -7,18 +7,19 @@ from rest_framework.response import Response
 
 from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.organization import (
     OrganizationEndpoint,
     OrganizationIntegrationsLoosePermission,
 )
 from sentry.api.serializers import serialize
+from sentry.integrations.source_code_management.repository import RepositoryIntegration
 from sentry.issues.auto_source_code_config.code_mapping import create_code_mapping
 from sentry.issues.auto_source_code_config.derived_code_mappings_endpoint import (
     get_code_mapping_from_request,
     get_file_and_repo_matches,
 )
-from sentry.issues.auto_source_code_config.errors import NeedsExtension
+from sentry.issues.auto_source_code_config.errors import NeedsExtension, UnsupportedFrameInfo
 from sentry.issues.auto_source_code_config.integration_utils import (
     InstallationCannotGetTreesError,
     InstallationNotFoundError,
@@ -30,7 +31,7 @@ from sentry.models.project import Project
 logger = logging.getLogger(__name__)
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class OrganizationDeriveCodeMappingsEndpoint(OrganizationEndpoint):
     """
     In the UI, we have a prompt to derive code mappings from the stacktrace filename.
@@ -83,6 +84,10 @@ class OrganizationDeriveCodeMappingsEndpoint(OrganizationEndpoint):
             return self.respond(
                 {"text": "Missing required parameters"}, status=status.HTTP_400_BAD_REQUEST
             )
+        except UnsupportedFrameInfo:
+            return self.respond(
+                {"text": "Unsupported frame info"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
     def post(self, request: Request, organization: Organization) -> Response:
         """
@@ -98,8 +103,10 @@ class OrganizationDeriveCodeMappingsEndpoint(OrganizationEndpoint):
         :auth: required
         """
         try:
-            project = Project.objects.get(id=request.data.get("projectId"))
-        except Project.DoesNotExist:
+            project = Project.objects.get(
+                id=request.data["projectId"], organization_id=organization.id
+            )
+        except (Project.DoesNotExist, KeyError):
             return self.respond(
                 {"text": "Could not find project"}, status=status.HTTP_404_NOT_FOUND
             )
@@ -113,8 +120,11 @@ class OrganizationDeriveCodeMappingsEndpoint(OrganizationEndpoint):
             if not installation.org_integration:
                 raise InstallationNotFoundError
 
-            code_mapping = get_code_mapping_from_request(request)
+            assert isinstance(installation, RepositoryIntegration)
+            code_mapping = get_code_mapping_from_request(request, installation)
             new_code_mapping = create_code_mapping(organization, code_mapping, project)
+        except ValueError as e:
+            return self.respond({"text": str(e)}, status=status.HTTP_404_NOT_FOUND)
         except KeyError:
             return self.respond(
                 {"text": "Missing required parameters"}, status=status.HTTP_400_BAD_REQUEST

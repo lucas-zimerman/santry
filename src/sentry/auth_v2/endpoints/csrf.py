@@ -1,8 +1,12 @@
+from typing import Any
+
 from django.middleware.csrf import rotate_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
+from rest_framework.request import Request
+from rest_framework.response import Response
 
 from sentry import analytics
 from sentry.analytics.events.auth_v2 import AuthV2CsrfTokenRotated
@@ -10,6 +14,7 @@ from sentry.api.api_owners import ApiOwner
 from sentry.api.api_publish_status import ApiPublishStatus
 from sentry.api.base import Endpoint, control_silo_endpoint
 from sentry.auth_v2.utils.session import SessionSerializer
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
@@ -27,16 +32,18 @@ class CsrfTokenEndpoint(Endpoint):
     permission_classes = ()
 
     enforce_rate_limit = True
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.USER: RateLimit(limit=10, window=60),  # 10 per minute per user
-            RateLimitCategory.IP: RateLimit(limit=20, window=60),  # 20 per minute per IP
-        },
-        "PUT": {
-            RateLimitCategory.USER: RateLimit(limit=10, window=60),  # 10 per minute per user
-            RateLimitCategory.IP: RateLimit(limit=20, window=60),  # 20 per minute per IP
-        },
-    }
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.USER: RateLimit(limit=10, window=60),  # 10 per minute per user
+                RateLimitCategory.IP: RateLimit(limit=20, window=60),  # 20 per minute per IP
+            },
+            "PUT": {
+                RateLimitCategory.USER: RateLimit(limit=10, window=60),  # 10 per minute per user
+                RateLimitCategory.IP: RateLimit(limit=20, window=60),  # 20 per minute per IP
+            },
+        }
+    )
 
     @extend_schema(
         operation_id="Retrieve the CSRF token in your session",
@@ -47,7 +54,7 @@ class CsrfTokenEndpoint(Endpoint):
         },
     )
     @method_decorator(ensure_csrf_cookie)
-    def get(self, request, *args, **kwargs):
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         return self.respond(
             {
                 "detail": "Set CSRF cookie",
@@ -65,7 +72,7 @@ class CsrfTokenEndpoint(Endpoint):
         },
     )
     @method_decorator(ensure_csrf_cookie)
-    def put(self, request, *args, **kwargs):
+    def put(self, request: Request, *args: Any, **kwargs: Any) -> Response:
         rotate_token(request)
         if referrer := request.GET.get("referrer"):
             analytics.record(

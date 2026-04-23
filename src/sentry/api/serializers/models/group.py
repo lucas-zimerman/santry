@@ -13,9 +13,9 @@ from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
 from django.db.models import Min, prefetch_related_objects
 
-from sentry import features, tagstore
+from sentry import tagstore
 from sentry.api.serializers import Serializer, register, serialize
-from sentry.api.serializers.models.actor import ActorSerializer
+from sentry.api.serializers.models.actor import ActorSerializer, ActorSerializerResponse
 from sentry.api.serializers.models.plugin import is_plugin_deprecated
 from sentry.constants import LOG_LEVELS
 from sentry.integrations.mixins.issues import IssueBasicIntegration
@@ -127,13 +127,14 @@ class BaseGroupSerializerResponse(BaseGroupResponseOptional):
     priorityLockedAt: datetime | None
     seerFixabilityScore: float | None
     seerAutofixLastTriggered: datetime | None
+    seerExplorerAutofixLastTriggered: datetime | None
     project: GroupProjectResponse
     type: str
     issueType: str
     issueCategory: str
     metadata: dict[str, Any]
     numComments: int
-    assignedTo: UserSerializerResponse
+    assignedTo: ActorSerializerResponse
     isBookmarked: bool
     isSubscribed: bool
     subscriptionDetails: SubscriptionDetails | None
@@ -170,13 +171,8 @@ def _make_group_project_response(project: Project) -> GroupProjectResponse:
 
 
 def _get_status_label(group: Group):
-    status = group.status
+    status = group.get_status()
 
-    if status == GroupStatus.UNRESOLVED and group.is_over_resolve_age():
-        # When an issue is over the auto-resolve age but the task has not yet run
-        # Only show as auto-resolved if this group type has auto-resolve enabled
-        if group.issue_type.enable_auto_resolve:
-            status = GroupStatus.RESOLVED
     if status == GroupStatus.RESOLVED:
         status_label = "resolved"
     elif status == GroupStatus.IGNORED:
@@ -367,11 +363,8 @@ class GroupSerializerBase(Serializer, ABC):
         is_subscribed, subscription_details = get_subscription_from_attributes(attrs)
         share_id = attrs["share_id"]
         priority_label = PriorityLevel(obj.priority).to_str() if obj.priority else None
-        issue_category = (
-            obj.issue_category_v2.name.lower()
-            if features.has("organizations:issue-taxonomy", obj.project.organization, actor=user)
-            else obj.issue_category.name.lower()
-        )
+        issue_category = obj.issue_category_v2.name.lower()
+
         group_dict: BaseGroupSerializerResponse = {
             "id": str(obj.id),
             "shareId": share_id,
@@ -402,6 +395,7 @@ class GroupSerializerBase(Serializer, ABC):
             "priorityLockedAt": obj.priority_locked_at,
             "seerFixabilityScore": obj.seer_fixability_score,
             "seerAutofixLastTriggered": obj.seer_autofix_last_triggered,
+            "seerExplorerAutofixLastTriggered": obj.seer_explorer_autofix_last_triggered,
         }
 
         # This attribute is currently feature gated
@@ -463,7 +457,10 @@ class GroupSerializerBase(Serializer, ABC):
                 )
             else:
                 status = GroupStatus.UNRESOLVED
-        if status == GroupStatus.UNRESOLVED and obj.is_over_resolve_age():
+        # If the issue is UNRESOLVED but has resolved_at set, it means the user manually
+        # unresolved it after it was resolved. We should respect that and not override
+        # the status back to RESOLVED.
+        if status == GroupStatus.UNRESOLVED and obj.is_over_resolve_age() and not obj.resolved_at:
             # When an issue is over the auto-resolve age but the task has not yet run
             # Only show as auto-resolved if this group type has auto-resolve enabled
             if obj.issue_type.enable_auto_resolve:
@@ -681,7 +678,8 @@ class GroupSerializerBase(Serializer, ABC):
             )
         )
         _commit_resolutions = {
-            i.group_id: d for i, d in zip(commit_results, serialize(commit_results, user))  # type: ignore[attr-defined]  # django-stubs
+            i.group_id: d  # type: ignore[attr-defined]  # django-stubs
+            for i, d in zip(commit_results, serialize(commit_results, user))
         }
 
         return _release_resolutions, _commit_resolutions
@@ -1187,11 +1185,7 @@ class SimpleGroupSerializer(Serializer):
         user: User | RpcUser | AnonymousUser,
         **kwargs: Any,
     ) -> SimpleGroupSerializerResponse:
-        issue_category = (
-            obj.issue_category_v2.name.lower()
-            if features.has("organizations:issue-taxonomy", obj.project.organization, actor=user)
-            else obj.issue_category.name.lower()
-        )
+        issue_category = obj.issue_category_v2.name.lower()
 
         return SimpleGroupSerializerResponse(
             id=str(obj.id),

@@ -2,31 +2,29 @@ import type {ReactNode} from 'react';
 import {useState} from 'react';
 import styled from '@emotion/styled';
 
-import Accordion from 'sentry/components/container/accordion';
-import {Flex} from 'sentry/components/core/layout';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import Placeholder from 'sentry/components/placeholder';
-import QuestionTooltip from 'sentry/components/questionTooltip';
-import TextOverflow from 'sentry/components/textOverflow';
+import {Flex, type FlexProps} from '@sentry/scraps/layout';
+
+import {Accordion} from 'sentry/components/container/accordion';
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
+import {Placeholder} from 'sentry/components/placeholder';
+import {QuestionTooltip} from 'sentry/components/questionTooltip';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {IconCursorArrow, IconSearch} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import useDeadRageSelectors from 'sentry/utils/replays/hooks/useDeadRageSelectors';
-import type {ColorOrAlias} from 'sentry/utils/theme';
+import {useDeadRageSelectors} from 'sentry/utils/replays/hooks/useDeadRageSelectors';
 import {useLocation} from 'sentry/utils/useLocation';
 import {
-  ContentContainer,
   HeaderContainer,
   HeaderTitleLegend,
   Subtitle,
   WidgetContainer,
 } from 'sentry/views/profiling/landing/styles';
-import ExampleReplaysList from 'sentry/views/replays/selectors/exampleReplaysList';
-import ProjectInfo from 'sentry/views/replays/selectors/projectInfo';
+import {ExampleReplaysList} from 'sentry/views/replays/selectors/exampleReplaysList';
+import {ProjectInfo} from 'sentry/views/replays/selectors/projectInfo';
 import {SelectorLink} from 'sentry/views/replays/selectors/selectorLink';
 import {transformSelectorQuery} from 'sentry/views/replays/selectors/utils';
 
-export default function DeadRageSelectorCards() {
+export function DeadRageSelectorCards() {
   return (
     <SplitCardContainer>
       <AccordionWidget
@@ -34,7 +32,7 @@ export default function DeadRageSelectorCards() {
         header={
           <div>
             <StyledWidgetHeader>
-              <TitleTooltipContainer>
+              <Flex align="center" gap="md">
                 {t('Most Dead Clicks')}
                 <QuestionTooltip
                   size="xs"
@@ -44,7 +42,7 @@ export default function DeadRageSelectorCards() {
                   )}
                   isHoverable
                 />
-              </TitleTooltipContainer>
+              </Flex>
             </StyledWidgetHeader>
             <Subtitle>{t('Suggested replays to watch')}</Subtitle>
           </div>
@@ -56,7 +54,7 @@ export default function DeadRageSelectorCards() {
         header={
           <div>
             <StyledWidgetHeader>
-              <TitleTooltipContainer>
+              <Flex align="center" gap="md">
                 {t('Most Rage Clicks')}
                 <QuestionTooltip
                   size="xs"
@@ -66,7 +64,7 @@ export default function DeadRageSelectorCards() {
                   )}
                   isHoverable
                 />
-              </TitleTooltipContainer>
+              </Flex>
             </StyledWidgetHeader>
             <Subtitle>{t('Suggested replays to watch')}</Subtitle>
           </div>
@@ -86,6 +84,7 @@ function AccordionWidget({
   deadOrRage: 'dead' | 'rage';
   header: ReactNode;
 }) {
+  const clickVariant = deadOrRage === 'dead' ? 'warning' : 'danger';
   const [selectedListIndex, setSelectListIndex] = useState(-1);
   const {isLoading, isError, data} = useDeadRageSelectors({
     per_page: 3,
@@ -96,12 +95,11 @@ function AccordionWidget({
   });
   const location = useLocation();
   const filteredData = data.filter(d => (d[clickType] ?? 0) > 0);
-  const clickColor = deadOrRage === 'dead' ? 'yellow300' : 'red300';
 
   return (
     <StyledWidgetContainer data-test-id="selector-widget">
       <StyledHeaderContainer>
-        <IconCursorArrow color={clickColor} />
+        <IconCursorArrow variant={clickVariant} />
         {header}
       </StyledHeaderContainer>
       {isLoading ? (
@@ -111,7 +109,7 @@ function AccordionWidget({
           <StyledPlaceholder />
         </LoadingContainer>
       ) : isError || (!isLoading && filteredData.length === 0) ? (
-        <CenteredContentContainer>
+        <Flex flex="1 1 auto" direction="column" justify="center">
           <StyledEmptyStateWarning withIcon={false}>
             <EmptyHeader>
               <IconSearch size="sm" />
@@ -124,9 +122,9 @@ function AccordionWidget({
               )}
             </EmptySubtitle>
           </StyledEmptyStateWarning>
-        </CenteredContentContainer>
+        </Flex>
       ) : (
-        <LeftAlignedContentContainer>
+        <Flex flex="1 1 auto" direction="column" justify="start">
           <Accordion
             collapsible
             expandedIndex={selectedListIndex}
@@ -140,7 +138,7 @@ function AccordionWidget({
                   <AccordionItemHeader
                     count={d[clickType] ?? 0}
                     selector={d.dom_element.selector}
-                    clickColor={clickColor}
+                    clickVariant={clickVariant}
                     selectorQuery={selectorQuery}
                     id={d.project_id}
                   />
@@ -156,7 +154,7 @@ function AccordionWidget({
               };
             })}
           />
-        </LeftAlignedContentContainer>
+        </Flex>
       )}
     </StyledWidgetContainer>
   );
@@ -164,12 +162,12 @@ function AccordionWidget({
 
 function AccordionItemHeader({
   count,
-  clickColor,
+  clickVariant,
   selector,
   selectorQuery,
   id,
 }: {
-  clickColor: ColorOrAlias;
+  clickVariant: 'warning' | 'danger';
   count: number;
   id: number;
   selector: string;
@@ -177,7 +175,7 @@ function AccordionItemHeader({
 }) {
   const clickCount = (
     <ClickCount>
-      <IconCursorArrow size="xs" color={clickColor} />
+      <IconCursorArrow size="xs" variant={clickVariant} />
       {count}
     </ClickCount>
   );
@@ -201,15 +199,15 @@ const SplitCardContainer = styled('div')`
   grid-template-columns: 1fr 1fr;
   grid-template-rows: max-content;
   grid-auto-flow: column;
-  gap: 0 ${space(2)};
+  gap: 0 ${p => p.theme.space.xl};
   align-items: stretch;
 `;
 
 const ClickCount = styled(TextOverflow)`
-  color: ${p => p.theme.gray400};
+  color: ${p => p.theme.colors.gray500};
   display: grid;
   grid-template-columns: auto auto;
-  gap: ${space(0.75)};
+  gap: ${p => p.theme.space.sm};
   align-items: center;
 `;
 
@@ -220,25 +218,11 @@ const StyledHeaderContainer = styled(HeaderContainer)`
   grid-template-columns: 30px auto;
 `;
 
-const LeftAlignedContentContainer = styled(ContentContainer)`
-  justify-content: flex-start;
-`;
-
-const CenteredContentContainer = styled(ContentContainer)`
-  justify-content: center;
-`;
-
 const StyledAccordionHeader = styled('div')`
   display: grid;
   grid-template-columns: 1fr max-content;
   flex: 1;
-  padding: ${space(0.25)};
-  align-items: center;
-`;
-
-const TitleTooltipContainer = styled('div')`
-  display: flex;
-  gap: ${space(1)};
+  padding: ${p => p.theme.space['2xs']};
   align-items: center;
 `;
 
@@ -250,7 +234,7 @@ const StyledWidgetHeader = styled(HeaderTitleLegend)`
 
 const StyledWidgetContainer = styled(WidgetContainer)`
   margin-bottom: 0;
-  padding-top: ${space(1.5)};
+  padding-top: ${p => p.theme.space.lg};
 `;
 
 export const RightAlignedCell = styled('div')`
@@ -258,20 +242,21 @@ export const RightAlignedCell = styled('div')`
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: ${space(1)};
-  padding-left: ${space(1)};
+  gap: ${p => p.theme.space.md};
+  padding-left: ${p => p.theme.space.md};
 `;
 
 const EmptySubtitle = styled('div')`
-  font-size: ${p => p.theme.fontSize.md};
+  font-size: ${p => p.theme.font.size.md};
   line-height: 1.6em;
-  padding-left: ${space(1)};
-  padding-right: ${space(1)};
+  padding-left: ${p => p.theme.space.md};
+  padding-right: ${p => p.theme.space.md};
 `;
 
-const LoadingContainer = styled(ContentContainer)`
-  gap: ${space(0.25)};
-  padding: ${space(1)} ${space(0.5)} 3px ${space(0.5)};
+const LoadingContainer = styled((props: FlexProps) => (
+  <Flex gap="2xs" flex="1 1 auto" direction="column" justify="start" {...props} />
+))`
+  padding: ${p => p.theme.space.md} ${p => p.theme.space.xs} 3px ${p => p.theme.space.xs};
 `;
 
 const StyledPlaceholder = styled(Placeholder)`
@@ -281,8 +266,8 @@ const StyledPlaceholder = styled(Placeholder)`
 const EmptyHeader = styled(Flex)`
   justify-content: center;
   align-items: center;
-  gap: ${space(1.5)};
-  color: ${p => p.theme.subText};
+  gap: ${p => p.theme.space.lg};
+  color: ${p => p.theme.tokens.content.secondary};
 `;
 
 const StyledEmptyStateWarning = styled(EmptyStateWarning)`

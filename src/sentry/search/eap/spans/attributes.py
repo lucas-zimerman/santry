@@ -10,12 +10,10 @@ from sentry.search.eap import constants
 from sentry.search.eap.columns import (
     ResolvedAttribute,
     VirtualColumnDefinition,
-    project_context_constructor,
-    project_term_resolver,
     simple_measurements_field,
     simple_sentry_field,
 )
-from sentry.search.eap.common_columns import COMMON_COLUMNS
+from sentry.search.eap.common_columns import COMMON_COLUMNS, project_virtual_contexts
 from sentry.search.eap.spans.sentry_conventions import SENTRY_CONVENTIONS_DIRECTORY
 from sentry.search.events.constants import (
     PRECISE_FINISH_TS,
@@ -25,7 +23,12 @@ from sentry.search.events.constants import (
 from sentry.search.events.types import SnubaParams
 from sentry.search.utils import DEVICE_CLASS
 from sentry.utils import json
-from sentry.utils.validators import is_empty_string, is_event_id_or_list, is_span_id
+from sentry.utils.validators import (
+    is_empty_string,
+    is_event_id_or_list,
+    is_span_id,
+    is_span_id_or_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +43,7 @@ SPAN_ATTRIBUTE_DEFINITIONS = {
             public_alias="id",
             internal_name="sentry.item_id",
             search_type="string",
-            validator=is_span_id,
+            validator=is_span_id_or_list,
         ),
         ResolvedAttribute(
             public_alias="parent_span",
@@ -264,6 +267,11 @@ SPAN_ATTRIBUTE_DEFINITIONS = {
             search_type="byte",
         ),
         ResolvedAttribute(
+            public_alias="http.response_status_code",
+            internal_name="http.response.status_code",
+            search_type="integer",
+        ),
+        ResolvedAttribute(
             public_alias="sampling_rate",
             internal_name="sentry.sampling_factor",
             search_type="percentage",
@@ -422,6 +430,7 @@ SPAN_ATTRIBUTE_DEFINITIONS = {
         simple_sentry_field("messaging.destination.name"),
         simple_sentry_field("messaging.message.id"),
         simple_sentry_field("platform"),
+        simple_sentry_field("previous_trace"),
         simple_sentry_field("raw_domain"),
         simple_sentry_field("release"),
         simple_sentry_field("sdk.name"),
@@ -436,7 +445,10 @@ SPAN_ATTRIBUTE_DEFINITIONS = {
         simple_sentry_field("transaction.op"),
         simple_sentry_field("user"),
         simple_sentry_field("user.email"),
+        simple_sentry_field("user.geo.city"),
         simple_sentry_field("user.geo.country_code"),
+        simple_sentry_field("user.geo.region"),
+        simple_sentry_field("user.geo.subdivision"),
         simple_sentry_field("user.geo.subregion"),
         simple_sentry_field("user.id"),
         simple_sentry_field("user.ip"),
@@ -539,7 +551,7 @@ except Exception as e:
     logger.exception("Failed to update attribute definitions: %s", e)
 
 
-def device_class_context_constructor(params: SnubaParams) -> VirtualColumnContext:
+def device_class_context_constructor(params: SnubaParams, _resolver: Any) -> VirtualColumnContext:
     # EAP defaults to lower case `unknown`, but in querybuilder we used `Unknown`
     value_map = {"": "Unknown"}
     for device_class, values in DEVICE_CLASS.items():
@@ -549,10 +561,11 @@ def device_class_context_constructor(params: SnubaParams) -> VirtualColumnContex
         from_column_name="sentry.device.class",
         to_column_name="device.class",
         value_map=value_map,
+        default_value="Unknown",
     )
 
 
-def module_context_constructor(params: SnubaParams) -> VirtualColumnContext:
+def module_context_constructor(params: SnubaParams, _resolver: Any) -> VirtualColumnContext:
     value_map = {key: key for key in SPAN_MODULE_CATEGORY_VALUES}
     return VirtualColumnContext(
         from_column_name="sentry.category",
@@ -561,7 +574,9 @@ def module_context_constructor(params: SnubaParams) -> VirtualColumnContext:
     )
 
 
-def is_starred_segment_context_constructor(params: SnubaParams) -> VirtualColumnContext:
+def is_starred_segment_context_constructor(
+    params: SnubaParams, _resolver: Any
+) -> VirtualColumnContext:
     if params.user is None or params.organization_id is None:
         raise ValueError("User and organization is required for is_starred_transaction")
 
@@ -581,7 +596,9 @@ def is_starred_segment_context_constructor(params: SnubaParams) -> VirtualColumn
     )
 
 
-SPANS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS: dict[Literal["string", "number"], dict[str, str]] = {
+SPANS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS: dict[
+    Literal["string", "number", "boolean"], dict[str, str]
+] = {
     "string": {
         definition.internal_name: definition.public_alias
         for definition in SPAN_ATTRIBUTE_DEFINITIONS.values()
@@ -597,9 +614,15 @@ SPANS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS: dict[Literal["string", "number"], dict[
         "sentry.span_id": "id",
         "sentry.segment_name": "transaction",
     },
+    "boolean": {
+        definition.internal_name: definition.public_alias
+        for definition in SPAN_ATTRIBUTE_DEFINITIONS.values()
+        if not definition.secondary_alias and definition.search_type == "boolean"
+    },
     "number": {
         definition.internal_name: definition.public_alias
         for definition in SPAN_ATTRIBUTE_DEFINITIONS.values()
+        # Include boolean attributes because they're stored as numbers (0 or 1)
         if not definition.secondary_alias and definition.search_type != "string"
     }
     | {
@@ -629,6 +652,28 @@ SPANS_REPLACEMENT_MAP: dict[str, str] = {
     if definition.replacement
 }
 
+# Attributes excluded from stats queries (e.g., attribute distributions)
+# These are typically system-level identifiers that don't provide useful distribution insights
+SPANS_STATS_EXCLUDED_ATTRIBUTES: set[str] = {
+    "sentry.item_id",
+    "sentry.trace_id",
+    "sentry.segment_id",
+    "sentry.parent_span_id",
+    "sentry.profile_id",
+    "sentry.event_id",
+    "sentry.group",
+}
+
+SPANS_STATS_EXCLUDED_ATTRIBUTES_PUBLIC_ALIAS: set[str] = {
+    "id",
+    "trace",
+    "transaction.span_id",
+    "parent_span",
+    "profile.id",
+    "transaction.event_id",
+    "span.group",
+}
+
 
 SPAN_VIRTUAL_CONTEXTS = {
     "device.class": VirtualColumnDefinition(
@@ -636,23 +681,21 @@ SPAN_VIRTUAL_CONTEXTS = {
         filter_column="sentry.device.class",
         # TODO: need to change this so the VCC is using it too, but would require rewriting the term_resolver
         default_value="Unknown",
+        sort_column="sentry.device.class",
+        search_type="string",
     ),
     "span.module": VirtualColumnDefinition(
         constructor=module_context_constructor,
+        search_type="string",
     ),
     "is_starred_transaction": VirtualColumnDefinition(
         constructor=is_starred_segment_context_constructor,
         default_value="false",
         processor=lambda x: True if x == "true" else False,
+        search_type="boolean",
     ),
+    **project_virtual_contexts(),
 }
-
-for key in constants.PROJECT_FIELDS:
-    SPAN_VIRTUAL_CONTEXTS[key] = VirtualColumnDefinition(
-        constructor=project_context_constructor(key),
-        term_resolver=project_term_resolver,
-        filter_column="project.id",
-    )
 
 SPAN_INTERNAL_TO_SECONDARY_ALIASES_MAPPING: dict[str, set[str]] = {}
 

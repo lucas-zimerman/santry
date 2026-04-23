@@ -1,16 +1,16 @@
-import {useState} from 'react';
 import {useTheme} from '@emotion/react';
 import styled from '@emotion/styled';
 import type {Location} from 'history';
 
-import {Link} from 'sentry/components/core/link';
-import type {GridColumn} from 'sentry/components/tables/gridEditable';
-import GridEditable, {COL_WIDTH_UNDEFINED} from 'sentry/components/tables/gridEditable';
+import {Link} from '@sentry/scraps/link';
+
+import {GridEditable} from 'sentry/components/tables/gridEditable';
 import type {Alignments} from 'sentry/components/tables/gridEditable/sortLink';
+import {useStateBasedColumnResize} from 'sentry/components/tables/gridEditable/useStateBasedColumnResize';
 import type {Organization} from 'sentry/types/organization';
 import type {Project} from 'sentry/types/project';
 import type {TableData, TableDataRow} from 'sentry/utils/discover/discoverQuery';
-import DiscoverQuery from 'sentry/utils/discover/discoverQuery';
+import {DiscoverQuery} from 'sentry/utils/discover/discoverQuery';
 import {getFieldRenderer} from 'sentry/utils/discover/fieldRenderers';
 import {fieldAlignment} from 'sentry/utils/discover/fields';
 import type {MetricRule} from 'sentry/views/alerts/rules/metric/types';
@@ -30,7 +30,7 @@ interface RelatedTransactionsProps {
   timePeriod: TimePeriodType;
 }
 
-function RelatedTransactions({
+export function RelatedTransactions({
   organization,
   projects,
   timePeriod,
@@ -39,7 +39,6 @@ function RelatedTransactions({
   location,
 }: RelatedTransactionsProps) {
   const theme = useTheme();
-  const [widths, setWidths] = useState<number[]>([]);
   const eventView = getMetricRuleDiscoverQuery({
     rule,
     timePeriod,
@@ -104,26 +103,13 @@ function RelatedTransactions({
       renderHeadCell(tableMeta, column, columnTitles[index]);
   };
 
-  const handleResizeColumn = (columnIndex: number, nextColumn: GridColumn) => {
-    const newWidths: number[] = [...widths];
-    newWidths[columnIndex] = nextColumn.width
-      ? Number(nextColumn.width)
-      : COL_WIDTH_UNDEFINED;
-    setWidths(newWidths);
-  };
+  const {columns, handleResizeColumn} = useStateBasedColumnResize({
+    columns: eventView?.getColumns() ?? [],
+  });
 
   if (!eventView) {
     return null;
   }
-
-  const columnOrder = eventView
-    .getColumns()
-    .map((col: TableColumn<string | number>, i: number) => {
-      if (typeof widths[i] === 'number') {
-        return {...col, width: widths[i]};
-      }
-      return col;
-    });
 
   const sortedEventView = eventView.withSorts([...eventView.sorts]);
   const columnSortBy = sortedEventView.getSorts();
@@ -138,13 +124,13 @@ function RelatedTransactions({
         <GridEditable
           isLoading={isLoading}
           data={tableData ? tableData.data.slice(0, 5) : []}
-          columnOrder={columnOrder}
+          columnOrder={columns}
           columnSortBy={columnSortBy}
           grid={{
             onResizeColumn: handleResizeColumn,
             renderHeadCell: renderHeadCellWithMeta(
               tableData?.meta,
-              columnOrder[2]!.name
+              columns[2]!.name
             ) as any,
             renderBodyCell: renderBodyCellWithData(tableData) as any,
           }}
@@ -153,8 +139,6 @@ function RelatedTransactions({
     </DiscoverQuery>
   );
 }
-
-export default RelatedTransactions;
 
 const HeaderCell = styled('div')<{align: Alignments}>`
   display: block;

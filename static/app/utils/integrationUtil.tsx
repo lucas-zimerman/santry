@@ -1,6 +1,5 @@
 import * as qs from 'query-string';
 
-import type {Result} from 'sentry/components/core/select/async';
 import {
   IconAsana,
   IconBitbucket,
@@ -9,11 +8,13 @@ import {
   IconGithub,
   IconGitlab,
   IconJira,
+  IconPerforce,
   IconSentry,
   IconVsts,
 } from 'sentry/icons';
+import type {SVGIconProps} from 'sentry/icons/svgIcon';
 import {t} from 'sentry/locale';
-import HookStore from 'sentry/stores/hookStore';
+import {HookStore} from 'sentry/stores/hookStore';
 import type {Hooks} from 'sentry/types/hooks';
 import type {
   AppOrProviderOrPlugin,
@@ -24,7 +25,9 @@ import type {
   Integration,
   IntegrationFeature,
   IntegrationInstallationStatus,
+  IntegrationProvider,
   IntegrationType,
+  PluginNoProject,
   PluginWithProjectList,
   SentryApp,
   SentryAppInstallation,
@@ -32,8 +35,6 @@ import type {
 import {trackAnalytics} from 'sentry/utils/analytics';
 import {capitalize} from 'sentry/utils/string/capitalize';
 import {POPULARITY_WEIGHT} from 'sentry/views/settings/organizationIntegrations/constants';
-
-import type {IconSize} from './theme';
 
 /**
  * TODO: remove alias once all usages are updated
@@ -74,8 +75,11 @@ export const getIntegrationFeatureGate = () => {
 };
 
 export const getSentryAppInstallStatus = (install: SentryAppInstallation | undefined) => {
-  if (install) {
+  if (install && install.status !== 'pending_deletion') {
     return capitalize(install.status) as IntegrationInstallationStatus;
+  }
+  if (install?.status === 'pending_deletion') {
+    return 'Pending Deletion';
   }
   return 'Not Installed';
 };
@@ -141,6 +145,24 @@ export function isDocIntegration(
   return integration.hasOwnProperty('isDraft');
 }
 
+/**
+ * True when the provider exposes the `commits` feature gate, which is the
+ * canonical marker for source-code-management integrations (GitHub, GitLab,
+ * Bitbucket, Azure DevOps, and their enterprise/server variants).
+ */
+export function isScmProvider(provider: IntegrationProvider): boolean {
+  return provider.metadata.features.some(f => f.featureGate.includes('commits'));
+}
+
+/**
+ * True when the plugin declares the `commits` feature gate. The legacy GitHub
+ * and Bitbucket plugins both declare this, so they must not be reported as
+ * non-SCM to analytics.
+ */
+export function isScmPlugin(plugin: PluginNoProject): boolean {
+  return plugin.features.includes('commits');
+}
+
 export function isExternalActorMapping(
   mapping: ExternalActorMappingOrSuggestion
 ): mapping is ExternalActorMapping {
@@ -188,7 +210,7 @@ export const safeGetQsParam = (param: string) => {
 
 export const getIntegrationIcon = (
   integrationType?: string,
-  iconSize: IconSize = 'md'
+  iconSize: SVGIconProps['size'] = 'md'
 ) => {
   switch (integrationType) {
     case 'asana':
@@ -203,6 +225,8 @@ export const getIntegrationIcon = (
     case 'jira':
     case 'jira_server':
       return <IconJira size={iconSize} />;
+    case 'perforce':
+      return <IconPerforce size={iconSize} />;
     case 'vsts':
       return <IconVsts size={iconSize} />;
     case 'codecov':
@@ -225,8 +249,11 @@ export const getIntegrationDisplayName = (integrationType?: string) => {
     case 'github_enterprise':
       return 'GitHub Enterprise';
     case 'jira':
-    case 'jira_server':
       return 'Jira';
+    case 'jira_server':
+      return 'Jira Server';
+    case 'perforce':
+      return 'Perforce';
     case 'vsts':
       return 'Azure DevOps';
     case 'codecov':
@@ -269,13 +296,15 @@ export const getIntegrationSourceUrl = (
 
 export function getCodeOwnerIcon(
   provider: CodeOwner['provider'],
-  iconSize: IconSize = 'md'
+  iconSize: SVGIconProps['size'] = 'md'
 ) {
   switch (provider ?? '') {
     case 'github':
       return <IconGithub size={iconSize} />;
     case 'gitlab':
       return <IconGitlab size={iconSize} />;
+    case 'perforce':
+      return <IconPerforce size={iconSize} />;
     default:
       return <IconSentry size={iconSize} />;
   }
@@ -311,11 +340,6 @@ export const getExternalActorEndpointDetails = (
     apiEndpoint: isValidMapping ? `${baseEndpoint}${mapping.id}/` : baseEndpoint,
   };
 };
-
-export const sentryNameToOption = ({id, name}: any): Result => ({
-  value: id,
-  label: name,
-});
 
 export function getIntegrationStatus(integration: Integration) {
   // there are multiple status fields for an integration we consider

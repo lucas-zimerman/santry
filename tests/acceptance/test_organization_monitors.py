@@ -16,7 +16,7 @@ from sentry.testutils.silo import no_silo_test
 
 
 @no_silo_test
-class OrganizationMontorsTest(AcceptanceTestCase):
+class OrganizationMonitorsTest(AcceptanceTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.path = f"/organizations/{self.organization.slug}/insights/crons/"
@@ -25,6 +25,10 @@ class OrganizationMontorsTest(AcceptanceTestCase):
         self.project = self.create_project(
             organization=self.organization, teams=[self.team], name="Bengal"
         )
+        # Create a second project so the org has multiple projects; this prevents
+        # the page filter from auto-selecting the single project and rendering a
+        # platform icon that overlaps the form's project input field in Selenium.
+        self.create_project(organization=self.organization, teams=[self.team], name="Bengal 2")
         self.create_team_membership(self.team, user=self.user)
         self.login_as(self.user)
 
@@ -47,17 +51,23 @@ class OrganizationMontorsTest(AcceptanceTestCase):
         schedule_input.clear()
         schedule_input.send_keys("10 0 * * *")
 
+        self.browser.click_when_visible("#project")
+        self.browser.click_when_visible(f'[data-test-id="{self.project.slug}"]')
+
         self.browser.click_when_visible('button[aria-label="Create"]')
         self.browser.wait_until(xpath="//h1[text()='My Monitor']")
 
     def test_create_cron_monitor(self) -> None:
         self.browser.get(self.path)
         self.browser.wait_until_not('[data-test-id="loading-indicator"]')
-        self.browser.click_when_visible("a[aria-label='Add Monitor']")
+        self.browser.click_when_visible("a[aria-label='Add Cron Monitor']")
 
         self.browser.wait_until('[name="name"]')
         name_input = self.browser.find_element_by_name("name")
         name_input.send_keys("My Monitor")
+
+        self.browser.click_when_visible("#project")
+        self.browser.click_when_visible(f'[data-test-id="{self.project.slug}"]')
 
         schedule_input = self.browser.find_element_by_name("config.schedule")
         schedule_input.clear()

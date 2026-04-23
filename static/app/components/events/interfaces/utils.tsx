@@ -1,9 +1,8 @@
-import partition from 'lodash/partition';
 import * as qs from 'query-string';
 
-import getThreadException from 'sentry/components/events/interfaces/threads/threadSelector/getThreadException';
+import {getThreadException} from 'sentry/components/events/interfaces/threads/threadSelector/getThreadException';
 import {FILTER_MASK} from 'sentry/constants';
-import ConfigStore from 'sentry/stores/configStore';
+import {ConfigStore} from 'sentry/stores/configStore';
 import type {Image} from 'sentry/types/debugImage';
 import type {EntryRequest, EntryThreads, Event, Frame, Thread} from 'sentry/types/event';
 import {EntryType} from 'sentry/types/event';
@@ -11,7 +10,6 @@ import type {PlatformKey} from 'sentry/types/project';
 import type {StacktraceType} from 'sentry/types/stacktrace';
 import {StacktraceOrder, type AvatarUser} from 'sentry/types/user';
 import {defined} from 'sentry/utils';
-import {fileExtensionToPlatform, getFileExtension} from 'sentry/utils/fileExtension';
 
 /**
  * Attempts to escape a string from any bash double quote special characters.
@@ -213,36 +211,6 @@ export function getFullUrl(data: EntryRequest['data']): string | undefined {
   return escapeBashString(fullUrl);
 }
 
-/**
- * Converts an object of body/querystring key/value pairs
- * into a tuple of [key, value] pairs, and sorts them.
- *
- * This handles the case for query strings that were decoded like so:
- *
- *   ?foo=bar&foo=baz => { foo: ['bar', 'baz'] }
- *
- * By converting them to [['foo', 'bar'], ['foo', 'baz']]
- */
-export function objectToSortedTupleArray(obj: Record<string, string | string[]>) {
-  return Object.keys(obj)
-    .reduce<Array<[string, string]>>((out, k) => {
-      const val = obj[k];
-      return out.concat(
-        Array.isArray(val)
-          ? val.map(v => [k, v]) // key has multiple values (array)
-          : ([[k, val]] as Array<[string, string]>) // key has single value
-      );
-    }, [])
-    .sort(([keyA, valA], [keyB, valB]) => {
-      // if keys are identical, sort on value
-      if (keyA === keyB) {
-        return valA < valB ? -1 : 1;
-      }
-
-      return keyA < keyB ? -1 : 1;
-    });
-}
-
 function isValidContextValue(value: unknown): value is string {
   return typeof value === 'string' && value !== FILTER_MASK;
 }
@@ -308,7 +276,7 @@ export function parseAssembly(assembly: string | null) {
   for (let i = 1; i < pieces.length; i++) {
     const [key, value] = pieces[i]!.trim().split('=');
 
-    // eslint-disable-next-line default-case
+    // eslint-disable-next-line @typescript-eslint/switch-exhaustiveness-check
     switch (key) {
       case 'Version':
         version = value;
@@ -327,50 +295,6 @@ export function parseAssembly(assembly: string | null) {
   }
 
   return {name, version, culture, publicKeyToken};
-}
-
-function getFramePlatform(frame: Frame) {
-  const fileExtension = getFileExtension(frame.filename ?? '');
-  const fileExtensionPlatform = fileExtension
-    ? fileExtensionToPlatform(fileExtension)
-    : null;
-
-  if (fileExtensionPlatform) {
-    return fileExtensionPlatform;
-  }
-
-  if (frame.platform) {
-    return frame.platform;
-  }
-
-  return null;
-}
-
-/**
- * Returns the representative platform for the given stack trace frames.
- * Prioritizes recent in-app frames, checking first for a matching file extension
- * and then for a frame.platform attribute [1].
- *
- * If none of the frames have a platform, falls back to the event platform.
- *
- * [1] https://develop.sentry.dev/sdk/event-payloads/stacktrace/#frame-attributes
- */
-export function stackTracePlatformIcon(eventPlatform: PlatformKey, frames: Frame[]) {
-  const [inAppFrames, systemFrames] = partition(
-    // Reverse frames to get newest-first ordering
-    [...frames].reverse(),
-    frame => frame.inApp
-  );
-
-  for (const frame of [...inAppFrames, ...systemFrames]) {
-    const framePlatform = getFramePlatform(frame);
-
-    if (framePlatform) {
-      return framePlatform;
-    }
-  }
-
-  return eventPlatform;
 }
 
 export function isStacktraceNewestFirst() {

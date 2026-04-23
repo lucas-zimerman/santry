@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import responses
 
 from sentry import audit_log
+from sentry.analytics.events.sentry_app_installed import SentryAppInstalledEvent
 from sentry.constants import SentryAppInstallationStatus
 from sentry.integrations.types import EventLifecycleOutcome
 from sentry.models.apigrant import ApiGrant
@@ -12,6 +13,7 @@ from sentry.sentry_apps.models.servicehook import ServiceHook, ServiceHookProjec
 from sentry.silo.base import SiloMode
 from sentry.testutils.asserts import assert_count_of_metric, assert_success_metric
 from sentry.testutils.cases import TestCase
+from sentry.testutils.helpers.analytics import assert_last_analytics_event
 from sentry.testutils.silo import assume_test_silo_mode, control_silo_test
 from sentry.users.models.user import User
 from sentry.users.services.user.service import user_service
@@ -21,7 +23,6 @@ from sentry.utils import json
 @control_silo_test
 class TestCreator(TestCase):
     def setUp(self) -> None:
-
         self.user = self.create_user()
         self.org = self.create_organization()
 
@@ -78,7 +79,7 @@ class TestCreator(TestCase):
         responses.add(responses.POST, "https://example.com/webhook")
         install = self.run_creator()
 
-        with assume_test_silo_mode(SiloMode.REGION):
+        with assume_test_silo_mode(SiloMode.CELL):
             hook = ServiceHook.objects.get(organization_id=self.org.id)
 
         assert hook.application_id == self.sentry_app.application.id
@@ -87,7 +88,7 @@ class TestCreator(TestCase):
         assert hook.events == self.sentry_app.events
         assert hook.url == self.sentry_app.webhook_url
 
-        with assume_test_silo_mode(SiloMode.REGION):
+        with assume_test_silo_mode(SiloMode.CELL):
             assert not ServiceHookProject.objects.all()
 
     @responses.activate
@@ -103,7 +104,6 @@ class TestCreator(TestCase):
 
     @responses.activate
     def test_notifies_service(self) -> None:
-
         rpc_user = user_service.get_user(user_id=self.user.id)
         with self.tasks():
             responses.add(responses.POST, "https://example.com/webhook")
@@ -150,11 +150,13 @@ class TestCreator(TestCase):
             request=self.make_request(user=self.user, method="GET"),
         )
 
-        record.assert_called_with(
-            "sentry_app.installed",
-            user_id=self.user.id,
-            organization_id=self.org.id,
-            sentry_app="nulldb",
+        assert_last_analytics_event(
+            record,
+            SentryAppInstalledEvent(
+                user_id=self.user.id,
+                organization_id=self.org.id,
+                sentry_app="nulldb",
+            ),
         )
 
     @responses.activate

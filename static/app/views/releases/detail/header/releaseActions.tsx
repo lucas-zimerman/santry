@@ -1,44 +1,54 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
-import type {Location} from 'history';
+
+import {ButtonBar, LinkButton} from '@sentry/scraps/button';
+import {Flex} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
 
 import {archiveRelease, restoreRelease} from 'sentry/actionCreators/release';
 import {Client} from 'sentry/api';
 import {openConfirmModal} from 'sentry/components/confirm';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {LinkButton} from 'sentry/components/core/button/linkButton';
-import {Tooltip} from 'sentry/components/core/tooltip';
 import {DropdownMenu} from 'sentry/components/dropdownMenu';
+import {FeedbackButton} from 'sentry/components/feedbackButton/feedbackButton';
 import ProjectBadge from 'sentry/components/idBadge/projectBadge';
-import TextOverflow from 'sentry/components/textOverflow';
+import {TextOverflow} from 'sentry/components/textOverflow';
 import {IconEllipsis, IconNext, IconPrevious} from 'sentry/icons';
 import {t, tct, tn} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
-import type {Organization} from 'sentry/types/organization';
 import type {Release, ReleaseMeta} from 'sentry/types/release';
 import {trackAnalytics} from 'sentry/utils/analytics';
-import {browserHistory} from 'sentry/utils/browserHistory';
+import {useLocation} from 'sentry/utils/useLocation';
+import {useNavigate} from 'sentry/utils/useNavigate';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {formatVersion} from 'sentry/utils/versions/formatVersion';
 import {isReleaseArchived} from 'sentry/views/releases/utils';
 import {makeReleasesPathname} from 'sentry/views/releases/utils/pathnames';
 
 type Props = {
-  location: Location;
-  organization: Organization;
   projectSlug: string;
   refetchData: () => void;
   release: Release;
   releaseMeta: ReleaseMeta;
+  showFeedbackButton?: boolean;
 };
 
-function ReleaseActions({
-  location,
-  organization,
+export const releaseFeedbackOptions = {
+  messagePlaceholder: t('How can we improve the Releases experience?'),
+  tags: {
+    ['feedback.source']: 'release-detail',
+  },
+};
+
+export function ReleaseActions({
   projectSlug,
   release,
   releaseMeta,
   refetchData,
+  showFeedbackButton = true,
 }: Props) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const organization = useOrganization();
+
   async function handleArchive() {
     try {
       await archiveRelease(new Client(), {
@@ -46,7 +56,7 @@ function ReleaseActions({
         projectSlug,
         releaseVersion: release.version,
       });
-      browserHistory.push(
+      navigate(
         makeReleasesPathname({
           organization,
           path: '/',
@@ -129,7 +139,7 @@ function ReleaseActions({
   }
 
   function handleNavigationClick(direction: string) {
-    trackAnalytics(`release_detail.pagination`, {
+    trackAnalytics('release_detail.pagination', {
       organization,
       direction,
     });
@@ -187,8 +197,13 @@ function ReleaseActions({
   const hasNext = !!release.currentProjectMeta.nextReleaseVersion;
 
   return (
-    <ButtonBar>
-      <ButtonBar merged gap="0">
+    <Flex gap="sm" align="center">
+      {showFeedbackButton ? (
+        <FeedbackButton feedbackOptions={releaseFeedbackOptions}>
+          {t('Give Feedback')}
+        </FeedbackButton>
+      ) : null}
+      <ButtonBar>
         <LinkButton
           size="sm"
           to={replaceReleaseUrl(release.currentProjectMeta.firstReleaseVersion)}
@@ -232,14 +247,14 @@ function ReleaseActions({
         }}
         position="bottom-end"
       />
-    </ButtonBar>
+    </Flex>
   );
 }
 
 const ProjectsWrapper = styled('div')`
-  margin: ${space(2)} 0 ${space(2)} ${space(2)};
+  margin: ${p => p.theme.space.xl} 0 ${p => p.theme.space.xl} ${p => p.theme.space.xl};
   display: grid;
-  gap: ${space(0.5)};
+  gap: ${p => p.theme.space.xs};
   img {
     border: none !important;
     box-shadow: none !important;
@@ -249,5 +264,3 @@ const ProjectsWrapper = styled('div')`
 const ModalHeaderContainer = styled('h4')`
   max-width: 100%;
 `;
-
-export default ReleaseActions;

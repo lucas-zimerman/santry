@@ -7,24 +7,29 @@ import type {PageFilters} from 'sentry/types/core';
 import type {
   EChartDataZoomHandler,
   EChartEventHandler,
+  EChartLegendSelectChangeHandler,
   Series,
 } from 'sentry/types/echarts';
+import type {Confidence} from 'sentry/types/organization';
 import type {TableDataWithTitle} from 'sentry/utils/discover/discoverQuery';
 import type {AggregationOutputType, Sort} from 'sentry/utils/discover/fields';
-import type {DashboardFilters, Widget} from 'sentry/views/dashboards/types';
+import {useWidgetErrorCallback} from 'sentry/views/dashboards/contexts/widgetErrorContext';
+import type {DashboardFilters, Widget as TWidget} from 'sentry/views/dashboards/types';
 import {DisplayType, WidgetType} from 'sentry/views/dashboards/types';
-import WidgetLegendNameEncoderDecoder from 'sentry/views/dashboards/widgetLegendNameEncoderDecoder';
-import type WidgetLegendSelectionState from 'sentry/views/dashboards/widgetLegendSelectionState';
+import {usesTimeSeriesData, widgetFetchesOwnData} from 'sentry/views/dashboards/utils';
+import {WidgetLegendNameEncoderDecoder} from 'sentry/views/dashboards/widgetLegendNameEncoderDecoder';
+import type {WidgetLegendSelectionState} from 'sentry/views/dashboards/widgetLegendSelectionState';
 import type {TabularColumn} from 'sentry/views/dashboards/widgets/common/types';
+import {Widget} from 'sentry/views/dashboards/widgets/widget/widget';
 
 import WidgetCardChart from './chart';
 import {WidgetCardDataLoader} from './widgetCardDataLoader';
 
 type Props = {
-  api: Client;
   selection: PageFilters;
-  widget: Widget;
+  widget: TWidget;
   widgetLegendState: WidgetLegendSelectionState;
+  api?: Client;
   chartGroup?: string;
   dashboardFilters?: DashboardFilters;
   disableTableActions?: boolean;
@@ -35,7 +40,11 @@ type Props = {
   noPadding?: boolean;
   onDataFetchStart?: () => void;
   onDataFetched?: (results: {
+    confidence?: Confidence;
+    dataScanned?: 'full' | 'partial';
+    isSampled?: boolean | null;
     pageLinks?: string;
+    sampleCount?: number;
     tableResults?: TableDataWithTitle[];
     timeseriesResults?: Series[];
     timeseriesResultsTypes?: Record<string, AggregationOutputType>;
@@ -50,11 +59,11 @@ type Props = {
   onWidgetTableResizeColumn?: (columns: TabularColumn[]) => void;
   onWidgetTableSort?: (sort: Sort) => void;
   onZoom?: EChartDataZoomHandler;
-  renderErrorMessage?: (errorMessage?: string) => React.ReactNode;
   shouldResize?: boolean;
   showConfidenceWarning?: boolean;
   showLoadingText?: boolean;
   tableItemLimit?: number;
+  widgetInterval?: string;
   windowWidth?: number;
 };
 
@@ -63,7 +72,6 @@ export function WidgetCardChartContainer({
   widget,
   dashboardFilters,
   isMobile,
-  renderErrorMessage,
   tableItemLimit,
   windowWidth,
   onZoom,
@@ -83,15 +91,13 @@ export function WidgetCardChartContainer({
   onWidgetTableSort,
   onWidgetTableResizeColumn,
   disableTableActions,
+  widgetInterval,
 }: Props) {
-  function keepLegendState({
-    selected,
-  }: {
-    selected: Record<string, boolean>;
-    type: 'legendselectchanged';
-  }) {
+  const onWidgetError = useWidgetErrorCallback();
+
+  const keepLegendState: EChartLegendSelectChangeHandler = ({selected}) => {
     widgetLegendState.setWidgetSelectionState(selected, widget);
-  }
+  };
 
   function getErrorOrEmptyMessage(
     errorMessage: string | undefined,
@@ -100,10 +106,10 @@ export function WidgetCardChartContainer({
     widgetType: DisplayType
   ) {
     // non-chart widgets need to look at tableResults
-    const results =
-      widgetType === DisplayType.BIG_NUMBER || widgetType === DisplayType.TABLE
-        ? tableResults
-        : timeseriesResults;
+    const results = usesTimeSeriesData(widgetType) ? timeseriesResults : tableResults;
+    if (widgetFetchesOwnData(widgetType)) {
+      return undefined;
+    }
 
     return errorMessage
       ? errorMessage
@@ -115,12 +121,13 @@ export function WidgetCardChartContainer({
   return (
     <WidgetCardDataLoader
       widget={widget}
-      dashboardFilters={dashboardFilters}
       selection={selection}
+      dashboardFilters={dashboardFilters}
       onDataFetched={onDataFetched}
       onWidgetSplitDecision={onWidgetSplitDecision}
       onDataFetchStart={onDataFetchStart}
       tableItemLimit={tableItemLimit}
+      widgetInterval={widgetInterval}
     >
       {({
         tableResults,
@@ -128,7 +135,9 @@ export function WidgetCardChartContainer({
         errorMessage,
         loading,
         timeseriesResultsTypes,
+        timeseriesResultsUnits,
         confidence,
+        dataScanned,
         sampleCount,
         isSampled,
       }) => {
@@ -145,11 +154,20 @@ export function WidgetCardChartContainer({
               widget.displayType
             );
 
+        if (errorOrEmptyMessage) {
+          if (
+            typeof errorOrEmptyMessage === 'string' &&
+            errorOrEmptyMessage !== t('No data found') &&
+            onWidgetError
+          ) {
+            onWidgetError(widget, errorOrEmptyMessage);
+          }
+
+          return <Widget.WidgetError error={errorOrEmptyMessage} />;
+        }
+
         return (
           <Fragment>
-            {typeof renderErrorMessage === 'function'
-              ? renderErrorMessage(errorOrEmptyMessage)
-              : null}
             <WidgetCardChart
               disableZoom={disableZoom}
               timeseriesResults={modifiedTimeseriesResults}
@@ -162,6 +180,7 @@ export function WidgetCardChartContainer({
               windowWidth={windowWidth}
               onZoom={onZoom}
               timeseriesResultsTypes={timeseriesResultsTypes}
+              timeseriesResultsUnits={timeseriesResultsUnits}
               noPadding={noPadding}
               chartGroup={chartGroup}
               shouldResize={shouldResize}
@@ -176,6 +195,7 @@ export function WidgetCardChartContainer({
               widgetLegendState={widgetLegendState}
               showConfidenceWarning={showConfidenceWarning}
               confidence={confidence}
+              dataScanned={dataScanned}
               sampleCount={sampleCount}
               minTableColumnWidth={minTableColumnWidth}
               isSampled={isSampled}

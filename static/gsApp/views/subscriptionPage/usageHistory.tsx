@@ -1,28 +1,31 @@
-import {Fragment, useEffect, useState} from 'react';
+import {Fragment, useState} from 'react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 import moment from 'moment-timezone';
 
-import {Button} from 'sentry/components/core/button';
-import {ButtonBar} from 'sentry/components/core/button/buttonBar';
-import {DropdownMenu} from 'sentry/components/dropdownMenu';
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Pagination from 'sentry/components/pagination';
-import Panel from 'sentry/components/panels/panel';
-import PanelBody from 'sentry/components/panels/panelBody';
-import PanelHeader from 'sentry/components/panels/panelHeader';
-import PanelItem from 'sentry/components/panels/panelItem';
+import {Badge} from '@sentry/scraps/badge';
+import {Button} from '@sentry/scraps/button';
+import {CompactSelect, type SelectOption} from '@sentry/scraps/compactSelect';
+import {Container, Flex, Grid} from '@sentry/scraps/layout';
+import {OverlayTrigger} from '@sentry/scraps/overlayTrigger';
+import {Text} from '@sentry/scraps/text';
+
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Pagination} from 'sentry/components/pagination';
+import {PanelItem} from 'sentry/components/panels/panelItem';
+import {SentryDocumentTitle} from 'sentry/components/sentryDocumentTitle';
 import {IconChevron, IconDownload} from 'sentry/icons';
 import {t, tct} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import {DataCategory} from 'sentry/types/core';
-import type {RouteComponentProps} from 'sentry/types/legacyReactRouter';
+import {apiOptions, selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {formatPercentage} from 'sentry/utils/number/formatPercentage';
-import {useApiQuery} from 'sentry/utils/queryClient';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {useProjects} from 'sentry/utils/useProjects';
+import {SettingsPageHeader} from 'sentry/views/settings/components/settingsPageHeader';
 
-import withSubscription from 'getsentry/components/withSubscription';
+import {withSubscription} from 'getsentry/components/withSubscription';
 import {RESERVED_BUDGET_QUOTA, UNLIMITED, UNLIMITED_ONDEMAND} from 'getsentry/constants';
 import type {
   BillingHistory,
@@ -33,19 +36,20 @@ import type {
 import {OnDemandBudgetMode} from 'getsentry/types';
 import {
   convertUsageToReservedUnit,
+  displayBudgetName,
   formatReservedWithUnits,
   formatUsageWithUnits,
   getSoftCapType,
 } from 'getsentry/utils/billing';
 import {getPlanCategoryName, sortCategories} from 'getsentry/utils/dataCategory';
+import {trackGetsentryAnalytics} from 'getsentry/utils/trackGetsentryAnalytics';
 import {displayPriceWithCents} from 'getsentry/views/amCheckout/utils';
-import ContactBillingMembers from 'getsentry/views/contactBillingMembers';
+import {ContactBillingMembers} from 'getsentry/views/contactBillingMembers';
+import {SubscriptionPageContainer} from 'getsentry/views/subscriptionPage/components/subscriptionPageContainer';
 
 import {StripedTable} from './styles';
-import SubscriptionHeader from './subscriptionHeader';
-import {trackSubscriptionView} from './utils';
 
-interface Props extends RouteComponentProps<unknown, unknown> {
+interface Props {
   subscription: Subscription;
 }
 
@@ -85,61 +89,39 @@ function UsageHistory({subscription}: Props) {
   const organization = useOrganization();
   const location = useLocation();
 
-  useEffect(() => {
-    trackSubscriptionView(organization, subscription, 'usage');
-  }, [organization, subscription]);
-
-  const {
-    data: usageList,
-    isPending,
-    isError,
-    refetch,
-    getResponseHeader,
-  } = useApiQuery<BillingHistory[]>(
-    [
-      `/customers/${organization.slug}/history/`,
-      {
-        query: {cursor: location.query.cursor},
-      },
-    ],
-    {
+  const {data, isPending, isError, refetch} = useQuery({
+    ...apiOptions.as<BillingHistory[]>()('/customers/$organizationIdOrSlug/history/', {
+      path: {organizationIdOrSlug: organization.slug},
+      query: {cursor: location.query.cursor},
       staleTime: 0,
-    }
-  );
+    }),
+    select: selectJsonWithHeaders,
+  });
 
-  if (isPending) {
-    return (
-      <Fragment>
-        <SubscriptionHeader subscription={subscription} organization={organization} />
-        <LoadingIndicator />
-      </Fragment>
-    );
-  }
-
-  if (isError) {
-    return <LoadingError onRetry={refetch} />;
-  }
-
-  const usageListPageLinks = getResponseHeader?.('Link');
-
+  const usageListPageLinks = data?.headers.Link;
   const hasBillingPerms = organization.access?.includes('org:billing');
-  if (!hasBillingPerms) {
-    return <ContactBillingMembers />;
-  }
 
   return (
-    <Fragment>
-      <SubscriptionHeader subscription={subscription} organization={organization} />
-      <Panel>
-        <PanelHeader>{t('Usage History')}</PanelHeader>
-        <PanelBody data-test-id="history-table">
-          {usageList.map(row => (
-            <UsageHistoryRow key={row.id} history={row} subscription={subscription} />
-          ))}
-        </PanelBody>
-      </Panel>
-      {usageListPageLinks && <Pagination pageLinks={usageListPageLinks} />}
-    </Fragment>
+    <SubscriptionPageContainer background="primary">
+      <SentryDocumentTitle title={t('Usage History')} orgSlug={organization.slug} />
+      <SettingsPageHeader title={t('Usage History')} />
+      {isPending ? (
+        <LoadingIndicator />
+      ) : isError ? (
+        <LoadingError onRetry={refetch} />
+      ) : hasBillingPerms ? (
+        <Fragment>
+          <Container background="primary" border="primary" radius="md">
+            {data.json.map(row => (
+              <UsageHistoryRow key={row.id} history={row} subscription={subscription} />
+            ))}
+          </Container>
+          {usageListPageLinks && <Pagination pageLinks={usageListPageLinks} />}
+        </Fragment>
+      ) : (
+        <ContactBillingMembers />
+      )}
+    </SubscriptionPageContainer>
   );
 }
 
@@ -148,8 +130,10 @@ type RowProps = {
   subscription: Subscription;
 };
 
-function UsageHistoryRow({history, subscription}: RowProps) {
+function UsageHistoryRow({history}: RowProps) {
+  const organization = useOrganization();
   const [expanded, setExpanded] = useState<boolean>(history.isCurrent);
+  const {projects, onSearch: onProjectSearch} = useProjects();
 
   function renderOnDemandUsage({
     sortedCategories,
@@ -191,11 +175,14 @@ function UsageHistoryRow({history, subscription}: RowProps) {
         <thead>
           <tr>
             <th>
-              {subscription.planDetails.budgetTerm === 'pay-as-you-go'
-                ? t('Pay-as-you-go Spend')
-                : history.onDemandBudgetMode === OnDemandBudgetMode.PER_CATEGORY
-                  ? t('On-Demand Spend (Per-Category)')
-                  : t('On-Demand Spend (Shared)')}
+              {tct('[budgetTerm] Spend[suffix]', {
+                budgetTerm: displayBudgetName(history.planDetails, {title: true}),
+                suffix: history.planDetails?.hasOnDemandModes
+                  ? history.onDemandBudgetMode === OnDemandBudgetMode.PER_CATEGORY
+                    ? ' (Per-Category)'
+                    : ' (Shared)'
+                  : '',
+              })}
             </th>
             <th>{t('Amount Spent')}</th>
             <th>{t('Maximum')}</th>
@@ -234,44 +221,12 @@ function UsageHistoryRow({history, subscription}: RowProps) {
 
   return (
     <StyledPanelItem>
-      <HistorySummary>
-        <div>
-          {moment(history.periodStart).format('ll')} ›{' '}
-          {moment(history.periodEnd).format('ll')}
-          <div>
-            <small>
-              {history.planName}
-              {history.isCurrent && tct(' — [strong:Current]', {strong: <strong />})}
-            </small>
-          </div>
-        </div>
-        <ButtonBar>
-          <StyledDropdown>
-            <DropdownMenu
-              triggerProps={{
-                size: 'sm',
-                icon: <IconDownload />,
-              }}
-              triggerLabel={t('Reports')}
-              items={[
-                {
-                  key: 'summary',
-                  label: t('Summary'),
-                  onAction: () => {
-                    window.open(history.links.csv, '_blank');
-                  },
-                },
-                {
-                  key: 'project-breakdown',
-                  label: t('Project Breakdown'),
-                  onAction: () => {
-                    window.open(history.links.csvPerProject, '_blank');
-                  },
-                },
-              ]}
-              position="bottom-end"
-            />
-          </StyledDropdown>
+      <Flex
+        justify={{xs: 'start', md: 'between'}}
+        direction={{xs: 'column', md: 'row'}}
+        gap="xl"
+      >
+        <Flex gap="lg">
           <Button
             data-test-id="history-expand"
             size="sm"
@@ -279,10 +234,55 @@ function UsageHistoryRow({history, subscription}: RowProps) {
             icon={<IconChevron direction={expanded ? 'up' : 'down'} />}
             aria-label={t('Expand history')}
           />
-        </ButtonBar>
-      </HistorySummary>
+          <Flex direction="column" gap="sm">
+            <Flex gap="sm" align="center">
+              <Text variant="muted">
+                {moment(history.periodStart).format('ll')} -{' '}
+                {moment(history.periodEnd).format('ll')}
+              </Text>
+              {history.isCurrent && <Badge variant="muted">{t('Current')}</Badge>}
+            </Flex>
+            <Text bold>{tct('[planName] Plan', {planName: history.planName})}</Text>
+          </Flex>
+        </Flex>
+        <Grid flow="column" align="center" gap="md">
+          <Button
+            icon={<IconDownload />}
+            onClick={() => {
+              trackGetsentryAnalytics('subscription_page.download_reports.clicked', {
+                organization,
+                reportType: 'summary',
+              });
+              window.open(history.links.csv, '_blank');
+            }}
+          >
+            {t('Download Summary')}
+          </Button>
+          <CompactSelect
+            trigger={triggerProps => (
+              <OverlayTrigger.Button {...triggerProps} icon={<IconDownload />}>
+                {t('Download Project Breakdown')}
+              </OverlayTrigger.Button>
+            )}
+            search={{placeholder: t('Filter projects'), onChange: onProjectSearch}}
+            options={projects.map(project => ({
+              value: project.slug,
+              label: project.slug,
+              textValue: project.slug,
+            }))}
+            value={undefined}
+            onChange={(option: SelectOption<string>) => {
+              trackGetsentryAnalytics('subscription_page.download_reports.clicked', {
+                organization,
+                reportType: 'project_breakdown',
+              });
+              window.open(`${history.links.csvPerProject}${option.value}/`, '_blank');
+            }}
+          />
+        </Grid>
+      </Flex>
       {expanded && (
-        <HistoryDetails>
+        <Container padding="xl 0">
           <HistoryTable key="usage">
             <thead>
               <tr>
@@ -347,7 +347,7 @@ function UsageHistoryRow({history, subscription}: RowProps) {
             </tbody>
           </HistoryTable>
           {renderOnDemandUsage({sortedCategories})}
-        </HistoryDetails>
+        </Container>
       )}
     </StyledPanelItem>
   );
@@ -359,22 +359,12 @@ const StyledPanelItem = styled(PanelItem)`
   flex-direction: column;
 `;
 
-const HistorySummary = styled('div')`
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-`;
-
-const HistoryDetails = styled('div')`
-  padding: ${space(2)} 0;
-`;
-
 const HistoryTable = styled(StripedTable)`
   table-layout: fixed;
 
   th,
   td {
-    padding: ${space(1)};
+    padding: ${p => p.theme.space.md};
     text-align: right;
   }
   th:first-child,
@@ -383,14 +373,5 @@ const HistoryTable = styled(StripedTable)`
   }
   th:first-child {
     padding-left: 0;
-  }
-`;
-
-const StyledDropdown = styled('div')`
-  display: inline-block;
-
-  .dropdown-menu:after,
-  .dropdown-menu:before {
-    display: none;
   }
 `;

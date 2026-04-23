@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sentry.discover.models import DiscoverSavedQueryTypes
+from sentry.search.eap.types import SupportedTraceItemType
 from sentry.snuba import (
     discover,
     errors,
@@ -16,9 +17,13 @@ from sentry.snuba import (
     transactions,
 )
 from sentry.snuba.models import QuerySubscription, SnubaQuery
+from sentry.snuba.occurrences_rpc import Occurrences
 from sentry.snuba.ourlogs import OurLogs
+from sentry.snuba.preprod_size import PreprodSize
+from sentry.snuba.processing_errors_rpc import ProcessingErrors
+from sentry.snuba.profile_functions import ProfileFunctions
 from sentry.snuba.spans_rpc import Spans
-from sentry.snuba.uptime_checks import UptimeChecks
+from sentry.snuba.trace_metrics import TraceMetrics
 from sentry.snuba.uptime_results import UptimeResults
 
 logger = logging.getLogger(__name__)
@@ -30,25 +35,33 @@ DATASET_OPTIONS = {
     "errors": errors,
     "metricsEnhanced": metrics_enhanced_performance,
     "metrics": metrics_performance,
+    SupportedTraceItemType.OCCURRENCES.value: Occurrences,
     # ourlogs is deprecated, please use logs instead
     "ourlogs": OurLogs,
-    "logs": OurLogs,
-    "uptimeChecks": UptimeChecks,
-    "uptime_results": UptimeResults,
+    SupportedTraceItemType.LOGS.value: OurLogs,
+    SupportedTraceItemType.UPTIME_RESULTS.value: UptimeResults,
+    "preprodSize": PreprodSize,
     "profiles": profiles,
     "issuePlatform": issue_platform,
     "profileFunctions": functions,
-    "spans": Spans,
+    SupportedTraceItemType.PROFILE_FUNCTIONS.value: ProfileFunctions,
+    SupportedTraceItemType.SPANS.value: Spans,
     "spansIndexed": spans_indexed,
     "spansMetrics": spans_metrics,
+    SupportedTraceItemType.TRACEMETRICS.value: TraceMetrics,
+    SupportedTraceItemType.PROCESSING_ERRORS.value: ProcessingErrors,
     "transactions": transactions,
 }
 DEPRECATED_LABELS = {"ourlogs"}
 RPC_DATASETS = {
-    Spans,
+    Occurrences,
     OurLogs,
+    PreprodSize,
+    ProcessingErrors,
+    ProfileFunctions,
+    Spans,
+    TraceMetrics,
     UptimeResults,
-    UptimeChecks,
 }
 DATASET_LABELS = {
     value: key for key, value in DATASET_OPTIONS.items() if key not in DEPRECATED_LABELS

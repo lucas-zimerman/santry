@@ -7,30 +7,15 @@ import {
   type SearchQueryBuilderProps,
 } from 'sentry/components/searchQueryBuilder';
 import type {FilterKeySection} from 'sentry/components/searchQueryBuilder/types';
-import {parseQueryBuilderValue} from 'sentry/components/searchQueryBuilder/utils';
-import {joinQuery, Token} from 'sentry/components/searchSyntax/parser';
 import {t} from 'sentry/locale';
 import type {Group, Tag, TagCollection} from 'sentry/types/group';
-import {defined} from 'sentry/utils';
-import {
-  FieldKind,
-  getFieldDefinition,
-  ISSUE_EVENT_PROPERTY_FIELDS,
-} from 'sentry/utils/fields';
-import useApi from 'sentry/utils/useApi';
-import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
-import usePageFilters from 'sentry/utils/usePageFilters';
+import {FieldKind, ISSUE_EVENT_PROPERTY_FIELDS} from 'sentry/utils/fields';
+import {useApi} from 'sentry/utils/useApi';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {Dataset} from 'sentry/views/alerts/rules/metric/types';
-import {ALL_EVENTS_EXCLUDED_TAGS} from 'sentry/views/issueDetails/groupEvents';
-import {
-  useGroupTags,
-  type GroupTag,
-} from 'sentry/views/issueDetails/groupTags/useGroupTags';
-import {
-  mergeAndSortTagValues,
-  useHasStreamlinedUI,
-} from 'sentry/views/issueDetails/utils';
+import {useGroupTags} from 'sentry/views/issueDetails/groupTags/useGroupTags';
+import {ALL_EVENTS_EXCLUDED_TAGS} from 'sentry/views/issueDetails/streamline/hooks/useEventQuery';
+import {mergeAndSortTagValues} from 'sentry/views/issueDetails/utils';
 import {makeGetIssueTagValues} from 'sentry/views/issueList/utils/getIssueTagValues';
 
 interface EventSearchProps {
@@ -40,74 +25,6 @@ interface EventSearchProps {
   query: string;
   className?: string;
   queryBuilderProps?: Partial<SearchQueryBuilderProps>;
-}
-
-export function useEventQuery({groupId}: {groupId: string}): string {
-  const {selection} = usePageFilters();
-  const location = useLocation();
-  const environments = selection.environments;
-  const {query: locationQuery} = location.query;
-
-  let eventQuery = '';
-  if (Array.isArray(locationQuery)) {
-    eventQuery = locationQuery.join(' ');
-  } else if (typeof locationQuery === 'string') {
-    eventQuery = locationQuery;
-  }
-
-  const {data = []} = useGroupTags({
-    groupId,
-    environment: environments,
-  });
-  const filterKeys = useEventSearchFilterKeys(data);
-  const parsedQuery = useMemo(
-    () =>
-      parseQueryBuilderValue(eventQuery, getFieldDefinition, {
-        filterKeys,
-      }) ?? [],
-    [eventQuery, filterKeys]
-  );
-
-  // Removes invalid tokens from an issue stream query in an attempt to convert it to an event query.
-  // For example: "is:unresolved browser.name:firefox" -> "browser.name:firefox"
-  // Note: This is _probably_ not accounting for MANY invalid filters which could come in from the
-  // issue stream. Will likely have to refine this in the future.
-  const validQuery = parsedQuery.filter((token: any) => {
-    if (token.type === Token.FREE_TEXT) {
-      return false;
-    }
-    if (token.type === Token.FILTER) {
-      let tagKey = token.key.text;
-      if (tagKey.startsWith('tags[')) {
-        tagKey = tagKey.slice(5, -1);
-      }
-      if (!filterKeys.hasOwnProperty(tagKey)) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  return joinQuery(validQuery, false, true);
-}
-
-function useEventSearchFilterKeys(data: GroupTag[]): TagCollection {
-  const filterKeys = useMemo<TagCollection>(() => {
-    const tags = [
-      ...data.map(tag => ({...tag, kind: FieldKind.TAG})),
-      ...ISSUE_EVENT_PROPERTY_FIELDS.map(tag => ({
-        key: tag,
-        name: tag,
-        kind: FieldKind.EVENT_FIELD,
-      })),
-    ].filter(tag => !ALL_EVENTS_EXCLUDED_TAGS.includes(tag.key));
-
-    return tags.reduce<TagCollection>((acc, tag) => {
-      acc[tag.key] = tag;
-      return acc;
-    }, {});
-  }, [data]);
-  return filterKeys;
 }
 
 function getFilterKeySections(tags: TagCollection): FilterKeySection[] {
@@ -148,14 +65,33 @@ export function EventSearch({
 }: EventSearchProps) {
   const api = useApi();
   const organization = useOrganization();
-  const hasStreamlinedUI = useHasStreamlinedUI();
+  const groupTagsQuery = useGroupTags(
+    {groupId: group.id, environment: environments},
+    {enabled: true}
+  );
 
-  const {data = []} = useGroupTags({
-    groupId: group.id,
-    environment: environments,
-  });
-
-  const filterKeys = useEventSearchFilterKeys(data);
+  const filterKeys = useMemo<TagCollection>(() => {
+    const acc: TagCollection = {};
+    const keys = ISSUE_EVENT_PROPERTY_FIELDS.filter(
+      tag => !ALL_EVENTS_EXCLUDED_TAGS.includes(tag)
+    );
+    for (const key of keys) {
+      acc[key] = {key, name: key, kind: FieldKind.EVENT_FIELD};
+    }
+    const groupTags = groupTagsQuery.data ?? [];
+    for (const tag of groupTags) {
+      if (ALL_EVENTS_EXCLUDED_TAGS.includes(tag.key)) {
+        continue;
+      }
+      acc[tag.key] = {
+        key: tag.key,
+        name: tag.name,
+        totalValues: tag.totalValues,
+        kind: FieldKind.TAG,
+      };
+    }
+    return acc;
+  }, [groupTagsQuery.data]);
 
   const tagValueLoader = useCallback(
     async (key: string, search: string) => {
@@ -193,16 +129,6 @@ export function EventSearch({
 
   const filterKeySections = useMemo(() => getFilterKeySections(filterKeys), [filterKeys]);
 
-  const experimentSearchSource = hasStreamlinedUI
-    ? 'new_org_issue_details_header'
-    : 'new_org_issue_events_tab';
-
-  const searchSource = defined(organization.streamlineOnly)
-    ? experimentSearchSource
-    : hasStreamlinedUI
-      ? 'issue_details_header'
-      : 'issue_events_tab';
-
   return (
     <SearchQueryBuilder
       initialQuery={query}
@@ -210,9 +136,9 @@ export function EventSearch({
       filterKeys={filterKeys}
       filterKeySections={filterKeySections}
       getTagValues={getTagValues}
-      placeholder={hasStreamlinedUI ? t('Filter events\u2026') : t('Search events\u2026')}
-      label={hasStreamlinedUI ? t('Filter events\u2026') : t('Search events')}
-      searchSource={searchSource}
+      placeholder={t('Filter events\u2026')}
+      label={t('Filter events\u2026')}
+      searchSource="issue_details_header"
       className={className}
       {...queryBuilderProps}
     />

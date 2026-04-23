@@ -1,9 +1,8 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
 
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
 import * as Storybook from 'sentry/stories';
-import {space} from 'sentry/styles/space';
 
 export default Storybook.story('EmptyStateWarning', story => {
   story('Default', () => (
@@ -30,16 +29,15 @@ export default Storybook.story('EmptyStateWarning', story => {
         </ul>
       </p>
       <h3>
-        <Storybook.JSXProperty name="small" value={`true`} />
+        <Storybook.JSXProperty name="small" value="true" />
       </h3>
       <EmptyStateWarning small />
       <h3>
-        <Storybook.JSXProperty name="small" value={`true`} /> with children
+        <Storybook.JSXProperty name="small" value="true" /> with children
       </h3>
       <EmptyStateWarning small>No results found.</EmptyStateWarning>
       <h3>
-        <Storybook.JSXProperty name="small" value={`false`} /> with children (with
-        styling)
+        <Storybook.JSXProperty name="small" value="false" /> with children (with styling)
       </h3>
       <StyledEmptyStateWarning>No results found.</StyledEmptyStateWarning>
     </Fragment>
@@ -49,6 +47,6 @@ export default Storybook.story('EmptyStateWarning', story => {
 const StyledEmptyStateWarning = styled(EmptyStateWarning)`
   display: flex;
   flex-direction: column;
-  gap: ${space(2)};
+  gap: ${p => p.theme.space.xl};
   align-items: center;
 `;

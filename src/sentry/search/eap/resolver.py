@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from re import Match
@@ -39,30 +39,48 @@ from sentry_protos.snuba.v1.trace_item_filter_pb2 import (
 from sentry.api import event_search
 from sentry.discover import arithmetic
 from sentry.exceptions import InvalidSearchQuery
+from sentry.models.group import Group, parse_short_id
+from sentry.models.project import Project
 from sentry.search.eap import constants
 from sentry.search.eap.columns import (
     AggregateDefinition,
-    AnyResolved,
     AttributeArgumentDefinition,
     ColumnDefinitions,
-    ConditionalAggregateDefinition,
     FormulaDefinition,
-    ResolvedAggregate,
+    ResolvedArgument,
+    ResolvedArguments,
     ResolvedAttribute,
-    ResolvedConditionalAggregate,
+    ResolvedColumn,
     ResolvedEquation,
-    ResolvedFormula,
+    ResolvedFunction,
     ResolvedLiteral,
     ValueArgumentDefinition,
     VirtualColumnDefinition,
 )
+from sentry.search.eap.rpc_utils import and_trace_item_filters
 from sentry.search.eap.sampling import validate_sampling
 from sentry.search.eap.spans.attributes import SPANS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS
 from sentry.search.eap.types import EAPResponse, SearchResolverConfig
 from sentry.search.events import constants as qb_constants
 from sentry.search.events import fields
 from sentry.search.events import filter as event_filter
+from sentry.search.events.filter import to_list
 from sentry.search.events.types import SAMPLING_MODES, SnubaParams
+from sentry.search.exceptions import InvalidIssueSearchQuery
+
+
+def collect_issue_short_ids_from_parsed_terms(terms: Sequence[object]) -> set[str]:
+    """Collect non-empty issue filter values from a parsed search tree (including OR/AND)."""
+    out: set[str] = set()
+    for term in terms:
+        if isinstance(term, event_search.SearchFilter):
+            if term.key.name == "issue":
+                for v in to_list(term.value.value):
+                    if v:
+                        out.add(str(v))
+        elif isinstance(term, event_search.ParenExpression):
+            out |= collect_issue_short_ids_from_parsed_terms(term.children)
+    return out
 
 
 @dataclass(frozen=True)
@@ -83,20 +101,19 @@ class SearchResolver:
     _resolved_function_cache: dict[
         str,
         tuple[
-            ResolvedFormula | ResolvedAggregate | ResolvedConditionalAggregate,
+            ResolvedFunction,
             VirtualColumnDefinition | None,
         ],
     ] = field(default_factory=dict)
+    qualified_short_id_to_group_id_cache: dict[int, dict[str, int]] = field(default_factory=dict)
 
     def get_function_definition(
         self, function_name: str
-    ) -> ConditionalAggregateDefinition | FormulaDefinition | AggregateDefinition:
+    ) -> FormulaDefinition | AggregateDefinition:
         if function_name in self.definitions.aggregates:
             return self.definitions.aggregates[function_name]
         elif function_name in self.definitions.formulas:
             return self.definitions.formulas[function_name]
-        elif function_name in self.definitions.conditional_aggregates:
-            return self.definitions.conditional_aggregates[function_name]
         else:
             raise InvalidSearchQuery(f"Unknown function {function_name}")
 
@@ -105,16 +122,30 @@ class SearchResolver:
         self,
         referrer: str,
         sampling_mode: SAMPLING_MODES | None = None,
+        filter_project: Callable[[Project], bool] | None = None,
     ) -> RequestMeta:
         if self.params.organization_id is None:
             raise Exception("An organization is required to resolve queries")
         span = sentry_sdk.get_current_span()
         if span:
             span.set_tag("SearchResolver.params", self.params)
+
+        projects = self.params.projects
+
+        # If a filter is specified, use it to narrow down the list
+        # of projects to query on.
+        if filter_project:
+            projects = [project for project in projects if filter_project(project)]
+
+            # if filtering removed all projects, we reset to all
+            # selected project again to prevent potential snuba errors
+            if not projects:
+                projects = self.params.projects
+
         return RequestMeta(
             organization_id=self.params.organization_id,
             referrer=referrer,
-            project_ids=self.params.project_ids,
+            project_ids=[project.id for project in projects],
             start_timestamp=self.params.rpc_start_date,
             end_timestamp=self.params.rpc_end_date,
             trace_item_type=self.definitions.trace_item_type,
@@ -122,7 +153,9 @@ class SearchResolver:
         )
 
     @sentry_sdk.trace
-    def resolve_query(self, querystring: str | None) -> tuple[
+    def resolve_query(
+        self, querystring: str | None
+    ) -> tuple[
         TraceItemFilter | None,
         AggregationFilter | None,
         list[VirtualColumnDefinition | None],
@@ -139,31 +172,34 @@ class SearchResolver:
             span.set_tag("SearchResolver.resolved_query", where)
             span.set_tag("SearchResolver.environment_query", environment_query)
 
-        # The RPC request meta does not contain the environment.
-        # So we have to inject it as a query condition.
-        #
-        # To do so, we want to AND it with the query.
-        # So if either one is not defined, we just use the other.
-        # But if both are defined, we AND them together.
-
-        if not environment_query:
-            return where, having, contexts
-
-        if not where:
-            return environment_query, having, []
-
-        return (
-            TraceItemFilter(
-                and_filter=AndFilter(
-                    filters=[
-                        environment_query,
-                        where,
-                    ]
-                )
-            ),
-            having,
-            contexts,
+        where = and_trace_item_filters(
+            where,
+            # The RPC request meta does not contain the environment.
+            # So we have to inject it as a query condition.
+            environment_query,
         )
+
+        return where, having, contexts
+
+    @sentry_sdk.trace
+    def resolve_query_with_columns(
+        self,
+        querystring: str | None,
+        selected_columns: list[str] | None,
+        equations: list[str] | None,
+    ) -> tuple[
+        TraceItemFilter | None,
+        AggregationFilter | None,
+        list[VirtualColumnDefinition | None],
+    ]:
+        where, having, contexts = self.resolve_query(querystring)
+
+        # Some datasets like trace metrics require we inject additional
+        # conditions in the top level.
+        dataset_conditions = self.resolve_dataset_conditions(selected_columns, equations)
+        where = and_trace_item_filters(where, dataset_conditions)
+
+        return where, having, contexts
 
     def __resolve_environment_query(self) -> TraceItemFilter | None:
         resolved_column, _ = self.resolve_column("environment")
@@ -183,7 +219,42 @@ class SearchResolver:
             )
         )
 
-    def __resolve_query(self, querystring: str | None) -> tuple[
+    def _init_issue_short_id_cache(
+        self,
+        parsed_terms: Sequence[object],
+    ) -> None:
+        """One bulk Group lookup for issue short ids in the query; store maps on this resolver."""
+        if "issue" not in self.definitions.filter_aliases or self.params.organization_id is None:
+            return
+
+        collected = collect_issue_short_ids_from_parsed_terms(parsed_terms)
+        if not collected:
+            return
+        try:
+            groups = list(
+                Group.objects.by_qualified_short_id_bulk(
+                    organization_id=self.params.organization_id, short_ids_raw=list(collected)
+                )
+            )
+        except Group.DoesNotExist:
+            raise InvalidIssueSearchQuery(sorted(collected))
+
+        idx = {(g.project.slug.lower(), g.short_id): g for g in groups}
+
+        for raw in collected:
+            parsed = parse_short_id(raw)
+            if parsed is None:
+                raise InvalidIssueSearchQuery(sorted(collected))
+            g = idx.get((parsed.project_slug, parsed.short_id))
+            if g is None:
+                raise InvalidIssueSearchQuery(sorted(collected))
+            if g.project.id not in self.qualified_short_id_to_group_id_cache:
+                self.qualified_short_id_to_group_id_cache[g.project.id] = {}
+            self.qualified_short_id_to_group_id_cache[g.project.id][raw] = g.id
+
+    def __resolve_query(
+        self, querystring: str | None
+    ) -> tuple[
         TraceItemFilter | None,
         AggregationFilter | None,
         list[VirtualColumnDefinition | None],
@@ -207,6 +278,9 @@ class SearchResolver:
             else:
                 raise InvalidSearchQuery(f"Parse error for: {querystring}")
 
+        # If occurrences dataset, cache group_id to issues mapping.
+        self._init_issue_short_id_cache(parsed_terms)
+
         if any(
             isinstance(term, event_search.ParenExpression)
             or event_search.SearchBoolean.is_operator(term)
@@ -216,7 +290,9 @@ class SearchResolver:
         else:
             return self._resolve_terms(parsed_terms)
 
-    def _resolve_boolean_conditions(self, terms: event_filter.ParsedTerms) -> tuple[
+    def _resolve_boolean_conditions(
+        self, terms: event_filter.ParsedTerms
+    ) -> tuple[
         TraceItemFilter | None,
         AggregationFilter | None,
         list[VirtualColumnDefinition | None],
@@ -310,7 +386,9 @@ class SearchResolver:
 
         return where, having, contexts
 
-    def _resolve_terms(self, terms: event_filter.ParsedTerms) -> tuple[
+    def _resolve_terms(
+        self, terms: event_filter.ParsedTerms
+    ) -> tuple[
         TraceItemFilter | None,
         AggregationFilter | None,
         list[VirtualColumnDefinition | None],
@@ -368,7 +446,7 @@ class SearchResolver:
     ) -> list[str] | str:
         # Convert the term to the expected values
         final_raw_value: str | list[str] = []
-        resolved_context = context.constructor(self.params)
+        resolved_context = context.constructor(self.params, self)
         reversed_context = {v: k for k, v in resolved_context.value_map.items()}
         if isinstance(raw_value, list):
             new_value = []
@@ -413,7 +491,7 @@ class SearchResolver:
 
         converter = self.definitions.filter_aliases.get(name)
         if converter is not None:
-            return converter(self.params, term)
+            return converter(self.params, term, self)
 
         return [term]
 
@@ -515,6 +593,62 @@ class SearchResolver:
             else:
                 raise InvalidSearchQuery(f"Unsupported operator for None {term.operator}")
 
+        # Handle lists containing None for IN/NOT IN operators
+        if isinstance(value, list) and None in value and term.operator in constants.IN_OPERATORS:
+            non_none_values = [v for v in value if v is not None]
+
+            exists_filter = TraceItemFilter(
+                exists_filter=ExistsFilter(
+                    key=resolved_column.proto_definition,
+                )
+            )
+
+            if term.operator == "IN":
+                filters = []
+                filters.append(TraceItemFilter(not_filter=NotFilter(filters=[exists_filter])))
+
+                if non_none_values:
+                    filters.append(
+                        TraceItemFilter(
+                            comparison_filter=ComparisonFilter(
+                                key=resolved_column.proto_definition,
+                                op=operator,
+                                value=self._resolve_search_value(
+                                    resolved_column, term.operator, non_none_values
+                                ),
+                                ignore_case=self.params.case_insensitive
+                                and resolved_column.search_type == "string",
+                            )
+                        )
+                    )
+
+                return (
+                    TraceItemFilter(or_filter=OrFilter(filters=filters)),
+                    context_definition,
+                )
+            else:  # NOT IN
+                filters = [exists_filter]
+
+                if non_none_values:
+                    filters.append(
+                        TraceItemFilter(
+                            comparison_filter=ComparisonFilter(
+                                key=resolved_column.proto_definition,
+                                op=operator,
+                                value=self._resolve_search_value(
+                                    resolved_column, term.operator, non_none_values
+                                ),
+                                ignore_case=self.params.case_insensitive
+                                and resolved_column.search_type == "string",
+                            )
+                        )
+                    )
+
+                return (
+                    TraceItemFilter(and_filter=AndFilter(filters=filters)),
+                    context_definition,
+                )
+
         if value == "" and context_definition is None:
             exists_filter = TraceItemFilter(
                 exists_filter=ExistsFilter(
@@ -560,12 +694,17 @@ class SearchResolver:
             else:
                 raise InvalidSearchQuery(f"Unsupported operator for empty strings {term.operator}")
 
+        if not self.params.is_timeseries_request and context_definition:
+            value = self.remap_value_using_context_definition(context_definition, value)
+
         return (
             TraceItemFilter(
                 comparison_filter=ComparisonFilter(
                     key=resolved_column.proto_definition,
                     op=operator,
                     value=self._resolve_search_value(resolved_column, term.operator, value),
+                    ignore_case=self.params.case_insensitive
+                    and resolved_column.search_type == "string",
                 )
             ),
             context_definition,
@@ -579,7 +718,7 @@ class SearchResolver:
         Time series request do not support virtual column contexts, so we have to remap the value back to the original column.
         (see https://github.com/getsentry/eap-planning/issues/236)
         """
-        context = context_definition.constructor(self.params)
+        context = context_definition.constructor(self.params, self)
 
         is_number_column = (
             context.from_column_name in SPANS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS["number"]
@@ -610,7 +749,7 @@ class SearchResolver:
         Time series request do not support virtual column contexts, so we have to remap the value back to the original column.
         (see https://github.com/getsentry/eap-planning/issues/236)
         """
-        context = context_definition.constructor(self.params)
+        context = context_definition.constructor(self.params, self)
         is_number_column = (
             context.from_column_name in SPANS_INTERNAL_TO_PUBLIC_ALIAS_MAPPINGS["number"]
         )
@@ -626,6 +765,8 @@ class SearchResolver:
         def remap_value(old_value: str) -> list[str]:
             if old_value in inverse_value_map:
                 return inverse_value_map[old_value]
+            elif old_value in context.value_map:
+                return [old_value]
             elif context.default_value:
                 return [context.default_value]
             else:
@@ -769,7 +910,7 @@ class SearchResolver:
         for context_definition in context_definitions:
             if context_definition is None:
                 continue
-            context = context_definition.constructor(self.params)
+            context = context_definition.constructor(self.params, self)
             if context is None or context.to_column_name in existing_target_columns:
                 continue
             else:
@@ -778,10 +919,10 @@ class SearchResolver:
         return final_contexts
 
     @sentry_sdk.trace
-    def resolve_columns(self, selected_columns: list[str], has_aggregates: bool = False) -> tuple[
-        list[
-            ResolvedAttribute | ResolvedAggregate | ResolvedConditionalAggregate | ResolvedFormula
-        ],
+    def resolve_columns(
+        self, selected_columns: list[str], has_aggregates: bool = False
+    ) -> tuple[
+        list[ResolvedAttribute | ResolvedFunction],
         list[VirtualColumnDefinition | None],
     ]:
         """Given a list of columns resolve them and get their context if applicable
@@ -821,7 +962,7 @@ class SearchResolver:
         match: Match[str] | None = None,
         public_alias_override: str | None = None,
     ) -> tuple[
-        ResolvedAttribute | ResolvedAggregate | ResolvedConditionalAggregate | ResolvedFormula,
+        ResolvedAttribute | ResolvedFunction,
         VirtualColumnDefinition | None,
     ]:
         """Column is either an attribute or an aggregate, this function will determine which it is and call the relevant
@@ -926,8 +1067,10 @@ class SearchResolver:
             raise InvalidSearchQuery(f"Could not parse {column}")
 
     @sentry_sdk.trace
-    def resolve_functions(self, columns: list[str]) -> tuple[
-        list[ResolvedFormula | ResolvedAggregate | ResolvedConditionalAggregate],
+    def resolve_functions(
+        self, columns: list[str]
+    ) -> tuple[
+        list[ResolvedFunction],
         list[VirtualColumnDefinition | None],
     ]:
         """Helper function to resolve a list of functions instead of 1 attribute at a time"""
@@ -943,10 +1086,7 @@ class SearchResolver:
         column: str,
         match: Match[str] | None = None,
         public_alias_override: str | None = None,
-    ) -> tuple[
-        ResolvedFormula | ResolvedAggregate | ResolvedConditionalAggregate,
-        VirtualColumnDefinition | None,
-    ]:
+    ) -> tuple[ResolvedFunction, VirtualColumnDefinition | None]:
         if match is None:
             match = fields.is_function(column)
             if match is None:
@@ -967,7 +1107,7 @@ class SearchResolver:
         if function_definition.private and function_name not in self.config.fields_acl.functions:
             raise InvalidSearchQuery(f"The function {function_name} is not allowed for this query")
 
-        parsed_args: list[ResolvedAttribute | Any] = []
+        parsed_args: list[ResolvedAttribute | str | int | float | TraceItemFilter] = []
 
         # Parse the arguments
         arguments = fields.parse_arguments(function_name, columns)
@@ -985,7 +1125,7 @@ class SearchResolver:
 
             # If there are missing arguments, and the argument definition has a default arg, use the default arg
             # this assumes the missing args are at the beginning or end of the arguments list
-            if missing_args > 0 and argument_definition.default_arg:
+            if missing_args > 0 and argument_definition.default_arg is not None:
                 if isinstance(argument_definition, ValueArgumentDefinition):
                     parsed_args.append(argument_definition.default_arg)
                 else:
@@ -1009,12 +1149,19 @@ class SearchResolver:
                     if argument_definition.argument_types is None:
                         parsed_args.append(argument)  # assume it's a string
                         continue
-                    # TODO: we assume that the argument is only one type for now, and we only support string/integer
-                    for type in argument_definition.argument_types:
-                        if type == "integer":
+                    for arg_type in argument_definition.argument_types:
+                        if arg_type == "integer":
                             parsed_args.append(int(argument))
-                        if type == "number":
+                        elif arg_type == "number":
                             parsed_args.append(float(argument))
+                        elif arg_type == "query":
+                            # Only TraceItemFilter currently supported
+                            trace_item_filters = self.resolve_query(argument[1:-1])[0]
+                            if trace_item_filters is None:
+                                raise InvalidSearchQuery(
+                                    "The if combinator requires non-aggregate filters"
+                                )
+                            parsed_args.append(trace_item_filters)
                         else:
                             parsed_args.append(argument)
                     continue
@@ -1037,12 +1184,13 @@ class SearchResolver:
                         f"{parsed_argument.public_alias} is invalid for parameter {argument_index} in {function_name}. Its a {parsed_argument.search_type} type field, but it must be one of these types: {argument_definition.attribute_types}"
                     )
 
-        resolved_arguments = []
+        resolved_arguments: ResolvedArguments = []
         for parsed_arg in parsed_args:
+            resolved_argument: ResolvedArgument
             if not isinstance(parsed_arg, ResolvedAttribute):
                 resolved_argument = parsed_arg
                 search_type = function_definition.default_search_type
-            elif isinstance(parsed_arg.proto_definition, AttributeKey):
+            else:
                 resolved_argument = parsed_arg.proto_definition
             resolved_arguments.append(resolved_argument)
 
@@ -1062,15 +1210,17 @@ class SearchResolver:
             resolved_arguments=resolved_arguments,
             snuba_params=self.params,
             query_result_cache=self._query_result_cache,
-            extrapolation_override=self.config.disable_aggregate_extrapolation,
+            search_config=self.config,
         )
 
         resolved_context = None
         self._resolved_function_cache[alias] = (resolved_function, resolved_context)
         return self._resolved_function_cache[alias]
 
-    def resolve_equations(self, equations: list[str]) -> tuple[
-        list[AnyResolved],
+    def resolve_equations(
+        self, equations: list[str]
+    ) -> tuple[
+        list[ResolvedColumn],
         list[VirtualColumnDefinition],
     ]:
         formulas = []
@@ -1081,8 +1231,10 @@ class SearchResolver:
             contexts.extend(context)
         return formulas, contexts
 
-    def resolve_equation(self, equation: str) -> tuple[
-        AnyResolved,
+    def resolve_equation(
+        self, equation: str
+    ) -> tuple[
+        ResolvedColumn,
         list[VirtualColumnDefinition],
     ]:
         """Resolve an equation creating a ResolvedEquation object, we don't just return a Column.BinaryFormula since
@@ -1105,8 +1257,12 @@ class SearchResolver:
                 ),
                 [],
             )
-        lhs, lhs_contexts = self._resolve_operation(operation.lhs) if operation.lhs else (None, [])
-        rhs, rhs_contexts = self._resolve_operation(operation.rhs) if operation.rhs else (None, [])
+        lhs, lhs_contexts = (
+            self._resolve_operation(operation.lhs) if operation.lhs is not None else (None, [])
+        )
+        rhs, rhs_contexts = (
+            self._resolve_operation(operation.rhs) if operation.rhs is not None else (None, [])
+        )
         has_aggregates = False
         for function in functions:
             resolved_function, _ = self.resolve_function(function)
@@ -1128,7 +1284,9 @@ class SearchResolver:
             lhs_contexts + rhs_contexts,
         )
 
-    def _resolve_operation(self, operation: arithmetic.OperandType) -> tuple[
+    def _resolve_operation(
+        self, operation: arithmetic.OperandType
+    ) -> tuple[
         Column,
         list[VirtualColumnDefinition],
     ]:
@@ -1138,10 +1296,10 @@ class SearchResolver:
         """
         if isinstance(operation, arithmetic.Operation):
             lhs, lhs_contexts = (
-                self._resolve_operation(operation.lhs) if operation.lhs else (None, [])
+                self._resolve_operation(operation.lhs) if operation.lhs is not None else (None, [])
             )
             rhs, rhs_contexts = (
-                self._resolve_operation(operation.rhs) if operation.rhs else (None, [])
+                self._resolve_operation(operation.rhs) if operation.rhs is not None else (None, [])
             )
             vcc = []
             if lhs_contexts:
@@ -1160,15 +1318,80 @@ class SearchResolver:
             )
         elif isinstance(operation, float):
             return Column(literal=LiteralValue(val_double=operation)), []
-        else:
-            # Resolve the column, and turn it into a RPC Column so it can be used in a BinaryFormula
-            col, context = self.resolve_column(operation)
-            contexts = [context] if context is not None else []
-            if isinstance(col, ResolvedAttribute):
-                return Column(key=col.proto_definition), contexts
-            elif isinstance(col, ResolvedAggregate):
-                return Column(aggregation=col.proto_definition), contexts
-            elif isinstance(col, ResolvedConditionalAggregate):
-                return Column(conditional_aggregation=col.proto_definition), contexts
-            elif isinstance(col, ResolvedFormula):
-                return Column(formula=col.proto_definition), contexts
+
+        # Resolve the column, and turn it into a RPC Column so it can be used in a BinaryFormula
+        col, context = self.resolve_column(operation)
+        contexts = [context] if context is not None else []
+        proto_definition = col.proto_definition
+
+        if isinstance(proto_definition, AttributeKey):
+            return Column(key=proto_definition), contexts
+
+        # Because all aggregations in snuba by default have orNull on them, when an aggregate evaluates to 0 instead it
+        # becomes null. This is a problem with equations on aggregates since any operation on a null value in clickhouse
+        # resolves to null, so if one term of your equation is null the entire equation becomes null. Instead we want to
+        # treat these nulls like 0 to do this for an equation like (a + b), where a may be null sometimes we change the
+        # equation instead to be ((a + 0) + (b + 0)) and use the default_value option on BinaryFormulas so that when a
+        # is null instead we get 0 + b as expected instead of null + b
+        if isinstance(proto_definition, AttributeAggregation):
+            return (
+                Column(
+                    formula=Column.BinaryFormula(
+                        op=constants.ARITHMETIC_OPERATOR_MAP["plus"],
+                        left=Column(literal=LiteralValue(val_double=0)),
+                        right=Column(aggregation=proto_definition),
+                        default_value_double=0,
+                    )
+                ),
+                contexts,
+            )
+
+        if isinstance(proto_definition, AttributeConditionalAggregation):
+            return (
+                Column(
+                    formula=Column.BinaryFormula(
+                        op=constants.ARITHMETIC_OPERATOR_MAP["plus"],
+                        left=Column(literal=LiteralValue(val_double=0)),
+                        right=Column(conditional_aggregation=proto_definition),
+                        default_value_double=0,
+                    )
+                ),
+                contexts,
+            )
+
+        if isinstance(proto_definition, Column.BinaryFormula):
+            return Column(formula=proto_definition), contexts
+
+        raise TypeError(f"Unsupported proto definition type: {type(proto_definition)}")
+
+    def resolve_dataset_conditions(
+        self,
+        selected_columns: list[str] | None,
+        equations: list[str] | None,
+    ) -> TraceItemFilter | None:
+        extra_conditions = self.config.extra_conditions(self, selected_columns, equations)
+
+        return and_trace_item_filters(extra_conditions)
+
+    def remap_value_using_context_definition(
+        self, context_definition: VirtualColumnDefinition, value: str | int | list[str] | Any
+    ) -> str | int | list[str] | Any:
+        context = context_definition.constructor(self.params, self)
+
+        # if the value passed is one of the potential values, then it's expected
+        # and we should pass it through as is
+        for val in context.value_map.values():
+            if val == value:
+                return value
+
+        # if the value passed is one of the potential keys, then it should before
+        # remapped to the value
+        if isinstance(value, str) and value in context.value_map:
+            value = context.value_map[value]
+
+        # now that we've checked all potentially allowed values, we should fall back
+        # to using the default
+        if context.default_value:
+            return context.default_value
+
+        return value

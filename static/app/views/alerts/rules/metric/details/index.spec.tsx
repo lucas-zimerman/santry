@@ -7,12 +7,33 @@ import {ProjectFixture} from 'sentry-fixture/project';
 import {initializeOrg} from 'sentry-test/initializeOrg';
 import {act, render, screen, userEvent} from 'sentry-test/reactTestingLibrary';
 
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
+import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
 import MetricAlertDetails from 'sentry/views/alerts/rules/metric/details';
-import {Dataset, EventTypes} from 'sentry/views/alerts/rules/metric/types';
+import {
+  Dataset,
+  EventTypes,
+  ExtrapolationMode,
+  type MetricRule,
+} from 'sentry/views/alerts/rules/metric/types';
+import {SAMPLING_MODE} from 'sentry/views/explore/hooks/useProgressiveQuery';
 
 jest.mock('sentry/utils/analytics');
+
+function getRouteConfig(
+  organization: Organization,
+  rule: MetricRule,
+  query?: Record<string, string>
+) {
+  return {
+    location: {
+      pathname: `/organizations/${organization.slug}/alerts/rules/details/${rule.id}/`,
+      query,
+    },
+    route: '/organizations/:orgId/alerts/rules/details/:ruleId/',
+  };
+}
 
 describe('MetricAlertDetails', () => {
   const project = ProjectFixture({slug: 'earth', platform: 'javascript'});
@@ -31,8 +52,12 @@ describe('MetricAlertDetails', () => {
       body: EventsStatsFixture(),
     });
     MockApiClient.addMockResponse({
-      url: '/organizations/org-slug/issues/?end=2017-10-17T02%3A41%3A20&groupStatsPeriod=auto&limit=5&project=2&query=event.type%3Aerror&sort=freq&start=2017-10-10T02%3A41%3A20',
+      url: '/organizations/org-slug/issues/',
       body: [GroupFixture()],
+    });
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/alert-rule-detector/',
+      body: [],
     });
   });
 
@@ -43,7 +68,7 @@ describe('MetricAlertDetails', () => {
   });
 
   it('renders', async () => {
-    const {organization, routerProps} = initializeOrg();
+    const {organization} = initializeOrg();
     const incident = IncidentFixture();
     const rule = MetricRuleFixture({
       projects: [project.slug],
@@ -62,20 +87,14 @@ describe('MetricAlertDetails', () => {
       body: rule,
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/incidents/`,
+      url: '/organizations/org-slug/incidents/',
       body: [incident],
     });
 
-    render(
-      <MetricAlertDetails
-        organization={organization}
-        {...routerProps}
-        params={{ruleId: rule.id}}
-      />,
-      {
-        organization,
-      }
-    );
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, rule),
+    });
 
     expect(await screen.findByText(rule.name)).toBeInTheDocument();
     expect(screen.getByText('Change alert status to Resolved')).toBeInTheDocument();
@@ -93,7 +112,7 @@ describe('MetricAlertDetails', () => {
   });
 
   it('renders selected incident', async () => {
-    const {organization, router, routerProps} = initializeOrg();
+    const {organization} = initializeOrg();
     const rule = MetricRuleFixture({projects: [project.slug]});
     const incident = IncidentFixture();
     const promptResponse = {
@@ -113,26 +132,19 @@ describe('MetricAlertDetails', () => {
       body: incident,
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/incidents/`,
+      url: '/organizations/org-slug/incidents/',
       body: [incident],
     });
     // Related issues to the selected incident
     const issuesRequest = MockApiClient.addMockResponse({
-      url: '/organizations/org-slug/issues/?end=2016-04-26T19%3A44%3A05&groupStatsPeriod=auto&limit=5&project=2&query=event.type%3Aerror&sort=freq&start=2016-03-29T19%3A44%3A05',
+      url: '/organizations/org-slug/issues/',
       body: [GroupFixture()],
     });
 
-    render(
-      <MetricAlertDetails
-        organization={organization}
-        {...routerProps}
-        location={{...router.location, query: {alert: incident.id}}}
-        params={{ruleId: rule.id}}
-      />,
-      {
-        organization,
-      }
-    );
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, rule, {alert: incident.id}),
+    });
 
     expect(await screen.findByText(rule.name)).toBeInTheDocument();
     // Related issues
@@ -149,7 +161,7 @@ describe('MetricAlertDetails', () => {
   });
 
   it('renders mute button for metric alert', async () => {
-    const {organization, routerProps} = initializeOrg();
+    const {organization} = initializeOrg();
     const incident = IncidentFixture();
     const rule = MetricRuleFixture({
       projects: [project.slug],
@@ -160,7 +172,7 @@ describe('MetricAlertDetails', () => {
       body: rule,
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/incidents/`,
+      url: '/organizations/org-slug/incidents/',
       body: [incident],
     });
     const promptResponse = {
@@ -180,16 +192,10 @@ describe('MetricAlertDetails', () => {
       method: 'DELETE',
     });
 
-    render(
-      <MetricAlertDetails
-        {...routerProps}
-        organization={organization}
-        params={{ruleId: rule.id}}
-      />,
-      {
-        organization,
-      }
-    );
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, rule),
+    });
 
     expect(await screen.findByText('Mute for everyone')).toBeInTheDocument();
 
@@ -203,7 +209,7 @@ describe('MetricAlertDetails', () => {
   });
 
   it('renders open in discover button with dataset=errors for is:unresolved query', async () => {
-    const {organization, routerProps} = initializeOrg({
+    const {organization} = initializeOrg({
       organization: {features: ['discover-basic']},
     });
     const rule = MetricRuleFixture({
@@ -217,37 +223,31 @@ describe('MetricAlertDetails', () => {
       body: rule,
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/incidents/`,
+      url: '/organizations/org-slug/incidents/',
       body: [],
     });
     MockApiClient.addMockResponse({
-      url: '/organizations/org-slug/issues/?end=2017-10-17T02%3A41%3A20&groupStatsPeriod=auto&limit=5&project=2&query=event.type%3Aerror%20is%3Aunresolved&sort=freq&start=2017-10-10T02%3A41%3A20',
+      url: '/organizations/org-slug/issues/',
       body: [],
     });
 
-    render(
-      <MetricAlertDetails
-        organization={organization}
-        {...routerProps}
-        params={{ruleId: rule.id}}
-      />,
-      {
-        organization,
-      }
-    );
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, rule),
+    });
 
     expect(await screen.findByText(rule.name)).toBeInTheDocument();
 
-    const button = screen.getByRole('button', {name: 'Open in Discover'});
+    const button = await screen.findByRole('button', {name: 'Open in Discover'});
     expect(button).toBeInTheDocument();
     expect(button).toBeEnabled();
     expect(button).toHaveAttribute('href', expect.stringContaining('dataset=errors'));
   });
 
   it('disables duplicate button if deprecation flag is on', async () => {
-    const {organization, routerProps} = initializeOrg({
+    const {organization} = initializeOrg({
       organization: {
-        features: ['discover-basic', 'performance-transaction-deprecation-alerts'],
+        features: ['discover-basic', 'discover-saved-queries-deprecation'],
       },
     });
     const rule = MetricRuleFixture({
@@ -268,26 +268,110 @@ describe('MetricAlertDetails', () => {
       body: rule,
     });
     MockApiClient.addMockResponse({
-      url: `/organizations/org-slug/incidents/`,
+      url: '/organizations/org-slug/incidents/',
       body: [],
     });
 
-    render(
-      <MetricAlertDetails
-        organization={organization}
-        {...routerProps}
-        params={{ruleId: rule.id}}
-      />,
-      {
-        organization,
-      }
-    );
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, rule),
+    });
 
     expect(await screen.findByText(rule.name)).toBeInTheDocument();
 
     expect(await screen.findByRole('button', {name: 'Duplicate'})).toHaveAttribute(
       'aria-disabled',
       'true'
+    );
+  });
+
+  it('uses SERVER_WEIGHTED extrapolation mode when alert has it configured', async () => {
+    const {organization} = initializeOrg();
+    const ruleWithExtrapolation = MetricRuleFixture({
+      projects: [project.slug],
+      dataset: Dataset.EVENTS_ANALYTICS_PLATFORM,
+      aggregate: 'count()',
+      query: '',
+      eventTypes: [EventTypes.TRACE_ITEM_SPAN],
+      extrapolationMode: ExtrapolationMode.SERVER_WEIGHTED,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/org-slug/alert-rules/${ruleWithExtrapolation.id}/`,
+      body: ruleWithExtrapolation,
+    });
+
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/incidents/',
+      body: [],
+    });
+
+    const eventsStatsRequest = MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/events-stats/',
+      body: EventsStatsFixture(),
+    });
+
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, ruleWithExtrapolation),
+    });
+
+    expect(await screen.findByText(ruleWithExtrapolation.name)).toBeInTheDocument();
+
+    // Verify events-stats is called with 'serverOnly' extrapolation mode
+    expect(eventsStatsRequest).toHaveBeenCalledWith(
+      '/organizations/org-slug/events-stats/',
+      expect.objectContaining({
+        query: expect.objectContaining({
+          extrapolationMode: 'serverOnly',
+          sampling: SAMPLING_MODE.NORMAL,
+        }),
+      })
+    );
+  });
+
+  it('uses NONE extrapolation mode when alert has it configured', async () => {
+    const {organization} = initializeOrg();
+    const ruleWithNoExtrapolation = MetricRuleFixture({
+      projects: [project.slug],
+      dataset: Dataset.EVENTS_ANALYTICS_PLATFORM,
+      aggregate: 'count()',
+      query: '',
+      eventTypes: [EventTypes.TRACE_ITEM_SPAN],
+      extrapolationMode: ExtrapolationMode.NONE,
+    });
+
+    MockApiClient.addMockResponse({
+      url: `/organizations/org-slug/alert-rules/${ruleWithNoExtrapolation.id}/`,
+      body: ruleWithNoExtrapolation,
+    });
+
+    MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/incidents/',
+      body: [],
+    });
+
+    const eventsStatsRequest = MockApiClient.addMockResponse({
+      url: '/organizations/org-slug/events-stats/',
+      body: EventsStatsFixture(),
+    });
+
+    render(<MetricAlertDetails />, {
+      organization,
+      initialRouterConfig: getRouteConfig(organization, ruleWithNoExtrapolation),
+    });
+
+    expect(await screen.findByText(ruleWithNoExtrapolation.name)).toBeInTheDocument();
+
+    // Verify events-stats is called with 'none' extrapolation mode
+    expect(eventsStatsRequest).toHaveBeenCalledWith(
+      '/organizations/org-slug/events-stats/',
+      expect.objectContaining({
+        query: expect.objectContaining({
+          extrapolationMode: 'none',
+          sampling: SAMPLING_MODE.HIGH_ACCURACY,
+        }),
+      })
     );
   });
 });

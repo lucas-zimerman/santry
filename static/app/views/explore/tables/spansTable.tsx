@@ -1,9 +1,10 @@
 import {Fragment, useMemo, useRef} from 'react';
 
-import {Tooltip} from 'sentry/components/core/tooltip';
-import EmptyStateWarning from 'sentry/components/emptyStateWarning';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
-import Pagination from 'sentry/components/pagination';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {EmptyStateWarning} from 'sentry/components/emptyStateWarning';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {Pagination} from 'sentry/components/pagination';
 import {GridResizer} from 'sentry/components/tables/gridEditable/styles';
 import {IconArrow} from 'sentry/icons/iconArrow';
 import {IconWarning} from 'sentry/icons/iconWarning';
@@ -22,14 +23,14 @@ import {
   TableStatus,
   useTableStyles,
 } from 'sentry/views/explore/components/table';
-import {
-  useExploreFields,
-  useExploreSortBys,
-  useSetExploreSortBys,
-} from 'sentry/views/explore/contexts/pageParamsContext';
-import {useTraceItemTags} from 'sentry/views/explore/contexts/spanTagsContext';
+import {useSpanItemAttributes} from 'sentry/views/explore/contexts/traceItemAttributeContext';
 import type {SpansTableResult} from 'sentry/views/explore/hooks/useExploreSpansTable';
 import {usePaginationAnalytics} from 'sentry/views/explore/hooks/usePaginationAnalytics';
+import {
+  useQueryParamsFields,
+  useQueryParamsSortBys,
+  useSetQueryParamsSortBys,
+} from 'sentry/views/explore/queryParams/context';
 
 import {FieldRenderer} from './fieldRenderer';
 
@@ -38,12 +39,12 @@ interface SpansTableProps {
 }
 
 export function SpansTable({spansTableResult}: SpansTableProps) {
-  const fields = useExploreFields();
-  const sortBys = useExploreSortBys();
-  const setSortBys = useSetExploreSortBys();
+  const fields = useQueryParamsFields();
+  const sortBys = useQueryParamsSortBys();
+  const setSortBys = useSetQueryParamsSortBys();
 
   const visibleFields = useMemo(
-    () => (fields.includes('id') ? fields : ['id', ...fields]),
+    () => (fields.includes('id') ? [...fields] : ['id', ...fields]),
     [fields]
   );
 
@@ -60,8 +61,9 @@ export function SpansTable({spansTableResult}: SpansTableProps) {
 
   const meta = result.meta ?? {};
 
-  const {tags: numberTags} = useTraceItemTags('number');
-  const {tags: stringTags} = useTraceItemTags('string');
+  const {attributes: numberTags} = useSpanItemAttributes({}, 'number');
+  const {attributes: stringTags} = useSpanItemAttributes({}, 'string');
+  const {attributes: booleanTags} = useSpanItemAttributes({}, 'boolean');
 
   const paginationAnalyticsEvent = usePaginationAnalytics(
     'samples',
@@ -81,7 +83,8 @@ export function SpansTable({spansTableResult}: SpansTableProps) {
 
               const fieldType = meta.fields?.[field];
               const align = fieldAlignment(field, fieldType);
-              const tag = stringTags[field] ?? numberTags[field] ?? null;
+              const tag =
+                stringTags[field] ?? numberTags[field] ?? booleanTags[field] ?? null;
 
               const direction = sortBys.find(s => s.field === field)?.kind;
 
@@ -133,7 +136,7 @@ export function SpansTable({spansTableResult}: SpansTableProps) {
             </TableStatus>
           ) : result.isError ? (
             <TableStatus>
-              <IconWarning data-test-id="error-indicator" color="gray300" size="lg" />
+              <IconWarning data-test-id="error-indicator" variant="muted" size="lg" />
             </TableStatus>
           ) : result.isFetched && result.data?.length ? (
             result.data?.map((row, i) => (

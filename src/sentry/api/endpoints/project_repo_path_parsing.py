@@ -7,7 +7,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint, ProjectPermission
 from sentry.api.serializers.rest_framework.base import CamelSnakeSerializer
 from sentry.integrations.base import IntegrationFeatures
@@ -15,6 +15,10 @@ from sentry.integrations.manager import default_manager as integrations
 from sentry.integrations.services.integration import RpcIntegration, integration_service
 from sentry.integrations.source_code_management.repository import RepositoryIntegration
 from sentry.issues.auto_source_code_config.code_mapping import find_roots
+from sentry.issues.auto_source_code_config.errors import (
+    UnexpectedPathException,
+    UnsupportedFrameInfo,
+)
 from sentry.issues.auto_source_code_config.frame_info import FrameInfo, create_frame_info
 from sentry.models.project import Project
 from sentry.models.repository import Repository
@@ -96,7 +100,7 @@ class ProjectRepoPathParsingEndpointLoosePermission(ProjectPermission):
     }
 
 
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectRepoPathParsingEndpoint(ProjectEndpoint):
     publish_status = {
         "POST": ApiPublishStatus.UNKNOWN,
@@ -119,7 +123,12 @@ class ProjectRepoPathParsingEndpoint(ProjectEndpoint):
 
         data = serializer.validated_data
         source_url = data["source_url"]
-        frame_info = get_frame_info_from_request(request)
+        try:
+            frame_info = get_frame_info_from_request(request)
+        except UnsupportedFrameInfo:
+            return self.respond(
+                {"detail": "Unsupported frame info"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         # validated by `serializer.is_valid()`
         assert serializer.repo is not None
@@ -136,7 +145,14 @@ class ProjectRepoPathParsingEndpoint(ProjectEndpoint):
 
         branch = installation.extract_branch_from_source_url(repo, source_url)
         source_path = installation.extract_source_path_from_source_url(repo, source_url)
-        stack_root, source_root = find_roots(frame_info, source_path)
+
+        try:
+            stack_root, source_root = find_roots(frame_info, source_path)
+        except UnexpectedPathException:
+            return self.respond(
+                {"detail": "Could not determine code mapping from provided paths"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return self.respond(
             {

@@ -2,7 +2,7 @@ import {EventFixture} from 'sentry-fixture/event';
 
 import {render, screen} from 'sentry-test/reactTestingLibrary';
 
-import ContextCard from 'sentry/components/events/contexts/contextCard';
+import {ContextCard} from 'sentry/components/events/contexts/contextCard';
 import {
   getLaravelContextData,
   type LaravelContext,
@@ -50,8 +50,8 @@ describe('LaravelContext', () => {
     render(
       <ContextCard
         event={event}
-        type={'default'}
-        alias={'laravel'}
+        type="default"
+        alias="laravel"
         value={{...MOCK_LARAVEL_CONTEXT, extra_data: ''}}
       />
     );

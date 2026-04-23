@@ -1,5 +1,8 @@
-import type {AlertProps} from 'sentry/components/core/alert';
+import type {AlertProps} from '@sentry/scraps/alert';
+
+import type {JsonFormAdapterFieldConfig} from 'sentry/components/backendJsonFormAdapter/types';
 import type {Field} from 'sentry/components/forms/types';
+import type {CodeReviewTrigger} from 'sentry/types/seer';
 import type {
   DISABLED as DISABLED_STATUS,
   INSTALLED,
@@ -24,6 +27,7 @@ export type Permissions = {
   Release: PermissionValue;
   Team: PermissionValue;
   Alerts?: PermissionValue;
+  Distribution?: PermissionValue;
 };
 
 export type PermissionResource = keyof Permissions;
@@ -86,6 +90,18 @@ export type Repository = {
 };
 
 /**
+ * Available only when calling API with `expand=settings` query parameter
+ */
+export interface RepositoryWithSettings extends Repository {
+  settings: null | {
+    codeReviewTriggers: CodeReviewTrigger[];
+    enabledCodeReview: boolean;
+  };
+}
+
+export const DEFAULT_CODE_REVIEW_TRIGGERS: CodeReviewTrigger[] = ['on_ready_for_review'];
+
+/**
  * Integration Repositories from OrganizationIntegrationReposEndpoint
  */
 export type IntegrationRepository = {
@@ -96,6 +112,7 @@ export type IntegrationRepository = {
   isInstalled: boolean;
   name: string;
   defaultBranch?: string | null;
+  url?: string | null;
 };
 
 export type Commit = {
@@ -112,6 +129,11 @@ export type Commit = {
 export type Committer = {
   author: User;
   commits: Commit[];
+  /**
+   * Primary key of the GroupOwner record that linked this committer to the issue.
+   * Used for suspect commit feedback analytics.
+   */
+  group_owner_id?: number;
 };
 
 export type CommitAuthor = {
@@ -267,7 +289,7 @@ export type SentryAppInstallation = {
   organization: {
     slug: string;
   };
-  status: 'installed' | 'pending';
+  status: 'installed' | 'pending' | 'pending_deletion';
   uuid: string;
   code?: string;
 };
@@ -346,10 +368,18 @@ export type DocIntegration = {
 };
 
 type IntegrationAspects = {
-  alerts?: Array<AlertProps & {text: string; icon?: string | React.ReactNode}>;
+  // This was previously passed to us
+  alerts?: Array<
+    unknown & {
+      text: string;
+      icon?: string | React.ReactNode;
+      variant?: AlertProps['variant'];
+    }
+  >;
   configure_integration?: {
     title: string;
   };
+  directEnable?: boolean;
   disable_dialog?: IntegrationDialog;
   externalInstall?: {
     buttonText: string;
@@ -409,13 +439,13 @@ export interface Integration extends CommonIntegration {
   scopes?: string[];
 }
 
-type ConfigData = {
+type ConfigData = Record<string, unknown> & {
   installationType?: string;
 };
 
 export interface OrganizationIntegration extends Integration {
   configData: ConfigData | null;
-  configOrganization: Field[];
+  configOrganization: JsonFormAdapterFieldConfig[];
   externalId: string;
   organizationId: string;
 }
@@ -423,7 +453,7 @@ export interface OrganizationIntegration extends Integration {
 // we include the configOrganization when we need it
 export interface IntegrationWithConfig extends Integration {
   configData: ConfigData;
-  configOrganization: Field[];
+  configOrganization: JsonFormAdapterFieldConfig[];
 }
 
 /**
@@ -545,7 +575,7 @@ export type AppOrProviderOrPlugin =
 /**
  * Webhooks and servicehooks
  */
-export type WebhookEvent = 'issue' | 'error' | 'comment' | 'seer';
+export type WebhookEvent = 'issue' | 'error' | 'comment' | 'seer' | 'preprod_artifact';
 
 export type ServiceHook = {
   dateCreated: string;
@@ -576,7 +606,7 @@ export type CodeOwner = {
     users_without_access: string[];
   };
   id: string;
-  provider: 'github' | 'gitlab';
+  provider: 'github' | 'gitlab' | 'perforce';
   raw: string;
   codeMapping?: RepositoryProjectPathConfig;
   ownershipSyntax?: string;
@@ -618,8 +648,7 @@ export interface RepositoryProjectPathConfig extends BaseRepositoryProjectPathCo
   provider: BaseIntegrationProvider | null;
 }
 
-interface RepositoryProjectPathConfigWithIntegration
-  extends BaseRepositoryProjectPathConfig {
+interface RepositoryProjectPathConfigWithIntegration extends BaseRepositoryProjectPathConfig {
   integrationId: string;
   provider: BaseIntegrationProvider;
 }

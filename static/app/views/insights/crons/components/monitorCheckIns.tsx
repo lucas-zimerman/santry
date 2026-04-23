@@ -1,12 +1,15 @@
-import {Fragment} from 'react';
+import {Fragment, useEffect} from 'react';
+import {useQuery} from '@tanstack/react-query';
 
-import LoadingError from 'sentry/components/loadingError';
-import Pagination from 'sentry/components/pagination';
+import {LoadingError} from 'sentry/components/loadingError';
+import {Pagination} from 'sentry/components/pagination';
 import type {Project} from 'sentry/types/project';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
 import {useLocation} from 'sentry/utils/useLocation';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {getNextCheckInEnv} from 'sentry/views/alerts/rules/crons/utils';
 import type {MonitorEnvironment} from 'sentry/views/insights/crons/types';
-import {useMonitorCheckIns} from 'sentry/views/insights/crons/utils/useMonitorCheckIns';
+import {monitorCheckInsApiOptions} from 'sentry/views/insights/crons/utils/monitorCheckInsApiOptions';
 
 import {MonitorCheckInsGrid} from './monitorCheckInsGrid';
 
@@ -22,20 +25,25 @@ export function MonitorCheckIns({monitorSlug, monitorEnvs, project}: Props) {
   const location = useLocation();
   const organization = useOrganization();
 
-  const {
-    data: checkInList,
-    getResponseHeader,
-    isPending,
-    isError,
-  } = useMonitorCheckIns({
-    orgSlug: organization.slug,
-    projectSlug: project.slug,
-    monitorIdOrSlug: monitorSlug,
-    limit: PER_PAGE,
-    expand: 'groups',
-    environment: monitorEnvs.map(e => e.name),
-    queryParams: {...location.query},
+  // Use the nextCheckIn timestamp from the earliest scheduled environment as a
+  // key for forcing a refetch of the check-in list. We do this since we know
+  // when this value changes there are new check-ins present.
+  const nextCheckIn = getNextCheckInEnv(monitorEnvs)?.nextCheckIn;
+
+  const {data, isPending, isError, refetch} = useQuery({
+    ...monitorCheckInsApiOptions({
+      orgSlug: organization.slug,
+      projectSlug: project.slug,
+      monitorIdOrSlug: monitorSlug,
+      limit: PER_PAGE,
+      expand: 'groups',
+      environment: monitorEnvs.map(e => e.name),
+      queryParams: {...location.query},
+    }),
+    select: selectJsonWithHeaders,
   });
+
+  useEffect(() => void refetch(), [refetch, nextCheckIn]);
 
   if (isError) {
     return <LoadingError />;
@@ -46,12 +54,12 @@ export function MonitorCheckIns({monitorSlug, monitorEnvs, project}: Props) {
   return (
     <Fragment>
       <MonitorCheckInsGrid
-        checkIns={checkInList ?? []}
+        checkIns={data?.json ?? []}
         isLoading={isPending}
         hasMultiEnv={hasMultiEnv}
         project={project}
       />
-      <Pagination pageLinks={getResponseHeader?.('Link')} />
+      <Pagination pageLinks={data?.headers.Link} />
     </Fragment>
   );
 }

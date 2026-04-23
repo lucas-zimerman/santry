@@ -9,7 +9,7 @@ from sentry import projectoptions
 from sentry.backup.dependencies import ImportKind
 from sentry.backup.helpers import ImportFlags
 from sentry.backup.scopes import ImportScope, RelocationScope
-from sentry.db.models import FlexibleForeignKey, Model, region_silo_model, sane_repr
+from sentry.db.models import FlexibleForeignKey, Model, cell_silo_model, sane_repr
 from sentry.db.models.fields.jsonfield import LegacyTextJSONField
 from sentry.db.models.manager.option import OptionManager
 from sentry.utils.cache import cache
@@ -39,6 +39,7 @@ OPTION_KEYS = frozenset(
         "sentry:releases",
         "sentry:error_messages",
         "sentry:log_messages",
+        "sentry:trace_metric_names",
         "sentry:scrape_javascript",
         "sentry:replay_hydration_error_issues",
         "sentry:replay_rage_click_issues",
@@ -61,13 +62,25 @@ OPTION_KEYS = frozenset(
         "sentry:dynamic_sampling_biases",
         "sentry:target_sample_rate",
         "sentry:tempest_fetch_screenshots",
-        "sentry:tempest_fetch_dumps",
         "sentry:breakdowns",
         "sentry:transaction_name_cluster_rules",
         "sentry:uptime_autodetection",
         "sentry:autofix_automation_tuning",
         "sentry:seer_scanner_automation",
+        "sentry:seer_nightshift_tweaks",
         "sentry:debug_files_role",
+        "sentry:preprod_size_status_checks_enabled",
+        "sentry:preprod_size_status_checks_rules",
+        "sentry:preprod_size_enabled_query",
+        "sentry:preprod_distribution_enabled_query",
+        "sentry:preprod_size_enabled_by_customer",
+        "sentry:preprod_distribution_enabled_by_customer",
+        "sentry:preprod_snapshot_status_checks_enabled",
+        "sentry:preprod_snapshot_status_checks_fail_on_added",
+        "sentry:preprod_snapshot_status_checks_fail_on_removed",
+        "sentry:preprod_distribution_pr_comments_enabled_by_customer",
+        "sentry:preprod_snapshot_pr_comments_enabled",
+        "sentry:scm_source_context_enabled",
         "quotas:spike-protection-disabled",
         "feedback:branding",
         "digests:mail:minimum_delay",
@@ -76,7 +89,6 @@ OPTION_KEYS = frozenset(
         "mail:subject_template",
         "filters:react-hydration-errors",
         "filters:chunk-load-error",
-        "relay.cardinality-limiter.limits",
     ]
 )
 
@@ -118,16 +130,9 @@ class ProjectOptionManager(OptionManager["ProjectOption"]):
         self.filter(project=project, key=key).delete()
         self.reload_cache(project.id, "projectoption.unset_value", key)
 
-    def set_value(
-        self, project: int | Project, key: str, value: Any, reload_cache: bool = True
-    ) -> bool:
+    def set_value(self, project: int | Project, key: str, value: Any) -> bool:
         """
         Sets a project option for the given project.
-        :param reload_cache: Invalidate the project config and reload the
-        cache only if the value has changed and `reload_cache` is `True`.
-
-        Do not call this with `False` unless you know for sure that it's fine
-        to keep the cached project config.
         """
 
         if isinstance(project, models.Model):
@@ -149,7 +154,7 @@ class ProjectOptionManager(OptionManager["ProjectOption"]):
                 self.filter(id=obj.id).update(value=value)
                 is_value_changed = True
 
-        if reload_cache and is_value_changed:
+        if is_value_changed:
             # invalidate the cached project config only if the value has changed,
             # and reload_cache is set to True
             self.reload_cache(project_id, "projectoption.set_value", key)
@@ -197,7 +202,7 @@ class ProjectOptionManager(OptionManager["ProjectOption"]):
         return self.get_value(project, key, default=Ellipsis) is not Ellipsis
 
 
-@region_silo_model
+@cell_silo_model
 class ProjectOption(Model):
     """
     Project options apply only to an instance of a project.

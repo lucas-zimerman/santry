@@ -1,23 +1,24 @@
 import {Fragment, useMemo} from 'react';
 import styled from '@emotion/styled';
+import {useInfiniteQuery} from '@tanstack/react-query';
 import uniqBy from 'lodash/uniqBy';
 
 import waitingForEventImg from 'sentry-images/spot/waiting-for-event.svg';
 
-import type {ApiResult} from 'sentry/api';
-import {Tooltip} from 'sentry/components/core/tooltip';
-import ErrorBoundary from 'sentry/components/errorBoundary';
-import FeedbackListHeader from 'sentry/components/feedback/list/feedbackListHeader';
-import FeedbackListItem from 'sentry/components/feedback/list/feedbackListItem';
-import useFeedbackQueryKeys from 'sentry/components/feedback/useFeedbackQueryKeys';
-import InfiniteListItems from 'sentry/components/infiniteList/infiniteListItems';
-import InfiniteListState from 'sentry/components/infiniteList/infiniteListState';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {Stack} from '@sentry/scraps/layout';
+import {Tooltip} from '@sentry/scraps/tooltip';
+
+import {ErrorBoundary} from 'sentry/components/errorBoundary';
+import {FeedbackListHeader} from 'sentry/components/feedback/list/feedbackListHeader';
+import {FeedbackListItem} from 'sentry/components/feedback/list/feedbackListItem';
+import {useFeedbackApiOptions} from 'sentry/components/feedback/useFeedbackApiOptions';
+import {InfiniteListItems} from 'sentry/components/infiniteList/infiniteListItems';
+import {InfiniteListState} from 'sentry/components/infiniteList/infiniteListState';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
+import type {ApiResponse} from 'sentry/utils/api/apiFetch';
 import type {FeedbackIssueListItem} from 'sentry/utils/feedback/types';
 import {useListItemCheckboxContext} from 'sentry/utils/list/useListItemCheckboxState';
-import {useInfiniteApiQuery} from 'sentry/utils/queryClient';
 
 function NoFeedback() {
   return (
@@ -33,39 +34,34 @@ interface Props {
   onItemSelect: (itemIndex?: number) => void;
 }
 
-export default function FeedbackList({onItemSelect}: Props) {
-  const {listQueryKey} = useFeedbackQueryKeys();
-  const queryResult = useInfiniteApiQuery<FeedbackIssueListItem[]>({
-    queryKey: listQueryKey ?? ['infinite', ''],
-    enabled: Boolean(listQueryKey),
-  });
+export function FeedbackList({onItemSelect}: Props) {
+  const {listApiOptions} = useFeedbackApiOptions();
+  const queryResult = useInfiniteQuery(listApiOptions);
 
   // Deduplicated issues. In case one page overlaps with another.
   const issues = useMemo(
-    () => uniqBy(queryResult.data?.pages.flatMap(result => result[0]) ?? [], 'id'),
+    () => uniqBy(queryResult.data?.pages.flatMap(page => page.json) ?? [], 'id'),
     [queryResult.data?.pages]
   );
   const checkboxState = useListItemCheckboxContext({
-    hits: Number(
-      queryResult.data?.pages[0]?.[2]?.getResponseHeader('X-Hits') ?? issues.length
-    ),
+    hits: Number(queryResult.data?.pages[0]?.headers['X-Hits'] ?? issues.length),
     knownIds: issues.map(issue => issue.id),
-    queryKey: listQueryKey,
+    queryKey: listApiOptions.queryKey,
   });
 
   return (
     <Fragment>
       <FeedbackListHeader {...checkboxState} />
-      <FeedbackListItems>
+      <Stack flexGrow={1} paddingBottom="xs">
         <InfiniteListState
           queryResult={queryResult}
           backgroundUpdatingMessage={() => null}
           loadingMessage={() => <LoadingIndicator />}
         >
-          <InfiniteListItems<FeedbackIssueListItem, ApiResult<FeedbackIssueListItem[]>>
+          <InfiniteListItems<FeedbackIssueListItem, ApiResponse<FeedbackIssueListItem[]>>
             deduplicateItems={pages =>
               uniqBy(
-                pages.flatMap(page => page[0]),
+                pages.flatMap(page => page.json),
                 'id'
               )
             }
@@ -97,37 +93,30 @@ export default function FeedbackList({onItemSelect}: Props) {
             loadingCompleteMessage={() => null}
           />
         </InfiniteListState>
-      </FeedbackListItems>
+      </Stack>
     </Fragment>
   );
 }
-
-const FeedbackListItems = styled('div')`
-  display: flex;
-  flex-direction: column;
-  flex-grow: 1;
-  padding-bottom: ${space(0.5)};
-`;
 
 const Centered = styled('div')`
   justify-self: center;
 `;
 
 const NoFeedbackWrapper = styled('div')`
-  padding: ${space(4)} ${space(4)};
+  padding: ${p => p.theme.space['3xl']} ${p => p.theme.space['3xl']};
   text-align: center;
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 
   @media (max-width: ${p => p.theme.breakpoints.sm}) {
-    font-size: ${p => p.theme.fontSize.md};
+    font-size: ${p => p.theme.font.size.md};
   }
 `;
 
 const NoFeedbackMessage = styled('div')`
-  font-weight: ${p => p.theme.fontWeight.bold};
-  color: ${p => p.theme.gray400};
+  font-weight: ${p => p.theme.font.weight.sans.medium};
+  color: ${p => p.theme.colors.gray500};
 
   @media (min-width: ${p => p.theme.breakpoints.sm}) {
-    font-size: ${p => p.theme.fontSize.xl};
+    font-size: ${p => p.theme.font.size.xl};
   }
 `;

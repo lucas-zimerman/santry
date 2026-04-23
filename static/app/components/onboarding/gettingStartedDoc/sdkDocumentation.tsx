@@ -1,5 +1,6 @@
-import LoadingError from 'sentry/components/loadingError';
-import LoadingIndicator from 'sentry/components/loadingIndicator';
+import {LoadingError} from 'sentry/components/loadingError';
+import {LoadingIndicator} from 'sentry/components/loadingIndicator';
+import {DeprecatedPlatformInfo} from 'sentry/components/onboarding/gettingStartedDoc/deprecatedPlatformInfo';
 import {OnboardingLayout} from 'sentry/components/onboarding/gettingStartedDoc/onboardingLayout';
 import type {
   ConfigType,
@@ -17,6 +18,7 @@ type SdkDocumentationProps = {
   project: Project;
   configType?: ConfigType;
   newOrg?: boolean;
+  onProductSelectionSync?: (products: ProductSolution[]) => void;
 };
 
 // Loads the component containing the documentation for the specified platform
@@ -27,6 +29,7 @@ export function SdkDocumentation({
   newOrg,
   configType,
   organization,
+  onProductSelectionSync,
 }: SdkDocumentationProps) {
   const {isLoading, isError, dsn, docs, refetch, projectKeyId} = useLoadGettingStarted({
     orgSlug: organization.slug,
@@ -48,16 +51,6 @@ export function SdkDocumentation({
     );
   }
 
-  if (!docs) {
-    return (
-      <LoadingError
-        message={t(
-          'The getting started documentation for this platform is currently unavailable.'
-        )}
-      />
-    );
-  }
-
   if (!dsn) {
     return (
       <LoadingError
@@ -65,6 +58,20 @@ export function SdkDocumentation({
           'We encountered an issue while loading the DSN for this getting started documentation.'
         )}
         onRetry={refetch}
+      />
+    );
+  }
+
+  if (platform.deprecated) {
+    return <DeprecatedPlatformInfo dsn={dsn} platform={platform} />;
+  }
+
+  if (!docs) {
+    return (
+      <LoadingError
+        message={t(
+          'The getting started documentation for this platform is currently unavailable.'
+        )}
       />
     );
   }
@@ -90,6 +97,7 @@ export function SdkDocumentation({
       project={project}
       configType={configType}
       projectKeyId={projectKeyId}
+      onProductSelectionSync={onProductSelectionSync}
     />
   );
 }

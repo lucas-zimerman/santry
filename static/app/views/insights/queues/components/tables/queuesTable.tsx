@@ -5,13 +5,16 @@ import styled from '@emotion/styled';
 import type {Location} from 'history';
 import * as qs from 'query-string';
 
-import {Link} from 'sentry/components/core/link';
+import {Link} from '@sentry/scraps/link';
+
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
-import GridEditable, {
+import {Pagination} from 'sentry/components/pagination';
+import {
   COL_WIDTH_UNDEFINED,
+  GridEditable,
   type GridColumnHeader,
 } from 'sentry/components/tables/gridEditable';
+import {useQueryBasedColumnResize} from 'sentry/components/tables/gridEditable/useQueryBasedColumnResize';
 import {t} from 'sentry/locale';
 import type {Organization} from 'sentry/types/organization';
 import {trackAnalytics} from 'sentry/utils/analytics';
@@ -21,20 +24,25 @@ import type {Sort} from 'sentry/utils/discover/fields';
 import {formatAbbreviatedNumber} from 'sentry/utils/formatters';
 import {useLocation} from 'sentry/utils/useLocation';
 import {useNavigate} from 'sentry/utils/useNavigate';
-import useOrganization from 'sentry/utils/useOrganization';
+import {useOrganization} from 'sentry/utils/useOrganization';
 import {renderHeadCell} from 'sentry/views/insights/common/components/tableCells/renderHeadCell';
 import {useModuleURL} from 'sentry/views/insights/common/utils/useModuleURL';
 import {QueryParameterNames} from 'sentry/views/insights/common/views/queryParameters';
 import {useQueuesByDestinationQuery} from 'sentry/views/insights/queues/queries/useQueuesByDestinationQuery';
 import {Referrer} from 'sentry/views/insights/queues/referrers';
-import {ModuleName, SpanFields, type SpanResponse} from 'sentry/views/insights/types';
+import {
+  ModuleName,
+  SpanFields,
+  type SpanNumberFields,
+  type SpanResponse,
+} from 'sentry/views/insights/types';
 
 type Row = Pick<
   SpanResponse,
   | 'sum(span.duration)'
   | 'messaging.destination.name'
   | 'avg(messaging.message.receive.latency)'
-  | `avg_if(${string},${string},${string},${string})`
+  | `avg_if(${SpanNumberFields},${string},${string},${string})`
   | `count_op(${string})`
 >;
 
@@ -84,7 +92,7 @@ const SORTABLE_FIELDS = [
   'count_op(queue.process)',
   'avg_if(span.duration,span.op,equals,queue.process)',
   'avg(messaging.message.receive.latency)',
-  `sum(span.duration)`,
+  'sum(span.duration)',
   'trace_status_rate(ok)',
 ] as const;
 
@@ -121,6 +129,9 @@ export function QueuesTable({error, destination, sort}: Props) {
       query: {...query, [QueryParameterNames.DESTINATIONS_CURSOR]: newCursor},
     });
   };
+  const {columns, handleResizeColumn} = useQueryBasedColumnResize({
+    columns: [...COLUMN_ORDER],
+  });
 
   return (
     <Fragment>
@@ -129,7 +140,7 @@ export function QueuesTable({error, destination, sort}: Props) {
         isLoading={isPending}
         error={error}
         data={data}
-        columnOrder={COLUMN_ORDER}
+        columnOrder={columns}
         columnSortBy={[
           {
             key: sort.field,
@@ -146,6 +157,7 @@ export function QueuesTable({error, destination, sort}: Props) {
             }),
           renderBodyCell: (column, row) =>
             renderBodyCell(column, row, meta, location, organization, theme),
+          onResizeColumn: handleResizeColumn,
         }}
       />
 
@@ -246,5 +258,5 @@ const AlignRight = styled('span')`
 `;
 
 const NoValue = styled('span')`
-  color: ${p => p.theme.subText};
+  color: ${p => p.theme.tokens.content.secondary};
 `;

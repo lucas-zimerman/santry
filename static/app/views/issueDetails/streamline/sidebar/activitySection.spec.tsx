@@ -11,12 +11,12 @@ import {
 } from 'sentry-test/reactTestingLibrary';
 
 import * as indicators from 'sentry/actionCreators/indicator';
-import ConfigStore from 'sentry/stores/configStore';
-import GroupStore from 'sentry/stores/groupStore';
-import ProjectsStore from 'sentry/stores/projectsStore';
+import {ConfigStore} from 'sentry/stores/configStore';
+import {GroupStore} from 'sentry/stores/groupStore';
+import {ProjectsStore} from 'sentry/stores/projectsStore';
 import type {GroupActivity} from 'sentry/types/group';
 import {GroupActivityType} from 'sentry/types/group';
-import StreamlinedActivitySection from 'sentry/views/issueDetails/streamline/sidebar/activitySection';
+import {StreamlinedActivitySection} from 'sentry/views/issueDetails/streamline/sidebar/activitySection';
 
 describe('StreamlinedActivitySection', () => {
   const project = ProjectFixture();
@@ -211,8 +211,7 @@ describe('StreamlinedActivitySection', () => {
     expect(
       await screen.findByText('This note came from my sentry app')
     ).toBeInTheDocument();
-    const icon = screen.getByTestId('upload-avatar');
-    expect(icon).toHaveAttribute('title', sentryApp.name);
+    expect(screen.getByTestId('upload-avatar')).toBeInTheDocument();
     expect(screen.getByText(sentryApp.name)).toBeInTheDocument();
     // We should not show the user, if a sentry app is attached
     expect(screen.queryByText(newUser.name)).not.toBeInTheDocument();
@@ -328,5 +327,53 @@ describe('StreamlinedActivitySection', () => {
         ).toBeInTheDocument();
       }
     }
+  });
+
+  it('renders resolved in release with integration', async () => {
+    const resolvedGroup = GroupFixture({
+      id: '1339',
+      activity: [
+        {
+          type: GroupActivityType.SET_RESOLVED_IN_RELEASE,
+          id: 'resolved-in-release-1',
+          dateCreated: '2020-01-01T00:00:00',
+          data: {
+            version: 'frontend@1.0.0',
+            integration_id: 408,
+            provider: 'Jira Server',
+            provider_key: 'jira_server',
+          },
+          user,
+        },
+      ],
+      project,
+    });
+
+    render(<StreamlinedActivitySection group={resolvedGroup} />);
+    expect(await screen.findByText('Resolved')).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: '1.0.0'})).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: 'Jira Server'})).toBeInTheDocument();
+  });
+
+  it('renders resolved in release without integration', async () => {
+    const resolvedGroup = GroupFixture({
+      id: '1340',
+      activity: [
+        {
+          type: GroupActivityType.SET_RESOLVED_IN_RELEASE,
+          id: 'resolved-in-release-2',
+          dateCreated: '2020-01-01T00:00:00',
+          data: {
+            version: 'frontend@1.0.0',
+          },
+          user,
+        },
+      ],
+      project,
+    });
+
+    render(<StreamlinedActivitySection group={resolvedGroup} />);
+    expect(await screen.findByText('Resolved')).toBeInTheDocument();
+    expect(screen.getByRole('link', {name: '1.0.0'})).toBeInTheDocument();
   });
 });

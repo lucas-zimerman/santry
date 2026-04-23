@@ -1,23 +1,34 @@
-import {useMemo} from 'react';
+import {useMemo, useState} from 'react';
+import {useTheme} from '@emotion/react';
+import orderBy from 'lodash/orderBy';
 
+import type {FormProps} from 'sentry/components/forms/form';
+import {FormModel} from 'sentry/components/forms/model';
 import type {Data} from 'sentry/components/forms/types';
-import EditLayout from 'sentry/components/workflowEngine/layout/edit';
+import {useFormEagerValidation} from 'sentry/components/forms/useFormEagerValidation';
+import {EditLayout} from 'sentry/components/workflowEngine/layout/edit';
 import type {
   BaseDetectorUpdatePayload,
   DetectorType,
 } from 'sentry/types/workflowEngine/detectors';
 import {useLocation} from 'sentry/utils/useLocation';
-import useProjects from 'sentry/utils/useProjects';
+import {useProjects} from 'sentry/utils/useProjects';
 import {NewDetectorBreadcrumbs} from 'sentry/views/detectors/components/forms/common/breadcrumbs';
+import {DetectorNameField} from 'sentry/views/detectors/components/forms/common/detectorNameField';
 import {NewDetectorFooter} from 'sentry/views/detectors/components/forms/common/footer';
-import {DetectorBaseFields} from 'sentry/views/detectors/components/forms/detectorBaseFields';
+import {MonitorFeedbackButton} from 'sentry/views/detectors/components/monitorFeedbackButton';
 import {useCreateDetectorFormSubmit} from 'sentry/views/detectors/hooks/useCreateDetectorFormSubmit';
+import {TopBar} from 'sentry/views/navigation/topBar';
+import {useHasPageFrameFeature} from 'sentry/views/navigation/useHasPageFrameFeature';
 
 type NewDetectorLayoutProps<TFormData, TUpdatePayload> = {
   children: React.ReactNode;
   detectorType: DetectorType;
   formDataToEndpointPayload: (formData: TFormData) => TUpdatePayload;
   initialFormData: Partial<TFormData>;
+  disabledCreate?: string;
+  extraFooterButton?: React.ReactNode;
+  mapFormErrors?: (error: any) => any;
   previewChart?: React.ReactNode;
 };
 
@@ -28,21 +39,41 @@ export function NewDetectorLayout<
   children,
   formDataToEndpointPayload,
   initialFormData,
+  disabledCreate,
+  mapFormErrors,
+  extraFooterButton,
   previewChart,
   detectorType,
 }: NewDetectorLayoutProps<TFormData, TUpdatePayload>) {
   const location = useLocation();
+  const theme = useTheme();
+  const maxWidth = theme.breakpoints.xl;
   const {projects} = useProjects();
+  const hasPageFrame = useHasPageFrameFeature();
+
+  const initialProjectId = useMemo(() => {
+    const queryProjectId = location.query.project as string | undefined;
+    if (queryProjectId) {
+      const match = projects.find(p => p.id === queryProjectId);
+      if (match) {
+        return match.id;
+      }
+    }
+    const sorted = orderBy(projects, ['isMember', 'isBookmarked'], ['desc', 'desc']);
+    return sorted[0]?.id ?? '';
+  }, [location.query.project, projects]);
 
   const formSubmitHandler = useCreateDetectorFormSubmit({
+    detectorType,
     formDataToEndpointPayload,
   });
 
-  const initialData = useMemo(() => {
-    const defaultProjectId = projects.find(p => p.isMember)?.id ?? projects[0]?.id;
+  const [formModel] = useState(() => new FormModel());
+  const {onFieldChange} = useFormEagerValidation(formModel);
 
+  const initialData = useMemo(() => {
     return {
-      projectId: (location.query.project as string) ?? defaultProjectId ?? '',
+      projectId: initialProjectId,
       environment: (location.query.environment as string | undefined) || '',
       name: (location.query.name as string | undefined) || '',
       owner: (location.query.owner as string | undefined) || '',
@@ -50,35 +81,51 @@ export function NewDetectorLayout<
       ...initialFormData,
     };
   }, [
+    initialProjectId,
     initialFormData,
     location.query.environment,
     location.query.name,
     location.query.owner,
-    location.query.project,
-    projects,
   ]);
 
-  const formProps = {
+  const formProps: FormProps = {
+    model: formModel,
     initialData,
     onSubmit: formSubmitHandler,
+    onFieldChange,
+    mapFormErrors,
   };
 
   return (
     <EditLayout formProps={formProps}>
-      <EditLayout.Header noActionWrap>
+      <EditLayout.Header maxWidth={maxWidth}>
         <EditLayout.HeaderContent>
-          <NewDetectorBreadcrumbs detectorType={detectorType} />
+          {hasPageFrame ? (
+            <TopBar.Slot name="title">
+              <NewDetectorBreadcrumbs detectorType={detectorType} />
+            </TopBar.Slot>
+          ) : (
+            <NewDetectorBreadcrumbs detectorType={detectorType} />
+          )}
         </EditLayout.HeaderContent>
 
+        <div>
+          <MonitorFeedbackButton />
+        </div>
+
         <EditLayout.HeaderFields>
-          <DetectorBaseFields />
+          <DetectorNameField />
           {previewChart ?? <div />}
         </EditLayout.HeaderFields>
       </EditLayout.Header>
 
-      <EditLayout.Body>{children}</EditLayout.Body>
+      <EditLayout.Body maxWidth={maxWidth}>{children}</EditLayout.Body>
 
-      <NewDetectorFooter />
+      <NewDetectorFooter
+        maxWidth={maxWidth}
+        disabledCreate={disabledCreate}
+        extras={extraFooterButton}
+      />
     </EditLayout>
   );
 }

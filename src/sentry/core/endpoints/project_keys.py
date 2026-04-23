@@ -6,7 +6,7 @@ from rest_framework.response import Response
 
 from sentry import audit_log, features
 from sentry.api.api_publish_status import ApiPublishStatus
-from sentry.api.base import region_silo_endpoint
+from sentry.api.base import cell_silo_endpoint
 from sentry.api.bases.project import ProjectEndpoint
 from sentry.api.serializers import serialize
 from sentry.api.serializers.models.project_key import (
@@ -21,29 +21,32 @@ from sentry.apidocs.utils import inline_sentry_response_serializer
 from sentry.auth.superuser import is_active_superuser
 from sentry.loader.dynamic_sdk_options import get_default_loader_data
 from sentry.models.projectkey import ProjectKey, ProjectKeyStatus, UseCase
+from sentry.ratelimits.config import RateLimitConfig
 from sentry.types.ratelimit import RateLimit, RateLimitCategory
 
 
 @extend_schema(tags=["Projects"])
-@region_silo_endpoint
+@cell_silo_endpoint
 class ProjectKeysEndpoint(ProjectEndpoint):
     publish_status = {
         "GET": ApiPublishStatus.PUBLIC,
         "POST": ApiPublishStatus.PUBLIC,
     }
 
-    rate_limits = {
-        "GET": {
-            RateLimitCategory.IP: RateLimit(limit=40, window=1),
-            RateLimitCategory.USER: RateLimit(limit=40, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
+    rate_limits = RateLimitConfig(
+        limit_overrides={
+            "GET": {
+                RateLimitCategory.IP: RateLimit(limit=40, window=1),
+                RateLimitCategory.USER: RateLimit(limit=40, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
+            },
+            "POST": {
+                RateLimitCategory.IP: RateLimit(limit=40, window=1),
+                RateLimitCategory.USER: RateLimit(limit=40, window=1),
+                RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
+            },
         },
-        "POST": {
-            RateLimitCategory.IP: RateLimit(limit=40, window=1),
-            RateLimitCategory.USER: RateLimit(limit=40, window=1),
-            RateLimitCategory.ORGANIZATION: RateLimit(limit=40, window=1),
-        },
-    }
+    )
 
     @extend_schema(
         operation_id="List a Project's Client Keys",
@@ -81,6 +84,7 @@ class ProjectKeysEndpoint(ProjectEndpoint):
             request=request,
             queryset=queryset,
             order_by="-id",
+            default_per_page=10,
             on_results=lambda x: serialize(x, request.user, request=request),
         )
 

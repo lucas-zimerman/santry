@@ -6,7 +6,7 @@ from uuid import uuid4
 from django.db import models
 
 from sentry.backup.scopes import RelocationScope
-from sentry.db.models import BoundedBigIntegerField, region_silo_model
+from sentry.db.models import BoundedBigIntegerField, cell_silo_model
 from sentry.db.models.base import DefaultFieldsModelExisting, sane_repr
 from sentry.db.models.fields.foreignkey import FlexibleForeignKey
 from sentry.db.models.fields.uuid import UUIDField
@@ -16,7 +16,7 @@ def default_guid():
     return uuid4().hex
 
 
-@region_silo_model
+@cell_silo_model
 class Relocation(DefaultFieldsModelExisting):
     """
     Represents a single relocation instance. The relocation may be attempted multiple times, but we
@@ -131,7 +131,7 @@ class Relocation(DefaultFieldsModelExisting):
 
     # Schedules a pause prior to some step that has not yet occurred. Useful to perform an orderly
     # halting of the relocation. When unpausing, the unpausing process is responsible for scheduling
-    # the correct celery task so that the relocation may continue.
+    # the correct task so that the relocation may continue.
     scheduled_pause_at_step = models.SmallIntegerField(
         choices=Step.get_in_progress_choices(), null=True, default=None
     )
@@ -190,7 +190,7 @@ class Relocation(DefaultFieldsModelExisting):
         ]
 
 
-@region_silo_model
+@cell_silo_model
 class RelocationFile(DefaultFieldsModelExisting):
     """
     A `RelocationFile` is an association between a `Relocation` and a `File`.
@@ -283,7 +283,7 @@ class ValidationStatus(Enum):
         return [(key.value, key.name) for key in cls]
 
 
-@region_silo_model
+@cell_silo_model
 class RelocationValidation(DefaultFieldsModelExisting):
     """
     Stores general information about whether or not the associated `Relocation` passed its
@@ -311,7 +311,7 @@ class RelocationValidation(DefaultFieldsModelExisting):
         db_table = "sentry_relocationvalidation"
 
 
-@region_silo_model
+@cell_silo_model
 class RelocationValidationAttempt(DefaultFieldsModelExisting):
     """
     Represents a single Google CloudBuild validation run invocation, and tracks it over its

@@ -1,20 +1,23 @@
 import {Fragment} from 'react';
 import styled from '@emotion/styled';
+import {useQuery} from '@tanstack/react-query';
 
-import {Button} from 'sentry/components/core/button';
-import LoadingError from 'sentry/components/loadingError';
+import {Button} from '@sentry/scraps/button';
+
+import {LoadingError} from 'sentry/components/loadingError';
 import type {CursorHandler} from 'sentry/components/pagination';
-import Pagination from 'sentry/components/pagination';
-import Placeholder from 'sentry/components/placeholder';
+import {getPaginationCaption, Pagination} from 'sentry/components/pagination';
+import {Placeholder} from 'sentry/components/placeholder';
 import {SimpleTable} from 'sentry/components/tables/simpleTable';
 import {ActionCell} from 'sentry/components/workflowEngine/gridCell/actionCell';
-import AutomationTitleCell from 'sentry/components/workflowEngine/gridCell/automationTitleCell';
+import {AutomationTitleCell} from 'sentry/components/workflowEngine/gridCell/automationTitleCell';
 import {TimeAgoCell} from 'sentry/components/workflowEngine/gridCell/timeAgoCell';
 import {t} from 'sentry/locale';
-import {space} from 'sentry/styles/space';
 import type {Automation} from 'sentry/types/workflowEngine/automations';
 import type {Detector} from 'sentry/types/workflowEngine/detectors';
-import {useAutomationsQuery} from 'sentry/views/automations/hooks';
+import {selectJsonWithHeaders} from 'sentry/utils/api/apiOptions';
+import {useOrganization} from 'sentry/utils/useOrganization';
+import {automationsApiOptions} from 'sentry/views/automations/hooks';
 import {getAutomationActions} from 'sentry/views/automations/hooks/utils';
 
 const DEFAULT_AUTOMATIONS_PER_PAGE = 10;
@@ -27,8 +30,9 @@ type Props = React.HTMLAttributes<HTMLDivElement> & {
   cursor: string | undefined;
   onCursor: CursorHandler;
   connectedAutomationIds?: Set<string>;
-  emptyMessage?: string;
+  emptyMessage?: React.ReactNode;
   limit?: number | null;
+  openInNewTab?: boolean;
   query?: string;
   toggleConnected?: (params: {automation: Automation}) => void;
 };
@@ -62,34 +66,43 @@ export function ConnectedAutomationsList({
   automationIds,
   connectedAutomationIds,
   toggleConnected,
-  emptyMessage = t('No automations connected'),
+  emptyMessage = t('No alerts connected'),
   cursor,
   onCursor,
   limit = DEFAULT_AUTOMATIONS_PER_PAGE,
   query,
+  openInNewTab,
   ...props
 }: Props) {
+  const organization = useOrganization();
   const canEdit = Boolean(
     connectedAutomationIds && typeof toggleConnected === 'function'
   );
 
-  const {
-    data: automations,
-    isLoading,
-    isError,
-    isSuccess,
-    getResponseHeader,
-  } = useAutomationsQuery(
-    {
+  const {data, isLoading, isError, isSuccess} = useQuery({
+    ...automationsApiOptions(organization, {
       ids: automationIds ?? undefined,
       limit: limit ?? undefined,
       cursor,
       query,
-    },
-    {enabled: automationIds === null || automationIds.length > 0}
-  );
+    }),
+    select: selectJsonWithHeaders,
+    enabled: automationIds === null || automationIds.length > 0,
+  });
 
-  const pageLinks = getResponseHeader?.('Link');
+  const automations = data?.json;
+  const pageLinks = data?.headers.Link;
+  const totalCountInt = data?.headers['X-Hits'] ?? 0;
+
+  const paginationCaption =
+    isLoading || !automations || limit === null
+      ? undefined
+      : getPaginationCaption({
+          cursor,
+          limit,
+          pageLength: automations.length,
+          total: totalCountInt,
+        });
 
   return (
     <Container {...props}>
@@ -115,18 +128,21 @@ export function ConnectedAutomationsList({
           />
         )}
         {isError && <LoadingError />}
-        {((isSuccess && automations.length === 0) ||
+        {((isSuccess && automations?.length === 0) ||
           (automationIds !== null && automationIds.length === 0)) && (
           <SimpleTable.Empty>{emptyMessage}</SimpleTable.Empty>
         )}
         {isSuccess &&
-          automations.map(automation => (
+          automations?.map(automation => (
             <SimpleTable.Row
               key={automation.id}
               variant={automation.enabled ? 'default' : 'faded'}
             >
               <SimpleTable.RowCell>
-                <AutomationTitleCell automation={automation} />
+                <AutomationTitleCell
+                  automation={automation}
+                  openInNewTab={openInNewTab}
+                />
               </SimpleTable.RowCell>
               <SimpleTable.RowCell data-column-name="last-triggered">
                 <TimeAgoCell date={automation.lastTriggered} />
@@ -146,7 +162,13 @@ export function ConnectedAutomationsList({
             </SimpleTable.Row>
           ))}
       </SimpleTableWithColumns>
-      {limit === null ? null : <Pagination onCursor={onCursor} pageLinks={pageLinks} />}
+      {limit && (
+        <Pagination
+          onCursor={onCursor}
+          pageLinks={pageLinks}
+          caption={paginationCaption}
+        />
+      )}
     </Container>
   );
 }
@@ -158,7 +180,7 @@ const Container = styled('div')`
 const SimpleTableWithColumns = styled(SimpleTable)`
   grid-template-columns: 1fr 200px 180px auto;
 
-  margin-bottom: ${space(2)};
+  margin-bottom: ${p => p.theme.space.xl};
 
   /*
     The connected column can be added/removed depending on props, so in order to
